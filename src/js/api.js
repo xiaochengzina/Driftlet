@@ -1,0 +1,186 @@
+/**
+ * api.js — Tauri IPC wrapper
+ * Uses @tauri-apps/api v2 for all communication with the Rust backend.
+ */
+import { invoke } from '@tauri-apps/api/core';
+
+const API = {
+  // Skin discovery
+  listSkins() {
+    return invoke('list_skins');
+  },
+
+  getSkinDetail(skinId) {
+    return invoke('get_skin_detail', { skinId });
+  },
+
+  refreshSkins() {
+    return invoke('refresh_skins');
+  },
+
+  // Skin lifecycle
+  loadSkin(skinId) {
+    return invoke('load_skin', { skinId });
+  },
+
+  unloadSkin(skinId) {
+    return invoke('unload_skin', { skinId });
+  },
+
+  reloadSkin(skinId) {
+    return invoke('reload_skin', { skinId });
+  },
+
+  // Configuration
+  setOpacity(skinId, opacity) {
+    return invoke('set_skin_opacity', { skinId, opacity });
+  },
+
+  setAlwaysOnTop(skinId, on) {
+    return invoke('set_skin_always_on_top', { skinId, on });
+  },
+
+  setOnDesktop(skinId, on) {
+    return invoke('set_skin_on_desktop', { skinId, on });
+  },
+
+  setPositionLocked(skinId, locked) {
+    return invoke('set_skin_position_locked', { skinId, locked });
+  },
+
+  setResizable(skinId, resizable) {
+    return invoke('set_skin_resizable', { skinId, resizable });
+  },
+
+  // 缩放比例：整体缩放窗口与内容（0.5–2.0）
+  setZoom(skinId, zoom) {
+    return invoke('set_skin_zoom', { skinId, zoom });
+  },
+
+  // 边缘吸附开关：拖动靠近屏幕/其他皮肤窗口边缘时自动对齐
+  setEdgeSnap(skinId, on) {
+    return invoke('set_skin_edge_snap', { skinId, on });
+  },
+
+  // 吸附间距（逻辑像素）
+  setSnapGap(skinId, gap) {
+    return invoke('set_skin_snap_gap', { skinId, gap });
+  },
+
+  setPosition(skinId, x, y) {
+    return invoke('set_skin_position', { skinId, x, y });
+  },
+
+  setSize(skinId, width, height) {
+    return invoke('set_skin_size', { skinId, width, height });
+  },
+
+  updateConfig(skinId, config) {
+    return invoke('update_skin_config', { skinId, configUpdate: config });
+  },
+
+  setSkinCustomSetting(skinId, key, value) {
+    return invoke('set_skin_custom_setting', { skinId, key, value });
+  },
+
+  // 重置皮肤全部持久化数据（窗口配置 + 自定义设置），恢复 skin.json 默认值
+  resetSkinConfig(skinId) {
+    return invoke('reset_skin_config', { skinId });
+  },
+
+  // 皮肤包安装（.dskin）
+  pickSkinPackage() {
+    return invoke('pick_skin_package');
+  },
+
+  inspectSkinPackage(packagePath) {
+    return invoke('inspect_skin_package', { packagePath });
+  },
+
+  installSkinPackage(packagePath) {
+    return invoke('install_skin_package', { packagePath });
+  },
+
+  // 双击 .dskin 冷启动时后端暂存的待安装包路径（消费型，只取到一次）
+  takePendingPackageInstall() {
+    return invoke('take_pending_package_install');
+  },
+
+  removeSkin(skinId) {
+    return invoke('remove_skin', { skinId });
+  },
+
+  // Preview
+  capturePreview(skinId) {
+    return invoke('capture_skin_preview', { skinId });
+  },
+
+  /** 皮肤预览图 URL（<img> 用）：assetProtocol 已删，改走 skin:// 协议直出
+   * （处理器自带 settings.json 拦截与 canonicalize 防护）。
+   *  preview 路径形如 <skins_dir>/<皮肤文件夹>/preview.<ext>，协议按皮肤
+   *  文件夹下的相对路径取文件，故取路径末两段拼 URL。
+   *  Windows 上自定义协议以 http://<scheme>.localhost 形式代理（wry
+   *  workaround，skin:// 在子资源加载里不可解析），其余平台用原始 scheme。 */
+  assetUrl(filePath) {
+    const segments = String(filePath).split(/[\\/]/).filter(Boolean);
+    const relPath = segments.slice(-2).join('/');
+    const origin = navigator.userAgent.includes('Windows') ? 'http://skin.localhost' : 'skin://localhost';
+    return `${origin}/${relPath}`;
+  },
+
+  // App config
+  getAppConfig() {
+    return invoke('get_app_config');
+  },
+
+  saveAppConfig(config) {
+    return invoke('save_app_config', { newConfig: config });
+  },
+
+  // Settings
+  setAutostart(on) {
+    return invoke('set_autostart', { on });
+  },
+
+  getAutostart() {
+    return invoke('get_autostart');
+  },
+
+  setTheme(theme) {
+    return invoke('set_theme', { theme });
+  },
+
+  setLanguage(language) {
+    return invoke('set_language', { language });
+  },
+
+  // 全局快捷键（空串 = 禁用）
+  setHotkey(hotkey) {
+    return invoke('set_hotkey', { hotkey });
+  },
+
+  // 启动时快捷键注册失败的组合（消费型，只取到一次）
+  takeHotkeyError() {
+    return invoke('take_hotkey_error');
+  },
+
+  // 系统是否自带窗框修饰（Win11+ DWM 圆角与 1px 轮廓；Win10 无边框修饰）
+  isWin11OrNewer() {
+    return invoke('is_windows_11_or_newer');
+  },
+
+  // Utility
+  openSkinsFolder() {
+    return invoke('open_skins_folder');
+  },
+
+  listSystemFonts() {
+    return invoke('list_system_fonts');
+  },
+
+  openSkinFolder(skinId) {
+    return invoke('open_skin_folder', { skinId });
+  },
+};
+
+export default API;

@@ -1,0 +1,187 @@
+/* controls-demo —— 简单朴素的演示样式（填充 + 内部滚动范式） */
+
+:root {
+  --accent: #0e75c3;
+  --bg: #f4f6f8;
+  --card: #ffffff;
+  --text: #24313b;
+  --muted: #7c8a95;
+  --border: #e2e8ed;
+}
+
+/* 白天 / 夜晚色调（radio 设置项驱动 body[data-mode]） */
+body[data-mode="night"] {
+  --bg: #1c2530;
+  --card: #26313e;
+  --text: #d6e0e8;
+  --muted: #8593a1;
+  --border: #37444f;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden; /* 不允许窗口级滚动条 */
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent; /* 透明窗口：背景画在外壳上 */
+  user-select: none;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* ── 应用区（标题栏 = 拖动区的一部分） ── */
+
+.appbar {
+  --accent: #0e75c3;
+  padding: 14px 16px 12px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+}
+
+.appbar-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.appbar h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #2fbf71;
+}
+
+.status.off { background: #c4ccd3; }
+
+.subtitle {
+  margin: 4px 0 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+/* ── 值区（填充 + 内部滚动） ── */
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto; /* 内容超高在面板内滚动，不撑出窗口 */
+  padding: 12px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 下拉选择设置项驱动：紧凑密度 */
+body[data-layout="compact"] .panel { padding: 8px 10px 10px; gap: 6px; }
+body[data-layout="compact"] .card { padding: 8px 10px; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.card h2 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-top: 1px dashed var(--border);
+}
+
+.row:first-of-type { border-top: none; }
+
+.row-label {
+  flex: none;
+  max-width: 45%;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-value {
+  min-width: 0;
+  text-align: right;
+  word-break: break-all;
+  white-space: pre-wrap; /* longtext 保留换行 */
+}
+
+.row-block {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.palette i {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.value-list {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}
+
+.value-list li { padding: 1px 0; }
+.value-list li.done { color: var(--muted); text-decoration: line-through; }
+.value-list li.muted { color: var(--muted); list-style: none; margin-left: -18px; }

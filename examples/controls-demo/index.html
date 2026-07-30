@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!--
+  资源引用一律用相对路径（推荐照抄）——皮肤文件夹改名也不会 404。
+  绝对形式 http://skin.localhost/<皮肤 id>/<路径> 仅作说明，请勿照抄：
+  它把皮肤 id 硬编码进代码，id 或文件夹名一变就 404。
+-->
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 外壳即拖动区：按住空白处即可拖动窗口；内部交互元素不受影响 -->
+  <div class="shell drag-region">
+    <!-- 标题栏（应用区）：主题色 / 标题 / 开关状态 / 进度条实时应用设置值 -->
+    <header class="appbar" id="appbar">
+      <div class="appbar-top">
+        <h1 id="skin-title">…</h1>
+        <span class="status" id="status-dot" title=""></span>
+      </div>
+      <p class="subtitle" id="subtitle"></p>
+      <div class="progress"><i id="progress-bar"></i></div>
+    </header>
+
+    <!-- 值区：按分组展示全部控件当前值，皮肤界面语言跟随管理器 -->
+    <main class="panel" id="panel"></main>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

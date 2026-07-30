@@ -1,0 +1,6 @@
+{
+  "identifier": "skin",
+  "description": "皮肤窗口不授予任何核心/插件权限：皮肤页面是第三方网页，不使用 @tauri-apps/api，只经注入桥 __DESK_PP__.invoke 调用 app 自定义命令——app 命令不受 capabilities ACL 约束，由 Rust 侧 caller_skin / require_perm / require_manager 把关。shell / dialog / autostart / window-create / event-emit 等一律不授予。",
+  "windows": ["skin-*"],
+  "permissions": []
+}

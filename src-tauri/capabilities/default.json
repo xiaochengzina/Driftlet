@@ -1,0 +1,11 @@
+{
+  "identifier": "default",
+  "description": "管理器主窗口权限（皮肤窗口见 skin.json）。只保留前端 JS 实际用到的；Rust 侧调用不过 ACL，不受此约束。",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-hide"
+  ]
+}

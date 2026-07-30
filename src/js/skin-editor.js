@@ -1,0 +1,1254 @@
+/**
+ * skin-editor.js — 皮肤配置面板
+ *
+ * 结构：顶部为皮肤信息；schema 非空时出现「窗口 / 皮肤设置」页签。
+ * 「窗口」页 = 内置配置（外观/行为/位置大小/操作）；
+ * 「皮肤设置」页 = 按 skin.json settings schema 自动生成的自定义控件，
+ * 每种 type 对应一个渲染/绑定分支（新增控件需同步后端三处：
+ * types.rs 枚举、loader.rs 兜底、commands.rs 校验）。
+ * 皮肤可经 skin_set_setting 命令写回自己的设置值；本面板监听后端广播的
+ * skin-setting-changed 事件，把对应控件原地刷新（见 _syncCustomControl）。
+ */
+import API from './api.js';
+import showToast from './toast.js';
+import { listen } from '@tauri-apps/api/event';
+import { t, getLang } from './i18n.js';
+
+// 调色板缺省预设色（skin.json 未声明 options 时）
+// 12 个：与取色器、吸管同一行放下
+const DEFAULT_PALETTE = [
+  '#ff5a5a', '#ff8c42', '#ffb020', '#ffd666',
+  '#34c759', '#13c2c2', '#4da3ff', '#2b6fe0',
+  '#af52de', '#eb2f96', '#ffffff', '#000000',
+];
+// 任务列表内部上限 —— 刻意不向用户提示，到达后只是不再显示「添加」按钮
+const MAX_TASKS = 500;
+
+// 双语皮肤（skin.json 声明 bilingual）：英文界面优先显示 name_en，
+// 字段留空回退 name。与 skin-list.js 的 dispName 同一选取规则
+function dispName(detail) {
+  return (getLang() === 'en' && detail?.bilingual && detail?.name_en) || detail?.name;
+}
+
+// 解析 #rrggbb / #rrggbbaa → { rgb: '#rrggbb', alpha: 0-100 }
+function parseHexColor(v) {
+  const s = String(v || '');
+  if (/^#[0-9a-fA-F]{8}$/.test(s)) {
+    return { rgb: s.slice(0, 7), alpha: Math.round(parseInt(s.slice(7), 16) / 255 * 100) };
+  }
+  if (/^#[0-9a-fA-F]{6}$/.test(s)) {
+    return { rgb: s, alpha: 100 };
+  }
+  return { rgb: '#ffffff', alpha: 100 };
+}
+
+// 合成存储值：不透明时保持 #rrggbb（向后兼容），否则 #rrggbbaa
+function composeHexColor(rgb, alphaPct) {
+  if (alphaPct >= 100) return rgb;
+  const a = Math.max(0, Math.min(255, Math.round(alphaPct * 255 / 100)));
+  return rgb + a.toString(16).padStart(2, '0');
+}
+
+export default class SkinEditor {
+  constructor(container) {
+    this.container = container;
+    this.skinId = null;
+    this.detail = null;
+    this.unlistenMoved = null;
+    this.unlistenResized = null;
+    this.unlistenSetting = null;
+    this.activeTab = 'general';
+    this._gen = 0; // 代际计数：并发 load 时只有最新一代允许落 UI（同 install-wizard.js）
+  }
+
+  async load(skinId) {
+    const gen = ++this._gen;
+
+    // Unlisten previous skin if any
+    if (this.unlistenMoved) {
+      this.unlistenMoved();
+      this.unlistenMoved = null;
+    }
+    if (this.unlistenResized) {
+      this.unlistenResized();
+      this.unlistenResized = null;
+    }
+    if (this.unlistenSetting) {
+      this.unlistenSetting();
+      this.unlistenSetting = null;
+    }
+
+    // 切换皮肤时回到「窗口」页
+    if (skinId !== this.skinId) this.activeTab = 'general';
+    this.skinId = skinId;
+    // 先取到局部变量，过代际校验后再写 this.detail：
+    // 防止过期一代把旧皮肤的 detail 留在新 skinId 下
+    let detail;
+    try {
+      detail = await API.getSkinDetail(skinId);
+    } catch (err) {
+      if (gen !== this._gen) return;
+      this.detail = null; // 失败不落旧数据：render() 会走 clear()
+      this.container.innerHTML = `<div class="panel-empty">${t('common.loadFailed')}${this.esc(String(err))}</div>`;
+      return;
+    }
+    if (gen !== this._gen) return;
+    this.detail = detail;
+    // font 控件需要系统字体列表
+    const schema = this.detail.settings_schema || [];
+    if (schema.some(d => d.type === 'font')) {
+      try {
+        const fonts = await API.listSystemFonts();
+        if (gen !== this._gen) return;
+        this.systemFonts = fonts;
+      } catch {
+        this.systemFonts = [];
+      }
+    } else {
+      this.systemFonts = null;
+    }
+    this.render();
+
+    // Listen for position updates when the user drags the skin window.
+    // The backend already persists the position on every Moved event
+    // (debounced) — here we only refresh the X/Y inputs.
+    // 每个 await listen 后都要过代际校验：过期一代拿到的解绑句柄立即调用，
+    // 不得赋给 this.unlisten*——否则会被新一代覆盖，监听器永久泄漏
+    const unlistenMoved = await listen('skin-moved', (event) => {
+      const { skinId: movedId, x, y } = event.payload;
+      if (movedId === this.skinId) {
+        this._updatePositionDisplay(x, y);
+      }
+    });
+    if (gen !== this._gen) { unlistenMoved(); return; }
+    this.unlistenMoved = unlistenMoved;
+
+    // Border-drag resize: backend persists (debounced) — refresh W/H inputs.
+    const unlistenResized = await listen('skin-resized', (event) => {
+      const { skinId: resizedId, width, height } = event.payload;
+      if (resizedId === this.skinId) {
+        this._updateSizeDisplay(width, height);
+      }
+    });
+    if (gen !== this._gen) { unlistenResized(); return; }
+    this.unlistenResized = unlistenResized;
+
+    // Skin-originated setting writes (skin_set_setting): backend persists —
+    // here we only refresh the affected control in the open custom page.
+    const unlistenSetting = await listen('skin-setting-changed', (event) => {
+      const { skinId, key, value } = event.payload;
+      if (skinId !== this.skinId || !this.detail) return;
+      (this.detail.settings_values = this.detail.settings_values || {})[key] = value;
+      this._syncCustomControl(key, value);
+    });
+    if (gen !== this._gen) { unlistenSetting(); return; }
+    this.unlistenSetting = unlistenSetting;
+  }
+
+  clear() {
+    this._gen++; // 作废进行中的 load：其 await 返回后不得再落 UI
+    this.skinId = null;
+    this.detail = null;
+    this.activeTab = 'general';
+    if (this.unlistenMoved) {
+      this.unlistenMoved();
+      this.unlistenMoved = null;
+    }
+    if (this.unlistenResized) {
+      this.unlistenResized();
+      this.unlistenResized = null;
+    }
+    if (this.unlistenSetting) {
+      this.unlistenSetting();
+      this.unlistenSetting = null;
+    }
+    this.container.innerHTML = `
+      <div class="panel-empty">
+        <div class="panel-empty-inner">
+          <div class="panel-empty-scene">
+            <div class="panel-empty-icon">
+              <svg width="34" height="34" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="20" y="3" width="8" height="5.5" rx="1.4"/><path d="M21 8.5V13c0 2.4-3.2 2.8-3.2 6v20.5a4.5 4.5 0 0 0 4.5 4.5h3.4a4.5 4.5 0 0 0 4.5-4.5V19c0-3.2-3.2-3.6-3.2-6V8.5"/><rect x="20.6" y="24" width="6.8" height="9.5" rx="1.5"/><path d="M22.4 27.2h3.2M22.4 30.2h3.2"/></svg>
+            </div>
+            <svg class="drift-wake" width="196" height="24" viewBox="0 0 196 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M4 12 C 19.7 5.3, 35.3 5.3, 51 12 S 82.3 18.7, 98 12 S 129.3 5.3, 145 12 S 176.3 18.7, 192 12" stroke-dasharray="4 5"/><circle cx="4" cy="12" r="2.2" fill="currentColor" stroke="none"/></svg>
+          </div>
+          <div class="panel-empty-title">${t('app.noSelection')}</div>
+          <div class="panel-empty-hint">${t('app.noSelectionHint')}</div>
+        </div>
+      </div>`;
+  }
+
+  // Update X/Y fields in the config panel without re-rendering
+  _updatePositionDisplay(x, y) {
+    const elX = this.container.querySelector('#cfg-posx');
+    const elY = this.container.querySelector('#cfg-posy');
+    if (elX) elX.value = x;
+    if (elY) elY.value = y;
+  }
+
+  // Update W/H fields in the config panel without re-rendering
+  _updateSizeDisplay(width, height) {
+    const elW = this.container.querySelector('#cfg-width');
+    const elH = this.container.querySelector('#cfg-height');
+    if (elW) elW.value = width;
+    if (elH) elH.value = height;
+  }
+
+  // Reflect a skin-originated setting write (skin_set_setting → backend
+  // "skin-setting-changed") in the open custom-settings page, in place:
+  // - list controls (tasklist / datetasklist / todolist): re-render rows —
+  //   their bindings live on the container (event delegation), so replacing
+  //   row nodes is safe;
+  // - simple inputs (text / longtext / number / time / date / datetime /
+  //   password / select / boolean / slider / font): assign value/checked —
+  //   never replace the node, bindings are attached per element;
+  // - composite controls (palette / chips / segments / timerange / weekdays):
+  //   detail data only (already updated by the caller) — the next panel load
+  //   picks the value up.  Skipped entirely while focus sits inside the
+  //   control: the user is editing there, local content wins.
+  _syncCustomControl(key, value) {
+    const page = this.container.querySelector('.config-page[data-page="custom"]');
+    if (!page) return;
+    const ctrl = page.querySelector(`[data-key="${CSS.escape(key)}"]`);
+    if (!ctrl || ctrl.contains(document.activeElement)) return;
+
+    const rowsEl = ctrl.querySelector('.task-rows');
+    if (rowsEl) {
+      const items = Array.isArray(value) ? value : [];
+      if (ctrl.classList.contains('cfg-tasklist')) {
+        rowsEl.innerHTML = items.map(item => this.renderTaskRow(String(item))).join('');
+      } else if (ctrl.classList.contains('cfg-todolist')) {
+        rowsEl.innerHTML = items.map(it => this.renderTodoRow(String(it?.text ?? ''), !!(it && it.done))).join('');
+      } else if (ctrl.classList.contains('cfg-datetasklist')) {
+        rowsEl.innerHTML = items.map(it => this.renderDateTaskRow(String(it?.time ?? ''), String(it?.text ?? ''))).join('');
+      } else {
+        return;
+      }
+      const addBtn = ctrl.querySelector('.task-add');
+      if (addBtn) addBtn.style.display = items.length >= MAX_TASKS ? 'none' : '';
+      return;
+    }
+
+    // 赋值型：data-key 在 input/select/textarea 元素自身上
+    const type = ctrl.dataset.type;
+    if (type === 'boolean') {
+      ctrl.checked = !!value;
+    } else if (type === 'datetime') {
+      ctrl.value = String(value || '').replace(' ', 'T');
+    } else if (ctrl.classList.contains('cfg-custom-slider')) {
+      ctrl.value = Number(value ?? 0);
+      const display = ctrl.closest('.slider-row')?.querySelector('.slider-value');
+      if (display) display.textContent = ctrl.value;
+    } else if ('value' in ctrl) {
+      ctrl.value = value ?? '';
+    }
+  }
+
+  render() {
+    if (!this.detail) return this.clear();
+
+    const d = this.detail;
+    const cfg = d.config;
+    const hasCustom = (d.settings_schema || []).length > 0;
+    const opacityPct = Math.round((cfg.opacity || 1) * 100);
+    const generalHidden = hasCustom && this.activeTab !== 'general';
+    const customHidden = this.activeTab !== 'custom';
+
+    this.container.innerHTML = `
+      <div class="config-panel">
+        <div class="cfg-header">
+          <div class="cfg-header-main">
+            <h2>${this.esc(dispName(d))}</h2>
+            <div class="subtitle">${[d.author ? t('editor.byAuthor') + this.esc(d.author) : '', d.version ? `v${this.esc(d.version)}` : ''].filter(Boolean).join(' · ')}</div>
+          </div>
+          <span class="status-badge ${d.loaded ? 'loaded' : 'unloaded'}"><span class="status-dot"></span>${d.loaded ? t('common.running') : t('common.unloaded')}</span>
+        </div>
+
+        ${hasCustom ? `
+        <div class="cfg-tabs">
+          <button class="cfg-tab ${this.activeTab === 'general' ? 'active' : ''}" data-tab="general">${t('editor.tabWindow')}</button>
+          <button class="cfg-tab ${this.activeTab === 'custom' ? 'active' : ''}" data-tab="custom">${t('editor.tabSkin')}</button>
+        </div>` : ''}
+
+        <div class="config-page" data-page="general" ${generalHidden ? 'style="display:none"' : ''}>
+        <!-- 外观 -->
+        <div class="config-section">
+          <h3>${t('editor.appearance')}<span class="sec-en">APPEARANCE</span></h3>
+          <div class="slider-row">
+            <div class="slider-label">
+              <span>${t('editor.opacity')}</span>
+              <span class="slider-value" id="opacity-val">${opacityPct}%</span>
+            </div>
+            <input type="range" class="range-slider" id="cfg-opacity"
+              min="10" max="100" value="${opacityPct}"
+              ${!d.loaded ? 'disabled' : ''}>
+          </div>
+        </div>
+
+        <!-- 行为 -->
+        <div class="config-section">
+          <h3>${t('editor.behavior')}<span class="sec-en">BEHAVIOR</span></h3>
+          <div class="form-row">
+            <div>
+              <label>${t('editor.alwaysOnTop')}</label>
+              <span class="hint">${t('editor.alwaysOnTopHint')}</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg-ontop"
+                ${cfg.always_on_top ? 'checked' : ''}
+                ${!d.loaded ? 'disabled' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>${t('editor.onDesktop')}</label>
+              <span class="hint">${t('editor.onDesktopHint')}</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg-ondesktop"
+                ${cfg.on_desktop ? 'checked' : ''}
+                ${!d.loaded ? 'disabled' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>${t('editor.lockPosition')}</label>
+              <span class="hint">${t('editor.lockPositionHint')}</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg-locked"
+                ${cfg.position_locked ? 'checked' : ''}
+                ${!d.loaded ? 'disabled' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>${t('editor.resizable')}</label>
+              <span class="hint">${t('editor.resizableHint')}</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg-resizable"
+                ${cfg.resizable ? 'checked' : ''}
+                ${!d.loaded ? 'disabled' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-label">
+              <span>${t('editor.zoom')}</span>
+              <span class="slider-value" id="zoom-val">${Math.round((cfg.zoom ?? 1) * 100)}%</span>
+            </div>
+            <span class="hint cfg-slider-hint">${t('editor.zoomHint')}</span>
+            <input type="range" class="range-slider" id="cfg-zoom"
+              min="50" max="200" step="5"
+              value="${Math.round((cfg.zoom ?? 1) * 100)}">
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>${t('editor.edgeSnap')}</label>
+              <span class="hint">${t('editor.edgeSnapHint')}</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg-edgesnap"
+                ${cfg.edge_snap ? 'checked' : ''}
+                ${!d.loaded ? 'disabled' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>${t('editor.snapGap')}</label>
+              <span class="hint">${t('editor.snapGapHint')}</span>
+            </div>
+            <div class="num-inputs">
+              <label>px <input type="number" id="cfg-snapgap"
+                value="${cfg.snap_gap ?? 0}" min="0" max="200"
+                ${!d.loaded || !cfg.edge_snap ? 'disabled' : ''}></label>
+            </div>
+          </div>
+        </div>
+
+        <!-- 位置和大小 -->
+        <div class="config-section">
+          <h3>${t('editor.geometry')}<span class="sec-en">GEOMETRY</span></h3>
+          <div class="form-row">
+            <div><label>${t('editor.position')}</label></div>
+            <div class="num-inputs">
+              <label>X <input type="number" id="cfg-posx"
+                value="${cfg.x ?? 100}" ${!d.loaded ? 'disabled' : ''}></label>
+              <label>Y <input type="number" id="cfg-posy"
+                value="${cfg.y ?? 100}" ${!d.loaded ? 'disabled' : ''}></label>
+            </div>
+          </div>
+          <div class="form-row">
+            <div><label>${t('editor.size')}</label></div>
+            <div class="num-inputs">
+              <label>${t('editor.width')} <input type="number" id="cfg-width"
+                value="${cfg.width}" min="50" max="4000"
+                ${!d.loaded ? 'disabled' : ''}></label>
+              <label>${t('editor.height')} <input type="number" id="cfg-height"
+                value="${cfg.height}" min="50" max="4000"
+                ${!d.loaded ? 'disabled' : ''}></label>
+            </div>
+          </div>
+        </div>
+
+        <!-- 操作 -->
+        <div class="config-section">
+          <h3>${t('editor.actions')}<span class="sec-en">ACTIONS</span></h3>
+          <div class="action-group">
+            ${d.loaded
+              ? `<button class="action-btn danger" id="btn-unload">${t('editor.unloadSkin')}</button>`
+              : `<button class="action-btn primary" id="btn-load">${t('editor.loadSkin')}</button>`
+            }
+            ${d.loaded ? `<button class="action-btn" id="btn-reload">${t('editor.reload')}</button>` : ''}
+            ${d.loaded ? `<button class="action-btn" id="btn-capture">${t('editor.capture')}</button>` : ''}
+            <button class="action-btn" id="btn-openfolder">${t('editor.openFolder')}</button>
+            <button class="action-btn danger" id="btn-reset">${t('editor.resetData')}</button>
+            ${!d.loaded ? `<button class="action-btn danger" id="btn-delete">${t('common.deleteSkin')}</button>` : ''}
+          </div>
+        </div>
+        </div>
+
+        ${hasCustom ? `
+        <div class="config-page" data-page="custom" ${customHidden ? 'style="display:none"' : ''}>
+          <!-- 未加载时禁用整页控件：fieldset[disabled] 使内部所有表单控件不可交互（鼠标与键盘） -->
+          <fieldset class="cfg-fieldset" ${d.loaded ? '' : 'disabled'}>
+            ${this.renderCustomSettings()}
+          </fieldset>
+        </div>` : ''}
+      </div>`;
+
+    this.bindEvents();
+  }
+
+  // Render the custom-settings page.  Controls are grouped into cards by the
+  // optional "group" field in skin.json: groups appear in first-seen order,
+  // settings without a group form a leading untitled card (so a schema with
+  // no groups at all renders exactly one plain card, as before).
+  renderCustomSettings() {
+    const schema = this.detail.settings_schema || [];
+    const values = this.detail.settings_values || {};
+    // 双语皮肤（skin.json 声明 "bilingual": true，作者侧声明、非用户选项）：
+    // 管理器语言为英文时优先显示 *_en 文案，字段留空回退默认文案。
+    // 分组键取当前语言的显示文案，保证同语言下同组归并
+    const en = getLang() === 'en' && !!this.detail.bilingual;
+
+    const groups = [];
+    const byName = new Map();
+    for (const def of schema) {
+      const name = (en && def.group_en) ? def.group_en : (def.group || '');
+      if (!byName.has(name)) {
+        const g = { name, defs: [] };
+        byName.set(name, g);
+        groups.push(g);
+      }
+      byName.get(name).defs.push(def);
+    }
+
+    return groups.map(g => {
+      const rows = g.defs.map(def => this.renderSettingRow(def, values, en)).join('');
+      const title = g.name ? `<h3>${this.esc(g.name)}</h3>` : '';
+      return `<div class="config-section">${title}${rows}</div>`;
+    }).join('');
+  }
+
+  // Render one control row from its schema entry.
+  // 皮肤未加载时整页控件由 render() 外层 fieldset[disabled] 统一禁用，
+  // 与「窗口」页一致——未加载时仅「操作」分区保持可交互。
+  renderSettingRow(def, values, en) {
+      const key = this.escAttr(def.key);
+      // 双语选取：en = 英文界面且皮肤声明 bilingual；*_en 留空回退默认文案
+      const labelText = (en && def.label_en) ? def.label_en : (def.label || def.key);
+      const descText = (en && def.description_en) ? def.description_en : def.description;
+      const optText = (o) => (en && o.label_en) ? o.label_en : (o.label || o.value);
+      const optTitle = (o) => (en && o.label_en) ? o.label_en : o.label;
+      const label = this.esc(labelText);
+      // 描述文字：skin.json 可选 "description"，与内置配置项的 hint 同款
+      const hint = descText ? `<span class="hint">${this.esc(descText)}</span>` : '';
+      const labelCell = `<div><label>${label}</label>${hint}</div>`;
+      const value = values[def.key];
+      let row = '';
+      switch (def.type) {
+        case 'boolean':
+          row = `<div class="form-row">${labelCell}
+            <label class="toggle">
+              <input type="checkbox" class="cfg-custom" data-key="${key}" data-type="boolean"
+                ${value ? 'checked' : ''}>
+              <span class="slider"></span>
+            </label></div>`;
+          break;
+        case 'number':
+          row = `<div class="form-row">${labelCell}
+            <input type="number" class="cfg-custom cfg-input" data-key="${key}" data-type="number"
+              value="${Number(value ?? 0)}"
+              ${def.min != null ? `min="${def.min}"` : ''} ${def.max != null ? `max="${def.max}"` : ''}
+              ${def.step != null ? `step="${def.step}"` : ''}></div>`;
+          break;
+        case 'longtext':
+          row = `<div class="form-row form-row-block">${labelCell}
+            <textarea class="cfg-custom cfg-textarea" data-key="${key}" data-type="longtext"
+              rows="4">${this.esc(String(value ?? ''))}</textarea></div>`;
+          break;
+        case 'time':
+          row = `<div class="form-row">${labelCell}
+            <input type="time" step="1" class="cfg-custom cfg-input" data-key="${key}" data-type="time"
+              value="${this.escAttr(String(value || ''))}"></div>`;
+          break;
+        case 'date':
+          row = `<div class="form-row">${labelCell}
+            <input type="date" class="cfg-custom cfg-input" data-key="${key}" data-type="date"
+              value="${this.escAttr(String(value || ''))}"></div>`;
+          break;
+        case 'datetime': {
+          // 存储 "YYYY-MM-DD HH:MM:SS" ↔ 输入框 "YYYY-MM-DDTHH:MM:SS"
+          const v = String(value || '').replace(' ', 'T');
+          row = `<div class="form-row">${labelCell}
+            <input type="datetime-local" step="1" class="cfg-custom cfg-input" data-key="${key}" data-type="datetime"
+              value="${this.escAttr(v)}"></div>`;
+          break;
+        }
+        case 'password':
+          row = `<div class="form-row">${labelCell}
+            <div class="cfg-password">
+              <input type="password" class="cfg-custom cfg-input" data-key="${key}" data-type="password"
+                value="${this.escAttr(String(value ?? ''))}" autocomplete="off">
+              <button type="button" class="cfg-pw-toggle" tabindex="-1"
+                data-title-show="${t('editor.showPassword')}" data-title-hide="${t('editor.hidePassword')}"
+                title="${t('editor.showPassword')}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div></div>`;
+          break;
+        case 'select':
+          row = `<div class="form-row">${labelCell}
+            <select class="cfg-custom cfg-select" data-key="${key}" data-type="select">
+              ${(def.options || []).map(o =>
+                `<option value="${this.escAttr(o.value)}" ${o.value === value ? 'selected' : ''}>${this.esc(optText(o))}</option>`
+              ).join('')}
+            </select></div>`;
+          break;
+        case 'slider': {
+          const min = def.min ?? 0;
+          const max = def.max ?? 100;
+          const step = def.step ?? 1;
+          const num = Number(value ?? min);
+          row = `<div class="slider-row">
+            <div class="slider-label"><span>${label}</span><span class="slider-value">${num}</span></div>
+            ${hint ? `<span class="hint cfg-slider-hint">${this.esc(descText)}</span>` : ''}
+            <input type="range" class="range-slider cfg-custom-slider" data-key="${key}"
+              min="${min}" max="${max}" step="${step}" value="${num}">
+          </div>`;
+          break;
+        }
+        case 'multiselect': {
+          const selected = Array.isArray(value) ? value : [];
+          row = `<div class="form-row form-row-block">${labelCell}
+            <div class="cfg-chips" data-key="${key}">
+              ${(def.options || []).map(o =>
+                `<button class="cfg-chip ${selected.includes(o.value) ? 'active' : ''}"
+                  data-value="${this.escAttr(o.value)}">${this.esc(optText(o))}</button>`
+              ).join('')}
+            </div></div>`;
+          break;
+        }
+        case 'radio':
+          row = `<div class="form-row form-row-block">${labelCell}
+            <div class="cfg-segments" data-key="${key}">
+              ${(def.options || []).map(o =>
+                `<button class="cfg-segment ${o.value === value ? 'active' : ''}"
+                  data-value="${this.escAttr(o.value)}">${this.esc(optText(o))}</button>`
+              ).join('')}
+            </div></div>`;
+          break;
+        case 'palette': {
+          const swatches = (def.options || []).length
+            ? def.options
+            : DEFAULT_PALETTE.map(c => ({ value: c, label: null }));
+          // 值格式 #rrggbb 或 #rrggbbaa（带透明度）
+          const { rgb, alpha } = parseHexColor(String(value || '#ffffff'));
+          row = `<div class="form-row form-row-block">${labelCell}
+            <div class="cfg-palette" data-key="${key}">
+              <div class="cfg-palette-colors">
+                ${swatches.map(o =>
+                  `<button class="cfg-swatch ${parseHexColor(o.value).rgb.toLowerCase() === rgb.toLowerCase() ? 'active' : ''}"
+                    data-value="${this.escAttr(o.value)}" style="background:${this.escAttr(o.value)}"
+                    ${optTitle(o) ? `title="${this.escAttr(optTitle(o))}"` : ''}></button>`
+                ).join('')}
+                <input type="color" class="cfg-color cfg-palette-custom" value="${this.escAttr(rgb)}">
+              </div>
+              <div class="cfg-alpha-row">
+                <input type="range" class="range-slider cfg-alpha" min="0" max="100" step="1"
+                  value="${alpha}" style="background:linear-gradient(90deg, transparent, ${this.escAttr(rgb)})">
+                <span class="cfg-alpha-val">${alpha}%</span>
+              </div>
+            </div></div>`;
+          break;
+        }
+        case 'timerange': {
+          const range = (value && typeof value === 'object') ? value : {};
+          // 存储 "YYYY-MM-DD HH:MM:SS" ↔ 输入框 "YYYY-MM-DDTHH:MM:SS"
+          const toInput = (s) => this.escAttr(String(s || '').replace(' ', 'T'));
+          row = `<div class="form-row form-row-block">${labelCell}
+            <div class="cfg-timerange" data-key="${key}">
+              <input type="datetime-local" step="1" class="cfg-input cfg-tr-start" value="${toInput(range.start)}">
+              <span class="cfg-tr-sep">${t('editor.rangeSep')}</span>
+              <input type="datetime-local" step="1" class="cfg-input cfg-tr-end" value="${toInput(range.end)}">
+            </div></div>`;
+          break;
+        }
+        case 'tasklist': {
+          const items = Array.isArray(value) ? value : [];
+          row = `<div class="form-row form-row-block">${labelCell}
+            <div class="cfg-tasklist" data-key="${key}">
+              <div class="task-rows">
+                ${items.map(item => this.renderTaskRow(String(item))).join('')}
+              </div>
+              <button class="action-btn task-add" ${items.length >= MAX_TASKS ? 'style="display:none"' : ''}>${t('editor.addItem')}</button>
+            </div></div>`;
+          break;
+        }
+        case 'todolist': {
+          const items = Array.isArray(value) ? value : [];
+          row = `<div class="form-row form-row-block">${labelCell}
+            <div class="cfg-todolist" data-key="${key}">
+              <div class="task-rows">
+                ${items.map(it => this.renderTodoRow(String(it?.text ?? ''), !!(it && it.done))).join('')}
+              </div>
+              <button class="action-btn task-add" ${items.length >= MAX_TASKS ? 'style="display:none"' : ''}>${t('editor.addItem')}</button>
+            </div></div>`;
+          break;
+        }
+        case 'weekdays': {
+          // 固定周一至周日；复用 chips 交互与样式
+          const DAYS = [['mon', t('editor.wdMon')], ['tue', t('editor.wdTue')], ['wed', t('editor.wdWed')], ['thu', t('editor.wdThu')],
+                        ['fri', t('editor.wdFri')], ['sat', t('editor.wdSat')], ['sun', t('editor.wdSun')]];
+          const selected = Array.isArray(value) ? value : [];
+          row = `<div class="form-row form-row-block">${labelCell}
+            <div class="cfg-chips" data-key="${key}">
+              ${DAYS.map(([v, l]) =>
+                `<button class="cfg-chip ${selected.includes(v) ? 'active' : ''}" data-value="${v}">${l}</button>`
+              ).join('')}
+            </div></div>`;
+          break;
+        }
+        case 'font': {
+          const fonts = this.systemFonts || [];
+          const current = String(value || '');
+          // 当前字体不在系统列表里也保留为可选，避免显示跳变
+          const options = current && !fonts.includes(current) ? [current, ...fonts] : fonts;
+          row = `<div class="form-row">${labelCell}
+            <select class="cfg-custom cfg-select" data-key="${key}" data-type="font">
+              <option value="" ${current ? '' : 'selected'}>${t('editor.systemDefault')}</option>
+              ${options.map(f =>
+                `<option value="${this.escAttr(f)}" ${f === current ? 'selected' : ''}>${this.esc(f)}</option>`
+              ).join('')}
+            </select></div>`;
+          break;
+        }
+        case 'datetasklist': {
+          const items = Array.isArray(value) ? value : [];
+          row = `<div class="form-row form-row-block">${labelCell}
+            <div class="cfg-datetasklist" data-key="${key}">
+              <div class="task-rows">
+                ${items.map(it => this.renderDateTaskRow(String(it?.time ?? ''), String(it?.text ?? ''))).join('')}
+              </div>
+              <button class="action-btn task-add" ${items.length >= MAX_TASKS ? 'style="display:none"' : ''}>${t('editor.addItem')}</button>
+            </div></div>`;
+          break;
+        }
+        default: // text
+          row = `<div class="form-row">${labelCell}
+            <input type="text" class="cfg-custom cfg-input" data-key="${key}" data-type="text"
+              value="${this.escAttr(String(value ?? ''))}"></div>`;
+      }
+      return row;
+  }
+
+  renderTaskRow(text) {
+    return `<div class="task-row">
+      <input type="text" class="cfg-input task-input" value="${this.escAttr(text)}">
+      <button class="task-del" title="${t('common.delete')}">×</button>
+    </div>`;
+  }
+
+  renderTodoRow(text, done) {
+    return `<div class="task-row todo-row${done ? ' done' : ''}">
+      <input type="checkbox" class="todo-check" ${done ? 'checked' : ''}>
+      <input type="text" class="cfg-input task-input" value="${this.escAttr(text)}">
+      <button class="task-del" title="${t('common.delete')}">×</button>
+    </div>`;
+  }
+
+  renderDateTaskRow(time, text) {
+    // 存储 "YYYY-MM-DD HH:MM:SS" ↔ 输入框 "YYYY-MM-DDTHH:MM:SS"
+    return `<div class="task-row dt-row">
+      <input type="datetime-local" step="1" class="cfg-input dt-time"
+        value="${this.escAttr(time.replace(' ', 'T'))}">
+      <input type="text" class="cfg-input task-input dt-text" placeholder="${t('editor.taskContent')}"
+        value="${this.escAttr(text)}">
+      <button class="task-del" title="${t('common.delete')}">×</button>
+    </div>`;
+  }
+
+  bindEvents() {
+    // 页签
+    this.container.querySelectorAll('.cfg-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.activeTab = btn.dataset.tab;
+        this.container.querySelectorAll('.cfg-tab').forEach(b =>
+          b.classList.toggle('active', b === btn));
+        this.container.querySelectorAll('.config-page').forEach(page =>
+          page.style.display = page.dataset.page === this.activeTab ? '' : 'none');
+      });
+    });
+
+    // 不透明度滑块
+    const opacitySlider = this.container.querySelector('#cfg-opacity');
+    const opacityVal = this.container.querySelector('#opacity-val');
+    opacitySlider?.addEventListener('input', () => {
+      opacityVal.textContent = opacitySlider.value + '%';
+    });
+    opacitySlider?.addEventListener('change', () => {
+      const val = parseInt(opacitySlider.value) / 100;
+      API.setOpacity(this.skinId, val)
+        .then(() => this.showToast(t('editor.opacitySet', { value: opacitySlider.value }), 'success'))
+        .catch(err => this.showToast(String(err), 'error'));
+    });
+
+    // 「窗口置顶」与「贴在桌面」二选一，且必有一个开启：
+    // 打开一个会自动关闭另一个；关闭当前模式会切换到另一个，不存在两者都关的状态。
+    // 开关是乐观改 UI：API 失败必须重载回滚（同 saveCustomSetting），
+    // 否则面板会停在"两个都关"的非法态
+    this.bindToggle('cfg-ontop', (on) => {
+      const onDesktop = this.container.querySelector('#cfg-ondesktop');
+      if (on) {
+        API.setAlwaysOnTop(this.skinId, true)
+          .then(() => this.showToast(t('editor.switchedOnTop'), 'info'))
+          .catch(err => {
+            this.showToast(String(err), 'error');
+            this.load(this.skinId);
+          });
+        if (onDesktop) onDesktop.checked = false;
+      } else {
+        // 关闭置顶 = 切换到贴在桌面
+        if (onDesktop) onDesktop.checked = true;
+        API.setOnDesktop(this.skinId, true)
+          .then(() => this.showToast(t('editor.switchedOnDesktop'), 'info'))
+          .catch(err => {
+            this.showToast(String(err), 'error');
+            this.load(this.skinId);
+          });
+        setTimeout(() => this.load(this.skinId), 500);
+      }
+    });
+
+    this.bindToggle('cfg-ondesktop', (on) => {
+      const onTop = this.container.querySelector('#cfg-ontop');
+      if (on) {
+        API.setOnDesktop(this.skinId, true)
+          .then(() => this.showToast(t('editor.switchedOnDesktop'), 'info'))
+          .catch(err => {
+            this.showToast(String(err), 'error');
+            this.load(this.skinId);
+          });
+        if (onTop) onTop.checked = false;
+        setTimeout(() => this.load(this.skinId), 500);
+      } else {
+        // 关闭贴桌面 = 切换到窗口置顶
+        if (onTop) onTop.checked = true;
+        API.setAlwaysOnTop(this.skinId, true)
+          .then(() => this.showToast(t('editor.switchedOnTop'), 'info'))
+          .catch(err => {
+            this.showToast(String(err), 'error');
+            this.load(this.skinId);
+          });
+      }
+    });
+
+    // 锁定位置
+    this.bindToggle('cfg-locked', (on) => {
+      API.setPositionLocked(this.skinId, on)
+        .then(() => this.showToast(on ? t('editor.posLocked') : t('editor.posUnlocked'), 'info'))
+        .catch(err => {
+          this.showToast(String(err), 'error');
+          this.load(this.skinId);
+        });
+    });
+
+    // 拖拽调整大小
+    this.bindToggle('cfg-resizable', (on) => {
+      API.setResizable(this.skinId, on)
+        .then(() => this.showToast(on ? t('editor.resizableOn') : t('editor.resizableOff'), 'info'))
+        .catch(err => {
+          this.showToast(String(err), 'error');
+          this.load(this.skinId);
+        });
+    });
+
+    // 缩放比例滑块：拖动中只更新显示，松手才保存（同不透明度）
+    const zoomSlider = this.container.querySelector('#cfg-zoom');
+    const zoomVal = this.container.querySelector('#zoom-val');
+    zoomSlider?.addEventListener('input', () => {
+      zoomVal.textContent = zoomSlider.value + '%';
+    });
+    zoomSlider?.addEventListener('change', () => {
+      const val = parseInt(zoomSlider.value) / 100;
+      API.setZoom(this.skinId, val)
+        .then(() => this.showToast(t('editor.zoomSet', { value: zoomSlider.value }), 'success'))
+        .catch(err => this.showToast(String(err), 'error'));
+    });
+
+    // 边缘吸附：开关切换时间距输入框随之启停
+    this.bindToggle('cfg-edgesnap', (on) => {
+      API.setEdgeSnap(this.skinId, on)
+        .then(() => this.showToast(on ? t('editor.edgeSnapOn') : t('editor.edgeSnapOff'), 'info'))
+        .catch(err => {
+          this.showToast(String(err), 'error');
+          this.load(this.skinId);
+        });
+      const gapInput = this.container.querySelector('#cfg-snapgap');
+      if (gapInput) gapInput.disabled = !on;
+    });
+
+    // 吸附间距
+    const snapGapInput = this.container.querySelector('#cfg-snapgap');
+    snapGapInput?.addEventListener('change', () => {
+      const gap = parseInt(snapGapInput.value);
+      if (Number.isNaN(gap)) return;
+      const clamped = Math.max(0, Math.min(200, gap));
+      snapGapInput.value = clamped;
+      API.setSnapGap(this.skinId, clamped)
+        .then(() => this.showToast(t('editor.snapGapSaved'), 'success'))
+        .catch(err => {
+          this.showToast(String(err), 'error');
+          this.load(this.skinId);
+        });
+    });
+
+    // 位置
+    this.bindNumInput('cfg-posx', 'cfg-posy', (x, y) => {
+      API.setPosition(this.skinId, x, y)
+        .then(() => this.showToast(t('editor.posSaved'), 'success'))
+        .catch(err => {
+          this.showToast(String(err), 'error');
+          this.load(this.skinId);
+        });
+    });
+
+    // 大小
+    this.bindNumInput('cfg-width', 'cfg-height', (w, h) => {
+      API.setSize(this.skinId, w, h)
+        .then(() => this.showToast(t('editor.sizeSaved'), 'success'))
+        .catch(err => {
+          this.showToast(String(err), 'error');
+          this.load(this.skinId);
+        });
+    });
+
+    // 操作按钮 — also refresh the skin list so button states stay in sync
+    this.container.querySelector('#btn-load')?.addEventListener('click', async () => {
+      try {
+        await API.loadSkin(this.skinId);
+        this.showToast(t('common.skinLoaded'), 'success');
+        await this.load(this.skinId);
+        await window.__app?.skinList?.refresh();
+      } catch (err) { this.showToast(String(err), 'error'); }
+    });
+    this.container.querySelector('#btn-unload')?.addEventListener('click', async () => {
+      try {
+        await API.unloadSkin(this.skinId);
+        this.showToast(t('common.skinUnloaded'), 'info');
+        await this.load(this.skinId);
+        await window.__app?.skinList?.refresh();
+      } catch (err) { this.showToast(String(err), 'error'); }
+    });
+    this.container.querySelector('#btn-reload')?.addEventListener('click', async () => {
+      try {
+        await API.reloadSkin(this.skinId);
+        this.showToast(t('editor.reloaded'), 'success');
+        await this.load(this.skinId);
+        await window.__app?.skinList?.refresh();
+      } catch (err) { this.showToast(String(err), 'error'); }
+    });
+    this.container.querySelector('#btn-capture')?.addEventListener('click', () => {
+      this.showToast(t('editor.capturing'), 'info');
+      API.capturePreview(this.skinId)
+        .then(async () => {
+          this.showToast(t('editor.captureSaved'), 'success');
+          // Refresh skin list to show the new preview thumbnail
+          if (window.__app?.skinList) {
+            await window.__app.skinList.refresh();
+          }
+        })
+        .catch(err => this.showToast(t('editor.captureFailed') + String(err), 'error'));
+    });
+    this.container.querySelector('#btn-openfolder')?.addEventListener('click', () => {
+      API.openSkinFolder(this.skinId)
+        .then(() => this.showToast(t('app.folderOpened'), 'success'))
+        .catch(err => this.showToast(String(err), 'error'));
+    });
+    this.container.querySelector('#btn-reset')?.addEventListener('click', () => {
+      this.confirmReset();
+    });
+    // 删除皮肤（仅未加载时渲染此按钮）：复用皮肤列表的确认弹窗与删除流程，
+    // 列表刷新、选中清空（→ 本配置页 clear）都在其回调里联动完成
+    this.container.querySelector('#btn-delete')?.addEventListener('click', () => {
+      window.__app?.skinList?.confirmDelete(this.skinId, dispName(this.detail) || this.skinId);
+    });
+
+    this.bindCustomSettings();
+  }
+
+  // 重置数据：清除该皮肤的全部持久化配置（「窗口」页与「皮肤设置」页），
+  // 恢复 skin.json 默认值；皮肤已加载时后端会连带重载使其立即生效。
+  confirmReset() {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog">
+        <div class="confirm-icon danger"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+        <h3>${t('editor.confirmResetTitle')}</h3>
+        <p>${t('editor.confirmResetBody', { name: `<strong>"${this.esc(dispName(this.detail) || this.skinId)}"</strong>` })}</p>
+        <p class="confirm-hint">${t('editor.confirmResetHint')}</p>
+        <div class="confirm-buttons">
+          <button class="confirm-btn cancel">${t('common.cancel')}</button>
+          <button class="confirm-btn danger">${t('common.reset')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+
+    overlay.querySelector('.confirm-btn.cancel').onclick = close;
+    overlay.querySelector('.confirm-btn.danger').onclick = async () => {
+      close();
+      try {
+        await API.resetSkinConfig(this.skinId);
+        this.showToast(t('editor.resetDone'), 'success');
+        await this.load(this.skinId);
+        await window.__app?.skinList?.refresh();
+      } catch (err) {
+        this.showToast(t('editor.resetFailed') + String(err), 'error');
+      }
+    };
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+  }
+
+  bindToggle(id, onChange) {
+    this.container.querySelector('#' + id)?.addEventListener('change', function () {
+      onChange(this.checked);
+    });
+  }
+
+  // 保存单个自定义设置；失败时重新 load 回滚控件显示
+  saveCustomSetting(key, value) {
+    return API.setSkinCustomSetting(this.skinId, key, value)
+      .then(() => this.showToast(t('editor.settingSaved'), 'success'))
+      .catch(err => {
+        this.showToast(String(err), 'error');
+        this.load(this.skinId);
+      });
+  }
+
+  bindCustomSettings() {
+    // 简单输入类：boolean / number / text / longtext / time / date / datetime / password / select
+    this.container.querySelectorAll('.cfg-custom').forEach(el => {
+      el.addEventListener('change', () => {
+        const key = el.dataset.key;
+        let value;
+        switch (el.dataset.type) {
+          case 'boolean':
+            value = el.checked;
+            break;
+          case 'number':
+            value = parseFloat(el.value);
+            if (Number.isNaN(value)) return;
+            break;
+          case 'datetime':
+            // 输入框 "YYYY-MM-DDTHH:MM:SS" → 存储 "YYYY-MM-DD HH:MM:SS"
+            value = el.value.replace('T', ' ');
+            break;
+          default: // text / longtext / time / date / password / color / select
+            value = el.value;
+        }
+        this.saveCustomSetting(key, value);
+      });
+    });
+
+    // 密码显示/隐藏切换（仅改 input.type，不触发保存）
+    this.container.querySelectorAll('.cfg-password').forEach(pw => {
+      const input = pw.querySelector('.cfg-input');
+      const btn = pw.querySelector('.cfg-pw-toggle');
+      btn?.addEventListener('click', () => {
+        const showing = input.type === 'text';
+        input.type = showing ? 'password' : 'text';
+        btn.classList.toggle('active', !showing);
+        btn.title = showing ? btn.dataset.titleShow : btn.dataset.titleHide;
+      });
+    });
+
+    // 滑动条：拖动中只更新显示，松手才保存
+    this.container.querySelectorAll('.cfg-custom-slider').forEach(el => {
+      const display = el.closest('.slider-row')?.querySelector('.slider-value');
+      el.addEventListener('input', () => {
+        if (display) display.textContent = el.value;
+      });
+      el.addEventListener('change', () => {
+        const value = parseFloat(el.value);
+        if (Number.isNaN(value)) return;
+        this.saveCustomSetting(el.dataset.key, value);
+      });
+    });
+
+    // 多选开关（chips）：点击切换选中态，整体保存数组
+    this.container.querySelectorAll('.cfg-chips').forEach(group => {
+      group.querySelectorAll('.cfg-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          chip.classList.toggle('active');
+          const values = [...group.querySelectorAll('.cfg-chip.active')]
+            .map(c => c.dataset.value);
+          this.saveCustomSetting(group.dataset.key, values);
+        });
+      });
+    });
+
+    // 互斥开关组（segments）：组内只保留一个 active
+    this.container.querySelectorAll('.cfg-segments').forEach(group => {
+      group.querySelectorAll('.cfg-segment').forEach(seg => {
+        seg.addEventListener('click', () => {
+          if (seg.classList.contains('active')) return;
+          group.querySelectorAll('.cfg-segment').forEach(s =>
+            s.classList.toggle('active', s === seg));
+          this.saveCustomSetting(group.dataset.key, seg.dataset.value);
+        });
+      });
+    });
+
+    // 调色板：预设色块 / 自定义取色 / 透明度滑块
+    // （屏幕取色用原生取色面板自带的吸管）
+    // 透明度是独立轴——换色保留当前透明度；存储时 100% 写 #rrggbb，否则 #rrggbbaa
+    this.container.querySelectorAll('.cfg-palette').forEach(pal => {
+      const key = pal.dataset.key;
+      const customInput = pal.querySelector('.cfg-palette-custom');
+      const alphaEl = pal.querySelector('.cfg-alpha');
+      const alphaVal = pal.querySelector('.cfg-alpha-val');
+      const currentColor = () => composeHexColor(customInput.value, parseInt(alphaEl.value, 10));
+      const syncSwatches = (rgb) => {
+        pal.querySelectorAll('.cfg-swatch').forEach(sw =>
+          sw.classList.toggle('active',
+            parseHexColor(sw.dataset.value).rgb.toLowerCase() === rgb.toLowerCase()));
+      };
+      const syncGradient = () => {
+        alphaEl.style.background = `linear-gradient(90deg, transparent, ${customInput.value})`;
+      };
+      pal.querySelectorAll('.cfg-swatch').forEach(sw => {
+        sw.addEventListener('click', () => {
+          const rgb = parseHexColor(sw.dataset.value).rgb;
+          if (customInput) customInput.value = rgb;
+          syncSwatches(rgb);
+          syncGradient();
+          this.saveCustomSetting(key, currentColor());
+        });
+      });
+      customInput?.addEventListener('change', () => {
+        syncSwatches(customInput.value);
+        syncGradient();
+        this.saveCustomSetting(key, currentColor());
+      });
+      alphaEl?.addEventListener('input', () => {
+        alphaVal.textContent = alphaEl.value + '%';
+      });
+      alphaEl?.addEventListener('change', () => {
+        this.saveCustomSetting(key, currentColor());
+      });
+    });
+
+    // 时间范围：起止任一变化即保存；起晚于止时自动调换
+    this.container.querySelectorAll('.cfg-timerange').forEach(tr => {
+      const startEl = tr.querySelector('.cfg-tr-start');
+      const endEl = tr.querySelector('.cfg-tr-end');
+      const onChange = () => {
+        // 输入框 "YYYY-MM-DDTHH:MM:SS" ↔ 存储 "YYYY-MM-DD HH:MM:SS"
+        let start = (startEl.value || '').replace('T', ' ');
+        let end = (endEl.value || '').replace('T', ' ');
+        if (start && end && start > end) {
+          [start, end] = [end, start];
+          startEl.value = start.replace(' ', 'T');
+          endEl.value = end.replace(' ', 'T');
+          this.showToast(t('editor.timeSwapped'), 'info');
+        }
+        this.saveCustomSetting(tr.dataset.key, { start, end });
+      };
+      startEl?.addEventListener('change', onChange);
+      endEl?.addEventListener('change', onChange);
+    });
+
+    // 任务列表：行编辑 / 删除 / 添加（事件委托，动态行也生效）
+    this.container.querySelectorAll('.cfg-tasklist').forEach(list => {
+      const key = list.dataset.key;
+      const rowsEl = list.querySelector('.task-rows');
+      const addBtn = list.querySelector('.task-add');
+      const updateAddBtn = () => {
+        if (addBtn) addBtn.style.display =
+          rowsEl.querySelectorAll('.task-row').length >= MAX_TASKS ? 'none' : '';
+      };
+      const save = () => {
+        // 快照保存时刻的行：add 按钮在 API 返回前新加的空行不在快照内，
+        // 防止下方清理把刚添加的行误删（blur→change→save 与 click 的竞态）
+        const rowsAtSave = [...rowsEl.querySelectorAll('.task-row')];
+        const items = rowsAtSave
+          .map(r => r.querySelector('.task-input').value)
+          .filter(v => v.trim() !== '');
+        this.saveCustomSetting(key, items).then(() => {
+          // 后端会剔除空行 —— 同步移除快照内的本地空行
+          rowsAtSave.forEach(row => {
+            if (row.isConnected && row.querySelector('.task-input').value.trim() === '') row.remove();
+          });
+          updateAddBtn();
+        });
+      };
+      list.addEventListener('change', (e) => {
+        if (e.target.classList.contains('task-input')) save();
+      });
+      list.addEventListener('click', (e) => {
+        if (e.target.classList.contains('task-del')) {
+          e.target.closest('.task-row').remove();
+          save();
+        } else if (e.target.classList.contains('task-add')) {
+          // 只加本地行，输入失焦（change）后才落盘
+          rowsEl.insertAdjacentHTML('beforeend', this.renderTaskRow(''));
+          updateAddBtn();
+          rowsEl.lastElementChild.querySelector('.task-input').focus();
+        }
+      });
+    });
+
+    // 待办任务列表：勾选 / 行编辑 / 删除 / 添加（事件委托，动态行也生效）
+    this.container.querySelectorAll('.cfg-todolist').forEach(list => {
+      const key = list.dataset.key;
+      const rowsEl = list.querySelector('.task-rows');
+      const addBtn = list.querySelector('.task-add');
+      const updateAddBtn = () => {
+        if (addBtn) addBtn.style.display =
+          rowsEl.querySelectorAll('.task-row').length >= MAX_TASKS ? 'none' : '';
+      };
+      const save = () => {
+        // 快照保存时刻的行（与 tasklist 同一 blur/click 竞态防护）
+        const rowsAtSave = [...rowsEl.querySelectorAll('.task-row')];
+        const items = rowsAtSave
+          .map(r => ({
+            text: r.querySelector('.task-input').value,
+            done: r.querySelector('.todo-check').checked,
+          }))
+          .filter(it => it.text.trim() !== '');
+        this.saveCustomSetting(key, items).then(() => {
+          rowsAtSave.forEach(row => {
+            if (row.isConnected && row.querySelector('.task-input').value.trim() === '') row.remove();
+          });
+          updateAddBtn();
+        });
+      };
+      list.addEventListener('change', (e) => {
+        if (e.target.classList.contains('todo-check')) {
+          e.target.closest('.task-row').classList.toggle('done', e.target.checked);
+          save();
+        } else if (e.target.classList.contains('task-input')) {
+          save();
+        }
+      });
+      list.addEventListener('click', (e) => {
+        if (e.target.classList.contains('task-del')) {
+          e.target.closest('.task-row').remove();
+          save();
+        } else if (e.target.classList.contains('task-add')) {
+          // 只加本地行，输入失焦（change）后才落盘
+          rowsEl.insertAdjacentHTML('beforeend', this.renderTodoRow('', false));
+          updateAddBtn();
+          rowsEl.lastElementChild.querySelector('.task-input').focus();
+        }
+      });
+    });
+
+    // 日期任务列表：结构同 tasklist，行 = 日期时间 + 任务文本
+    this.container.querySelectorAll('.cfg-datetasklist').forEach(list => {
+      const key = list.dataset.key;
+      const rowsEl = list.querySelector('.task-rows');
+      const addBtn = list.querySelector('.task-add');
+      const updateAddBtn = () => {
+        if (addBtn) addBtn.style.display =
+          rowsEl.querySelectorAll('.task-row').length >= MAX_TASKS ? 'none' : '';
+      };
+      const save = () => {
+        // 快照保存时刻的行：add 按钮在 API 返回前新加的空行不在快照内，
+        // 防止下方清理把刚添加的行误删（blur→change→save 与 click 的竞态）
+        const rowsAtSave = [...rowsEl.querySelectorAll('.task-row')];
+        const items = rowsAtSave
+          .map(r => ({
+            time: (r.querySelector('.dt-time').value || '').replace('T', ' '),
+            text: r.querySelector('.dt-text').value,
+          }))
+          // 时间与内容都空的行不落盘
+          .filter(it => it.time.trim() !== '' || it.text.trim() !== '');
+        this.saveCustomSetting(key, items).then(() => {
+          rowsAtSave.forEach(r => {
+            if (!r.isConnected) return;
+            const t = r.querySelector('.dt-time').value;
+            const x = r.querySelector('.dt-text').value;
+            if (!t && x.trim() === '') r.remove();
+          });
+          updateAddBtn();
+        });
+      };
+      list.addEventListener('change', (e) => {
+        if (e.target.classList.contains('dt-time') ||
+            e.target.classList.contains('dt-text')) save();
+      });
+      list.addEventListener('click', (e) => {
+        if (e.target.classList.contains('task-del')) {
+          e.target.closest('.task-row').remove();
+          save();
+        } else if (e.target.classList.contains('task-add')) {
+          rowsEl.insertAdjacentHTML('beforeend', this.renderDateTaskRow('', ''));
+          updateAddBtn();
+          rowsEl.lastElementChild.querySelector('.dt-text').focus();
+        }
+      });
+    });
+  }
+
+  bindNumInput(idX, idY, onChange) {
+    const elX = this.container.querySelector('#' + idX);
+    const elY = this.container.querySelector('#' + idY);
+    const handler = () => {
+      onChange(parseInt(elX?.value) || 0, parseInt(elY?.value) || 0);
+    };
+    elX?.addEventListener('change', handler);
+    elY?.addEventListener('change', handler);
+  }
+
+  esc(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // Escape for double-quoted HTML attribute values (esc() leaves quotes intact)
+  escAttr(str) {
+    return this.esc(str).replace(/"/g, '&quot;');
+  }
+
+  showToast(msg, type) {
+    showToast(msg, type);
+  }
+}
