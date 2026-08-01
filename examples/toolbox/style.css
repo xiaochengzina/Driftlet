@@ -1,0 +1,299 @@
+/* toolbox —— 浅色卡片演示样式（填充 + 内部滚动范式，与 controls-demo 一致） */
+
+:root {
+  --accent: #0e75c3;
+  --bg: #f4f6f8;
+  --card: #ffffff;
+  --text: #24313b;
+  --muted: #7c8a95;
+  --border: #e2e8ed;
+  --danger: #c0453e;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden; /* 不允许窗口级滚动条 */
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent; /* 透明窗口：背景画在外壳上 */
+  user-select: none;
+}
+
+/* 输入框 / 文本域 / 结果区允许选中文字（输出可复制） */
+input, textarea, select, .result { user-select: text; }
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* ── 标题栏（拖动区的一部分） ── */
+
+.appbar {
+  padding: 14px 16px 12px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+}
+
+.appbar-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.appbar h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  flex: none;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #e2f5e9;
+  color: #1e8e4f;
+  white-space: nowrap;
+}
+
+.badge.missing {
+  background: #fdeeee;
+  color: var(--danger);
+}
+
+.subtitle {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ── 面板（填充 + 内部滚动） ── */
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto; /* 内容超高在面板内滚动，不撑出窗口 */
+  padding: 12px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.card h2 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card h3 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 卡片右上角的权限标签 */
+.perm {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.note {
+  margin: 2px 0 6px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.note.warn {
+  color: #9a6200;
+  background: #fff7e8;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+/* ── 控件 ── */
+
+.btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.input-row {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.input-row input[type="text"],
+.input-row select {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+}
+
+.input-row select { flex: none; }
+
+.input-row input[type="number"] {
+  flex: none;
+  width: 96px;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 48px;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+}
+
+/* ── 结果区（内部滚动，不撑破卡片） ── */
+
+.result {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: #f0f3f6;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, Consolas, "Microsoft YaHei UI", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.result.placeholder { color: var(--muted); }
+
+.result.error {
+  color: var(--danger);
+  background: #fdf3f2;
+  border-color: #e5b4b2;
+}
+
+/* ── 待办列表 ── */
+
+.tasks {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+}
+
+.tasks li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  border-top: 1px dashed var(--border);
+}
+
+.tasks li:first-child { border-top: none; }
+
+.tasks li.muted { color: var(--muted); }
+
+.task-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.tasks li.done .task-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.task-del {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.task-del:hover {
+  color: var(--danger);
+  background: #fdeeee;
+}

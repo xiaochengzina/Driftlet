@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!-- 资源引用一律用相对路径（推荐照抄）——皮肤文件夹改名也不会 404 -->
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 外壳即拖动区：按住空白处即可拖动窗口；内部交互元素（按钮等）不受影响 -->
+  <div class="shell drag-region">
+    <!-- 标题栏：皮肤名 + 「免权限」卖点标注 -->
+    <header class="appbar">
+      <div class="appbar-top">
+        <h1 id="skin-title"></h1>
+        <span class="badge" id="perm-badge"></span>
+      </div>
+      <p class="subtitle" id="subtitle"></p>
+      <!-- 纯浏览器打开（无桥）时的占位提示 -->
+      <p class="bridge-warn" id="bridge-warn" hidden></p>
+    </header>
+
+    <!-- 仪表板（填充 + 内部滚动范式）：每张卡片演示一个/一组命令 -->
+    <main class="panel" id="panel">
+
+      <!-- get_cpu_info -->
+      <section class="card">
+        <h2 data-card="cpu">CPU</h2>
+        <div class="meter-row">
+          <span class="meter-value" id="cpu-usage">—</span>
+          <span class="meter"><i id="cpu-bar"></i></span>
+        </div>
+        <p class="line" id="cpu-name">—</p>
+        <p class="line muted" id="cpu-meta">—</p>
+        <div class="cores" id="cpu-cores"></div>
+        <p class="card-error" id="err-cpu" hidden></p>
+      </section>
+
+      <!-- get_gpu_info -->
+      <section class="card">
+        <h2 data-card="gpu">GPU</h2>
+        <div id="gpu-list"></div>
+        <p class="card-error" id="err-gpu" hidden></p>
+      </section>
+
+      <!-- get_memory_info -->
+      <section class="card">
+        <h2 data-card="mem">MEM</h2>
+        <div class="meter-row">
+          <span class="meter-label" id="ram-label">RAM</span>
+          <span class="meter"><i id="ram-bar"></i></span>
+          <span class="meter-pct" id="ram-pct">—</span>
+        </div>
+        <p class="line muted" id="ram-text">—</p>
+        <div class="meter-row">
+          <span class="meter-label" id="swap-label">Swap</span>
+          <span class="meter"><i id="swap-bar"></i></span>
+          <span class="meter-pct" id="swap-pct">—</span>
+        </div>
+        <p class="line muted" id="swap-text">—</p>
+        <p class="card-error" id="err-mem" hidden></p>
+      </section>
+
+      <!-- get_disks_info -->
+      <section class="card">
+        <h2 data-card="disks">DISK</h2>
+        <div id="disk-list"></div>
+        <p class="card-error" id="err-disks" hidden></p>
+      </section>
+
+      <!-- get_disk_space（静态：启动时调用一次） -->
+      <section class="card">
+        <h2 data-card="cspace">C:</h2>
+        <div class="meter-row">
+          <span class="meter"><i id="cspace-bar"></i></span>
+          <span class="meter-pct" id="cspace-pct">—</span>
+        </div>
+        <p class="line muted" id="cspace-text">—</p>
+        <p class="hint" id="cspace-hint"></p>
+        <p class="card-error" id="err-cspace" hidden></p>
+      </section>
+
+      <!-- get_network_info -->
+      <section class="card">
+        <h2 data-card="net">NET</h2>
+        <div id="net-list"></div>
+        <p class="line muted" id="net-ips">—</p>
+        <p class="card-error" id="err-net" hidden></p>
+      </section>
+
+      <!-- get_processes（cpu / memory 排序切换） -->
+      <section class="card">
+        <h2 data-card="proc">TOP</h2>
+        <div class="proc-head">
+          <div class="toggle">
+            <button type="button" id="sort-cpu" class="on"></button>
+            <button type="button" id="sort-mem"></button>
+          </div>
+          <span class="muted" id="proc-total"></span>
+        </div>
+        <div id="proc-list"></div>
+        <p class="card-error" id="err-proc" hidden></p>
+      </section>
+
+      <!-- get_battery_info -->
+      <section class="card">
+        <h2 data-card="batt">BAT</h2>
+        <div class="meter-row">
+          <span class="meter"><i id="batt-bar"></i></span>
+          <span class="meter-pct" id="batt-pct">—</span>
+        </div>
+        <p class="line muted" id="batt-text">—</p>
+        <p class="card-error" id="err-batt" hidden></p>
+      </section>
+
+      <!-- get_idle_time + get_foreground_window_info -->
+      <section class="card">
+        <h2 data-card="act">ACT</h2>
+        <div class="row">
+          <span class="row-label" id="idle-label"></span>
+          <span class="row-value" id="idle-text">—</span>
+        </div>
+        <div class="row row-block">
+          <span class="row-label" id="fg-label"></span>
+          <span class="row-value left" id="fg-text">—</span>
+        </div>
+        <p class="card-error" id="err-act" hidden></p>
+      </section>
+
+      <!-- get_monitors（静态：启动时调用一次） -->
+      <section class="card">
+        <h2 data-card="mon">MON</h2>
+        <p class="line" id="mon-summary">—</p>
+        <div id="mon-list"></div>
+        <p class="hint" id="mon-hint"></p>
+        <p class="card-error" id="err-mon" hidden></p>
+      </section>
+
+      <!-- get_os_info（静态：启动时调用一次） -->
+      <section class="card">
+        <h2 data-card="os">OS</h2>
+        <p class="line" id="os-name">—</p>
+        <div class="row">
+          <span class="row-label" id="os-host-label"></span>
+          <span class="row-value" id="os-host">—</span>
+        </div>
+        <div class="row">
+          <span class="row-label" id="os-user-label"></span>
+          <span class="row-value" id="os-user">—</span>
+        </div>
+        <div class="row">
+          <span class="row-label" id="os-uptime-label"></span>
+          <span class="row-value" id="os-uptime">—</span>
+        </div>
+        <p class="hint" id="os-hint"></p>
+        <p class="card-error" id="err-os" hidden></p>
+      </section>
+
+    </main>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

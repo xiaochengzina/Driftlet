@@ -1,6 +1,3 @@
-use std::sync::Mutex;
-use sysinfo::System;
-use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use crate::AppState;
 use crate::i18n::{tr, trf, Key};
@@ -10,20 +7,6 @@ use crate::skin::config;
 use crate::skin::package;
 use crate::skin::settings;
 use crate::window::factory;
-
-/// Persistent System instance for accurate CPU measurement across calls.
-/// First call returns 0 CPU usage (baseline), subsequent calls return real data.
-static SYSINFO: Mutex<Option<System>> = Mutex::new(None);
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SystemStats {
-    pub cpu_usage: f32,
-    pub cpu_cores: Vec<f32>,
-    pub memory_total: u64,
-    pub memory_used: u64,
-    pub memory_usage_pct: f32,
-    pub uptime_secs: u64,
-}
 
 // ─── Capture Preview ───
 
@@ -1138,50 +1121,6 @@ pub fn set_skin_snap_gap(window: tauri::WebviewWindow, app: AppHandle, skin_id: 
     Ok(())
 }
 
-// ─── Skin Installation ───
-
-#[tauri::command]
-pub async fn pick_skin_folder(window: tauri::WebviewWindow, app: AppHandle) -> Result<Option<String>, String> {
-    require_manager(&window)?;
-    use tauri_plugin_dialog::DialogExt;
-    let handle = app.clone();
-    let lang = app.state::<AppState>().lang();
-    tauri::async_runtime::spawn_blocking(move || {
-        log::info!("Opening folder picker dialog...");
-        let path = handle.dialog().file().blocking_pick_folder();
-        log::info!("Folder picker result: {:?}", path);
-        path.map(|p| p.to_string())
-    }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))
-}
-
-#[tauri::command]
-pub async fn install_skin(window: tauri::WebviewWindow, app: AppHandle, source_path: String) -> Result<SkinInfo, String> {
-    require_manager(&window)?;
-    let state = app.state::<AppState>();
-    let lang = state.lang();
-
-    // 与 install_skin_package 同一把锁串行化：并发安装会互踩皮肤目录
-    let _install_guard = state.install_lock.lock().await;
-
-    let source = std::path::PathBuf::from(&source_path);
-    let skin = loader::install_skin(&source, &state.skins_dir, &lang)?;
-    let preview = loader::find_preview_image(&skin.directory);
-    Ok(SkinInfo {
-        id: skin.id.clone(),
-        name: skin.manifest.name.clone(),
-        name_en: skin.manifest.name_en.clone(),
-        author: skin.manifest.author.clone(),
-        version: skin.manifest.version.clone(),
-        description: skin.manifest.description.clone(),
-        description_en: skin.manifest.description_en.clone(),
-        bilingual: skin.manifest.bilingual,
-        loaded: false,
-        has_error: false,
-        error_msg: None,
-        preview,
-    })
-}
-
 // ─── Skin Package (.dskin / .zip) ───
 
 /// 打开文件选择器，只过滤 .dskin 皮肤包（避免用户在一堆 zip 里挑错文件）
@@ -1475,41 +1414,6 @@ fn open_path(path: &str, lang: &str) -> Result<(), String> {
             .map_err(|e| trf(lang, Key::OpenFailed, &[&e.to_string()]))?;
     }
     Ok(())
-}
-
-// ─── System Stats ───
-
-#[tauri::command]
-pub fn get_system_stats(window: tauri::WebviewWindow) -> Result<SystemStats, String> {
-    require_manager(&window)?;
-    let mut guard = SYSINFO.lock().unwrap_or_else(|e| e.into_inner());
-    let sys = guard.get_or_insert_with(System::new_all);
-
-    // Refresh CPU usage (needs two calls separated by time for accurate data)
-    sys.refresh_cpu_all();
-    sys.refresh_memory();
-
-    let cpu_usage = sys.global_cpu_usage();
-    let cpu_cores: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
-
-    let memory_total = sys.total_memory();
-    let memory_used = sys.used_memory();
-    let memory_usage_pct = if memory_total > 0 {
-        (memory_used as f32 / memory_total as f32) * 100.0
-    } else {
-        0.0
-    };
-
-    let uptime_secs = System::uptime();
-
-    Ok(SystemStats {
-        cpu_usage,
-        cpu_cores,
-        memory_total,
-        memory_used,
-        memory_usage_pct,
-        uptime_secs,
-    })
 }
 
 // ─── System Fonts ───

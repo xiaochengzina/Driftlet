@@ -1,0 +1,22 @@
+{
+  "id": "sys-monitor",
+  "name": "系统监视",
+  "name_en": "System Monitor",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description": "免权限系统信息仪表板",
+  "description_en": "Permission-free system info dashboard",
+  "bilingual": true,
+  "entry": "index.html",
+  "window": {
+    "width": 340,
+    "height": 540,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0
+  },
+  "permissions": [],
+  "settings": []
+}

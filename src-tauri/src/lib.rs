@@ -379,8 +379,6 @@ pub fn run() {
             commands::update_skin_config,
             commands::set_skin_custom_setting,
             commands::reset_skin_config,
-            commands::pick_skin_folder,
-            commands::install_skin,
             commands::pick_skin_package,
             commands::inspect_skin_package,
             commands::install_skin_package,
@@ -396,7 +394,6 @@ pub fn run() {
             commands::is_windows_11_or_newer,
             commands::open_skins_folder,
             commands::open_skin_folder,
-            commands::get_system_stats,
             commands::list_system_fonts,
             commands::capture_skin_preview,
             commands::take_pending_package_install,
@@ -406,7 +403,6 @@ pub fn run() {
             skin_api::get_disks_info,
             skin_api::get_disk_space,
             skin_api::get_network_info,
-            skin_api::get_public_ip,
             skin_api::get_audio_spectrum,
             skin_api::skin_read_file,
             skin_api::skin_write_file,
@@ -433,7 +429,20 @@ pub fn run() {
             skin_api::get_foreground_window_info,
             skin_api::get_monitors,
         ])
-        .run(tauri::generate_context!())
+        .run({
+            // NOTE(driftlet): never let Tauri hand windows a runtime icon.
+            // default_window_icon (icons/icon.ico) is decoded to RGBA and
+            // turned into an HICON by tao's RgbaIcon::into_windows_icon, which
+            // passes a 1-byte-per-pixel buffer where CreateIcon expects a 1bpp
+            // monochrome AND mask — the exact bug we patched in the vendored
+            // tray-icon (garbage-mask HICON renders as striped garbage in
+            // mask-aware consumers like Task Manager). With no window icon
+            // set, Windows falls back to the exe-embedded icons/icon.ico,
+            // which is a proper multi-size .ico.
+            let mut context = tauri::generate_context!();
+            context.set_default_window_icon(None);
+            context
+        })
         .expect("Error while running Driftlet");
 }
 

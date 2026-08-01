@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use crate::i18n::{tr, trf, Key};
+use crate::i18n::{trf, Key};
 use crate::skin::types::{Skin, SkinManifest, SkinInfo, SkinSettingKind};
 
 /// Scan a directory for skin subdirectories containing valid skin.json files
@@ -110,52 +110,6 @@ fn is_valid_entry_name(entry: &str) -> bool {
         && !entry.contains('/')
         && !entry.contains('\\')
         && !entry.contains(':')
-}
-
-/// Validate a skin directory has the minimum required files
-pub fn validate_skin_directory(skin_dir: &Path, lang: &str) -> Result<(), String> {
-    if !skin_dir.exists() {
-        return Err(tr(lang, Key::SkinDirNotExist).to_string());
-    }
-
-    let skin_json = skin_dir.join("skin.json");
-    if !skin_json.exists() {
-        return Err(tr(lang, Key::MissingSkinJson).to_string());
-    }
-
-    let manifest = load_skin_manifest(skin_dir)?;
-    let entry = skin_dir.join(&manifest.entry);
-    if !entry.exists() {
-        return Err(format!("Entry file '{}' not found", manifest.entry));
-    }
-
-    Ok(())
-}
-
-/// Install a skin by copying a folder into the skins directory.
-/// The destination folder is named after the resolved skin id.
-pub fn install_skin(source: &Path, skins_dir: &Path, lang: &str) -> Result<Skin, String> {
-    validate_skin_directory(source, lang)?;
-
-    let folder_name = source.file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| tr(lang, Key::InvalidFolderName).to_string())?;
-    let manifest = load_skin_manifest(source)?;
-    let id = resolve_skin_id(&manifest, folder_name);
-
-    let dest = skins_dir.join(&id);
-    if dest.exists() {
-        return Err(trf(lang, Key::SkinAlreadyInstalled, &[id.as_str()]));
-    }
-
-    copy_dir_recursive(source, &dest)
-        .map_err(|e| trf(lang, Key::CopySkinFailed, &[&e.to_string()]))?;
-
-    Ok(Skin {
-        id,
-        manifest,
-        directory: dest,
-    })
 }
 
 /// Resolve the canonical skin id: the manifest's `id` when present (and
@@ -342,41 +296,6 @@ pub fn find_preview_image(skin_dir: &std::path::Path) -> Option<String> {
     None
 }
 
-/// 目录递归复制限深：防恶意构造的超深嵌套耗尽路径/栈
-const MAX_COPY_DEPTH: u32 = 32;
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    copy_dir_recursive_inner(src, dst, 0)
-}
-
-fn copy_dir_recursive_inner(src: &Path, dst: &Path, depth: u32) -> std::io::Result<()> {
-    if depth > MAX_COPY_DEPTH {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("directory nesting exceeds {} levels", MAX_COPY_DEPTH),
-        ));
-    }
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        // symlink_metadata 不跟随链接：符号链接一律跳过（防穿越出皮肤
-        // 目录、防链接环导致的无限递归）
-        let meta = fs::symlink_metadata(&src_path)?;
-        if meta.file_type().is_symlink() {
-            log::warn!("Skipping symlink during skin copy: {:?}", src_path);
-            continue;
-        }
-        if meta.is_dir() {
-            copy_dir_recursive_inner(&src_path, &dst_path, depth + 1)?;
-        } else {
-            fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,23 +438,5 @@ mod tests {
         for id in ["console", "com10", "con-host", "my-skin"] {
             assert!(validate_skin_id(id, "zh-CN").is_ok(), "id {:?} must be accepted", id);
         }
-    }
-
-    #[test]
-    fn copy_dir_recursive_limits_depth() {
-        let src = unique_dir("deep-src");
-        let mut deep = src.clone();
-        for _ in 0..(MAX_COPY_DEPTH + 2) {
-            deep = deep.join("d");
-        }
-        fs::create_dir_all(&deep).unwrap();
-        fs::write(deep.join("leaf.txt"), "x").unwrap();
-        let dst = unique_dir("deep-dst");
-
-        let err = copy_dir_recursive(&src, &dst).unwrap_err();
-        assert!(err.to_string().contains("nesting"), "unexpected error: {}", err);
-
-        let _ = fs::remove_dir_all(&src);
-        let _ = fs::remove_dir_all(&dst);
     }
 }

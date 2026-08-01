@@ -1,0 +1,29 @@
+{
+  "id": "toolbox",
+  "name": "本机工具箱",
+  "name_en": "Toolbox",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description": "剪贴板/文件/注册表/命令/外链/设置接口演示",
+  "description_en": "Clipboard, files, registry, shell, links & settings API demo",
+  "bilingual": true,
+  "entry": "index.html",
+  "window": {
+    "width": 360,
+    "height": 540,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0
+  },
+  "permissions": ["files", "registry", "shell", "clipboard", "system"],
+  "settings": [
+    { "key": "note", "type": "longtext", "label": "备注", "label_en": "Note", "group": "数据", "group_en": "Data",
+      "description": "皮肤内的文本框可经 skin_set_setting 写回；也可在本页（管理器设置页）直接编辑", "description_en": "Editable here, or written back from the skin via skin_set_setting", "default": "" },
+    { "key": "api_token", "type": "password", "label": "API 令牌", "label_en": "API Token", "group": "数据", "group_en": "Data",
+      "description": "password 类型：值不会注入页面（__DESK_PP__.settings.api_token 恒为空串），唯一读取通道是 skin_get_setting", "description_en": "Password type: never baked into the page (__DESK_PP__.settings.api_token is always an empty string); the only read channel is skin_get_setting", "default": "" },
+    { "key": "tasks", "type": "todolist", "label": "待办列表", "label_en": "Todo List", "group": "数据", "group_en": "Data",
+      "description": "皮肤内勾选/增删后经 skin_set_setting 写回；此处（管理器侧）的修改经 desk-setting-changed 事件同步给皮肤", "description_en": "Skin-side edits are written back via skin_set_setting; edits made here sync to the skin via the desk-setting-changed event", "default": [] }
+  ]
+}

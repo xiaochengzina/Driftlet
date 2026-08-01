@@ -817,6 +817,13 @@ html[lang="en"] .config-section h3 .sec-en {
   padding: 8px 0;
 }
 
+/* 左侧「标签+说明」单元格：必须可收缩（min-width:0），长说明文字在单元格内
+   换行，而不是把右侧输入控件挤出卡片 */
+.form-row > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .form-row label {
   font-size: 13px;
   font-weight: 500;
@@ -828,6 +835,9 @@ html[lang="en"] .config-section h3 .sec-en {
   display: block;
   margin-top: 2px;
   line-height: 1.5;
+  /* 说明里的长标识符（如 __DESK_PP__.settings.api_token）无空格可断，
+     允许任意处换行防撑宽 */
+  overflow-wrap: anywhere;
 }
 
 /* 开关 */
@@ -889,9 +899,16 @@ html[lang="en"] .config-section h3 .sec-en {
 .slider-row .slider-label {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
   font-size: 13px;
   font-weight: 500;
   margin-bottom: 10px;
+}
+
+/* 皮肤作者给的长标签可收缩换行，不把右侧数值顶出卡片 */
+.slider-row .slider-label > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .slider-row .slider-value {
@@ -1110,6 +1127,9 @@ html[lang="en"] .config-section h3 .sec-en {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 20px;
+  /* 皮肤作者给的长选项文本（或无空格长串）不得撑破卡片 */
+  max-width: 100%;
+  overflow-wrap: anywhere;
   transition: all 0.15s var(--ease);
 }
 
@@ -1143,6 +1163,8 @@ html[lang="en"] .config-section h3 .sec-en {
   border: none;
   border-right: 1px solid var(--border);
   transition: all 0.15s var(--ease);
+  /* 长选项文本（或无空格长串）在段内换行，而不是被 overflow:hidden 裁掉 */
+  overflow-wrap: anywhere;
 }
 
 .cfg-segment:last-child {
@@ -1235,14 +1257,17 @@ html[lang="en"] .config-section h3 .sec-en {
   flex-shrink: 0;
 }
 
-/* 密码输入 + 显隐切换（合并原 1023 行处的重复规则，冲突项以此处后定义的
-   flex: 1 为准——与合并前级联结果一致）：容器撑满侧排右栏剩余宽度，
-   内部输入框填满容器，padding-right 给显隐按钮留位 */
+/* 密码输入 + 显隐切换（合并原 1023 行处的重复规则）：与其他侧排控件一致
+   固定 160px 右栏宽度。不得用 flex:1 撑满——flex:1 的 basis 为 0，左侧
+   「标签+说明」单元格 basis 是内容宽度（长说明可达数百 px），收缩分配按
+   shrink×basis 进行，basis 0 分不到任何宽度，整个容器会塌成 0px，输入框
+   只剩 padding 宽度并被顶出卡片右缘（显隐按钮锚在 0 宽容器右缘，反而落在
+   输入框左侧）。容器内部：输入框填满，padding-right 给显隐按钮留位 */
 .cfg-password {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   width: 160px;
 }

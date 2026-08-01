@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!-- 资源一律相对路径引用（照抄 controls-demo 的约定），无任何外部网络资源 -->
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 外壳即拖动区：按住空白处即可拖动窗口；内部交互元素不受影响 -->
+  <div class="shell drag-region">
+    <header class="appbar">
+      <div class="appbar-top">
+        <h1 data-i18n="title">…</h1>
+        <span class="badge" id="bridge-badge"></span>
+      </div>
+      <p class="subtitle" data-i18n="subtitle"></p>
+    </header>
+
+    <!-- 填充 + 内部滚动范式：内容超高时在面板内滚动，不撑出窗口 -->
+    <main class="panel" id="panel">
+
+      <!-- 剪贴板：read_clipboard_text / write_clipboard_text -->
+      <section class="card">
+        <h2><span data-i18n="cardClipboard"></span><span class="perm">clipboard</span></h2>
+        <p class="note warn" data-i18n="clipWarn"></p>
+        <div class="btn-row">
+          <button class="btn" id="btn-read-clip" data-i18n="btnReadClip"></button>
+        </div>
+        <div class="input-row">
+          <input type="text" id="clip-input" data-i18n-placeholder="clipPlaceholder">
+          <button class="btn" id="btn-write-clip" data-i18n="btnWriteClip"></button>
+        </div>
+        <pre class="result" id="clip-result"></pre>
+      </section>
+
+      <!-- 文件：skin_write_file / skin_read_file / skin_list_dir / skin_delete_file -->
+      <section class="card">
+        <h2><span data-i18n="cardFiles"></span><span class="perm">files</span></h2>
+        <p class="note" data-i18n="filesNote"></p>
+        <div class="btn-row">
+          <button class="btn" id="btn-write-note" data-i18n="btnWriteNote"></button>
+          <button class="btn" id="btn-read-note" data-i18n="btnReadNote"></button>
+        </div>
+        <div class="btn-row">
+          <button class="btn" id="btn-list-data" data-i18n="btnListData"></button>
+          <button class="btn" id="btn-list-root" data-i18n="btnListRoot"></button>
+          <button class="btn danger" id="btn-delete-note" data-i18n="btnDeleteNote"></button>
+        </div>
+        <pre class="result" id="file-result"></pre>
+      </section>
+
+      <!-- 注册表：read_registry_value（只读） -->
+      <section class="card">
+        <h2><span data-i18n="cardRegistry"></span><span class="perm">registry</span></h2>
+        <div class="btn-row">
+          <button class="btn" id="btn-reg-preset" data-i18n="regPresetTemp"></button>
+        </div>
+        <div class="input-row">
+          <select id="reg-root">
+            <option>HKCU</option>
+            <option>HKLM</option>
+            <option>HKCR</option>
+            <option>HKU</option>
+          </select>
+          <input type="text" id="reg-path" value="Environment" data-i18n-placeholder="regPathPlaceholder">
+        </div>
+        <div class="input-row">
+          <input type="text" id="reg-name" value="TEMP" data-i18n-placeholder="regNamePlaceholder">
+          <button class="btn" id="btn-reg-read" data-i18n="btnReadReg"></button>
+        </div>
+        <pre class="result" id="reg-result"></pre>
+      </section>
+
+      <!-- 执行命令：run_command -->
+      <section class="card">
+        <h2><span data-i18n="cardShell"></span><span class="perm">shell</span></h2>
+        <p class="note" data-i18n="shellNote"></p>
+        <div class="btn-row">
+          <button class="btn" id="btn-cmd-ver">cmd /c ver</button>
+          <button class="btn" id="btn-cmd-ipconfig">cmd /c ipconfig</button>
+        </div>
+        <div class="input-row">
+          <input type="text" id="cmd-name" value="cmd" data-i18n-placeholder="cmdPlaceholder">
+          <input type="text" id="cmd-args" data-i18n-placeholder="cmdArgsPlaceholder">
+        </div>
+        <div class="input-row">
+          <input type="number" id="cmd-timeout" min="1" max="120000" step="1000" value="30000" title="timeoutMs">
+          <button class="btn" id="btn-cmd-run" data-i18n="btnRun"></button>
+        </div>
+        <pre class="result" id="cmd-result"></pre>
+      </section>
+
+      <!-- 打开链接/文件：open_external -->
+      <section class="card">
+        <h2><span data-i18n="cardExternal"></span><span class="perm">system</span></h2>
+        <div class="input-row">
+          <input type="text" id="ext-target" value="https://example.com" data-i18n-placeholder="extPlaceholder">
+          <button class="btn" id="btn-ext-open" data-i18n="btnOpen"></button>
+        </div>
+        <div class="btn-row">
+          <button class="btn danger" id="btn-ext-denied" data-i18n="btnOpenDenied"></button>
+        </div>
+        <pre class="result" id="ext-result"></pre>
+      </section>
+
+      <!-- 设置读写：skin_get_setting / skin_set_setting（免权限） -->
+      <section class="card">
+        <h2><span data-i18n="cardSettings"></span><span class="perm" data-i18n="permFree"></span></h2>
+
+        <p class="note" data-i18n="tokenNote"></p>
+        <div class="btn-row">
+          <button class="btn" id="btn-read-token" data-i18n="btnReadToken"></button>
+        </div>
+
+        <h3 data-i18n="noteLabel"></h3>
+        <textarea id="note-input" rows="3"></textarea>
+        <div class="btn-row">
+          <button class="btn" id="btn-save-note" data-i18n="btnSaveNote"></button>
+          <button class="btn" id="btn-read-note-cmd" data-i18n="btnReadNoteCmd"></button>
+        </div>
+
+        <h3 data-i18n="tasksLabel"></h3>
+        <ul class="tasks" id="task-list"></ul>
+        <div class="input-row">
+          <input type="text" id="task-input" data-i18n-placeholder="taskAddPlaceholder">
+          <button class="btn" id="btn-task-add" data-i18n="btnAddTask"></button>
+        </div>
+
+        <pre class="result" id="settings-result"></pre>
+      </section>
+
+    </main>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

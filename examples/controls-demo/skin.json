@@ -14,7 +14,7 @@
     "transparent": true,
     "always_on_top": false,
     "on_desktop": true,
-    "resizable": true,
+    "resizable": false,
     "opacity": 1.0
   },
   "settings": [

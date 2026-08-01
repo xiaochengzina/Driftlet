@@ -1,6 +1,6 @@
 [package]
 name = "driftlet"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 
 [lib]
@@ -24,7 +24,6 @@ log = "0.4"
 env_logger = "0.11"
 sysinfo = "0.32"
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-ureq = { version = "3", default-features = false, features = ["rustls"] }
 base64 = "0.22"
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -69,3 +68,13 @@ windows = { version = "0.61", features = [
 lto = true
 codegen-units = 1
 strip = "symbols"
+
+# Vendored tray-icon with a patched Windows RGBA->HICON path:
+# upstream passes a 1-byte-per-pixel buffer where CreateIcon expects a 1bpp
+# AND mask, producing icons whose mask is garbage (fine via DrawIconEx, but
+# striped garbage in mask-aware consumers — Task Manager's process icon when
+# no window is visible, and the tray drag image). The vendored copy builds a
+# proper mask + 32bpp DIB via CreateIconIndirect. See
+# vendor/tray-icon/src/platform_impl/windows/icon.rs (NOTE(driftlet)).
+[patch.crates-io]
+tray-icon = { path = "vendor/tray-icon" }

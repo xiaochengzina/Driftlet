@@ -1,0 +1,21 @@
+{
+  "id": "media-hub",
+  "name": "媒体控制台",
+  "name_en": "Media Hub",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description": "音量/媒体/频谱/通知接口演示",
+  "description_en": "Volume, media, spectrum & notification API demo",
+  "bilingual": true,
+  "entry": "index.html",
+  "window": {
+    "width": 340,
+    "height": 480,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0
+  },
+  "permissions": ["system", "mic"]
+}

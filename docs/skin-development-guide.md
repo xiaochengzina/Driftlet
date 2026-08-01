@@ -162,7 +162,7 @@ Add the `.drag-region` class to an element, and the user can drag the window by 
 </div>
 ```
 
-Convention: make the whole shell a drag-region; interactive elements (buttons, inputs) nested inside are unaffected. If an interactive element's `pointerdown` is disturbed by the drag logic (e.g. list drag-sorting), call `e.stopPropagation()` on that element to stop the bubbling.
+Convention: make the whole shell a drag-region; interactive elements nested inside are unaffected — a press landing on `button` / `input` / `select` / `textarea` / `a` / `label` / `[contenteditable]` automatically skips dragging. Other elements that need exclusive `pointerdown` (e.g. list drag-sorting) should call `e.stopPropagation()` on that element to stop the bubbling.
 
 Note: with border drag-resize (`resizable`) enabled, the outermost 6px of the window is the resize hot zone and takes priority over dragging — pressing an element flush against the edge triggers resizing instead of moving (§2.2).
 
@@ -370,7 +370,7 @@ const settings = window.__DESK_PP__?.settings || {};
 const cpu = window.__DESK_PP__?.invoke ? await window.__DESK_PP__.invoke('get_cpu_info') : null;
 ```
 
-The public commands a skin can call fall into four groups: §5.2 system info (read-only, no permission needed), §5.3 sensitive capabilities (require `permissions` declarations), §5.4 settings read/write, §5.5 legacy compatibility. All other commands are unreachable (§5.6).
+The public commands a skin can call fall into three groups: §5.2 system info (read-only, no permission needed), §5.3 sensitive capabilities (require `permissions` declarations), §5.4 settings read/write. All other commands are unreachable (§5.5).
 
 ### 5.2 System Info (Read-Only, No Permission Needed)
 
@@ -456,20 +456,6 @@ const net = await window.__DESK_PP__.invoke('get_network_info');
 //   local_ips: ["192.168.1.10", ...]      // all LAN IPs of this machine (deduplicated)
 // }
 ```
-
-#### `get_public_ip`
-
-Public egress IP (via the external service `api.ipify.org`, 5-second timeout; rejects when offline or the service is unreachable):
-
-```js
-try {
-  const ip = await window.__DESK_PP__.invoke('get_public_ip'); // "203.0.113.8"
-} catch (e) { /* network unavailable */ }
-```
-
-Note: this command needs no permission declaration, but calling it lets a third-party service (api.ipify.org) know the user is running this app — skins should only call it when a feature genuinely needs it, and say so in their description.
-
-> A skin page can also `fetch('https://api.ipify.org').then(r => r.text())` directly (the site allows CORS), bypassing the backend.
 
 #### `get_audio_spectrum` (Windows Only)
 
@@ -708,31 +694,13 @@ const value = await window.__DESK_PP__.invoke('skin_get_setting', { key: 'api_ke
 
 Writes the value of a custom setting item into `settings.json` in its own folder, sharing the same data with the manager's "Skin Settings" tab. Usage and contract: see §4.4.
 
-### 5.5 `get_system_stats` (Legacy Interface, Kept for Compatibility)
-
-Gets system status (CPU / memory / uptime) — the all-in-one interface earlier skins used; new skins should prefer the fine-grained commands in §5.2:
-
-```js
-const stats = await window.__DESK_PP__.invoke('get_system_stats');
-// {
-//   cpu_usage: 23.5,        // total CPU usage %
-//   cpu_cores: [10.1, ...], // per-core usage %
-//   memory_total: 17179869184,
-//   memory_used: 8589934592,
-//   memory_usage_pct: 50.0,
-//   uptime_secs: 3600
-// }
-```
-
-Note: CPU data is 0 on the first call (baseline sampling); poll once per second.
-
-### 5.6 Call Boundary (Commands Skins Can't Reach)
+### 5.5 Call Boundary (Commands Skins Can't Reach)
 
 `__DESK_PP__.invoke` is technically a straight pass-through, but **the backend gates every command by the calling window's identity**:
 
 - Manager-only commands (install/uninstall/load skins, modify window config, modify global settings, autostart, preview capture, etc. — about 40) **can only be called from the manager window** — skin calls are rejected: `This command can only be called from the manager window`. Don't try to call them, and don't try to forge an identity (identity comes from the window itself and cannot be forged).
 - Bridge-internal commands `start_skin_drag` / `start_skin_resize` / `show_skin_context_menu` are used by the injected script on drag/resize press and right-click; skins must not call them directly.
-- The complete list of commands actually available to skins = everything listed in §5.2–§5.5 of this document. This chapter will be updated in sync when future versions add capabilities.
+- The complete list of commands actually available to skins = everything listed in §5.2–§5.4 of this document. This chapter will be updated in sync when future versions add capabilities.
 
 ---
 
@@ -744,7 +712,7 @@ Driftlet's design premise: **a skin is third-party, network-capable local code**
 
 | Boundary | Description |
 |------|------|
-| Manager command isolation | Any manager command called from a skin window is rejected by the backend (§5.6); a skin cannot install/uninstall/tamper with other skins or the global config |
+| Manager command isolation | Any manager command called from a skin window is rejected by the backend (§5.5); a skin cannot install/uninstall/tamper with other skins or the global config |
 | Permission declarations | Sensitive capabilities (§5.3) must be declared in skin.json and are **shown to the user one by one at install time** (`shell`/`mic` flagged high risk); undeclared means rejected |
 | File sandbox | Even with the `files` permission, only the skin's own folder is readable/writable (`..`, absolute paths, colon path segments, and symlink escapes rejected; 32MB/16MB read/write caps); `skin.json` and the user's `settings.json` are read-only to every skin |
 | Settings isolation | `settings.json` is never served over `skin://` (including 8.3 short names, NTFS streams, and other variants); a skin's setting values are unreachable by other skins |
@@ -795,7 +763,7 @@ A skin is essentially a web page — layout, styles, and most logic can be debug
 | Settings changes have no effect | Whether you listen to `desk-setting-changed`; whether `key` matches the declaration |
 | password reads as an empty string | This is by design — use `skin_get_setting` instead (§4.3) |
 | Command errors "has not declared the '...' permission" | Add the permission to `permissions` in `skin.json`, then **reload the skin** (permissions are read live on every call; no reinstall needed) |
-| Command errors "can only be called from the manager window" | You called a manager-only command — see §5.6; switch to the skin commands listed in this document |
+| Command errors "can only be called from the manager window" | You called a manager-only command — see §5.5; switch to the skin commands listed in this document |
 | Window position/size not as expected | Trust the "Position & Size" section of the config panel (logical pixels); check whether any element has a fixed size exceeding the window |
 | File read/write errors "invalid path" | Paths must be relative to the skin folder; no `..`, drive letters, or colons |
 
@@ -863,10 +831,15 @@ Go through these one by one before packaging:
 
 ## 10. Example Skins
 
-The repo ships one example skin — a reference implementation of everything in this document. Strongly recommended to read its code before starting:
+The repo ships four example skins. `controls-demo` is the reference implementation of the settings system and page conventions; `sys-monitor` / `media-hub` / `toolbox` together cover all 31 backend commands callable by skins (§5.2–§5.4) and are the reference for API usage. Strongly recommended to read their code before starting:
 
 | Skin | What it demonstrates |
 |------|----------|
 | `examples/controls-demo` | All 19 setting control types + groups + descriptions + Chinese/English bilingual (§4.5), HTML/CSS/JS split with relative-path references, light nautical-chart UI, the fill + internal scroll paradigm, the schema read via `fetch('skin.json')` on a relative path with control labels/groups/options rendered per the bridge language, `desk-language-changed` driving the UI language to follow the manager instantly (§4.5), setting values live-applied in the demo area (accent color / progress bar / status dot / font / day-night tint / panel density), `password`-type values read via `skin_get_setting`, and rendering entirely with DOM APIs / `textContent` |
+| `examples/sys-monitor` | The full §5.2 read-only system-info set: CPU (total bar + per-thread mini bars) / GPU / memory / disks (incl. per-volume space) / network (rates + local IPs) / OS / top-5 processes (sortable by CPU or memory) / battery / idle time / foreground window / monitors; rate readings poll every 1s (first call is a zero baseline), static info reads once at startup, polling pauses while the page is hidden. **Zero permission declarations** |
+| `examples/media-hub` | Volume read/set/mute, SMTC media info (cover / progress / status) and playback control (play_pause/next/previous), dual-source spectrum from system loopback and microphone (live canvas bars + peak line, paused while hidden, device auto-released ~30s after polling stops), toast notifications; permissions `system` + `mic` |
+| `examples/toolbox` | Clipboard read/write, skin-directory file write/read/list/delete, read-only registry (preset + custom keys), command execution (preset `ver`/`ipconfig` + custom, showing code/stdout/stderr), opening links (including a rejected `.exe` target demo), `skin_get_setting` / `skin_set_setting` (the only read channel for `password` values, writing settings back, syncing manager-side edits via `desk-setting-changed`); permissions `files` / `registry` / `shell` / `clipboard` / `system` |
 
-This skin declares no `permissions` — every capability it uses (settings read/write, window behavior) is permission-free.
+All four skins also follow: bilingual UI that follows the manager language, dynamic content rendered exclusively via `textContent` / DOM APIs, no crashes when the bridge is missing (plain-browser preview), and rejected-command error text displayed inline in the corresponding card.
+
+`controls-demo` and `sys-monitor` declare no `permissions` — every capability they use is permission-free.

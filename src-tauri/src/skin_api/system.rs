@@ -53,7 +53,16 @@ pub struct ProcessList {
 }
 
 pub fn processes(sys: &mut sysinfo::System, sort: &str, limit: usize) -> ProcessList {
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    // cpu + memory only: the default (ProcessRefreshKind::everything()) also
+    // pulls every process's exe path / cmd line / environment — on Windows
+    // each of those is a remote read of the process's PEB, and the strings
+    // then sit resident in the process table.  We only ever return name,
+    // cpu and memory (name always comes from the toolhelp snapshot).
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::new().with_cpu().with_memory(),
+    );
 
     let mut list: Vec<ProcessInfo> = sys
         .processes()

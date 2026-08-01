@@ -296,6 +296,11 @@ window.__DESK_PP__={{
   function onPointerDown(e){{
     if (e.button !== 0) return;
     if (window.__DESK_PP__.positionLocked) return;
+    // Interactive elements keep their clicks: start_skin_drag enters the
+    // system modal move loop on pointerdown, which captures the mouse and
+    // eats the matching pointerup — the DOM 'click' never fires.
+    var t = e.target;
+    if (t && t.closest && t.closest('button,input,select,textarea,a,label,[contenteditable="true"]')) return;
     window.__DESK_PP__.invoke('start_skin_drag');
   }}
   function attach(){{

@@ -1,0 +1,225 @@
+/* media-hub —— 浅色卡片 UI（与 controls-demo 同一范式：填充 + 内部滚动） */
+
+:root {
+  --accent: #0e75c3;
+  --bg: #f4f6f8;
+  --card: #ffffff;
+  --text: #24313b;
+  --muted: #7c8a95;
+  --border: #e2e8ed;
+  --danger: #c92a2a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden; /* 不允许窗口级滚动条 */
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent; /* 透明窗口：背景画在外壳上 */
+  user-select: none;
+}
+
+/* hidden 属性必须可靠生效（本文件里有 display:flex 的元素会盖掉 UA 默认规则） */
+[hidden] { display: none !important; }
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* ── 标题栏（拖动区的一部分） ── */
+
+.appbar {
+  padding: 12px 16px 10px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+}
+
+.appbar h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ── 面板：填充 + 内部滚动，窗口调小也不溢出 ── */
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto; /* 内容超高在面板内滚动，不撑出窗口 */
+  padding: 12px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+/* 卡片标题：左侧中文名，右侧等宽字体的命令名（窄窗口自动换行） */
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+  flex-wrap: wrap;
+}
+
+.card h2 code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* ── 通用控件 ── */
+
+.btn {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.wide { width: 100%; }
+
+.btn-row { display: flex; gap: 8px; margin-top: 8px; }
+.btn-row .btn { flex: 1; font-size: 15px; padding: 4px 0; }
+
+.status-line { margin: 8px 0 0; font-size: 12px; color: var(--muted); word-break: break-all; }
+.status-line.is-error { color: var(--danger); }
+.status-line:empty { display: none; }
+
+.error-line { margin: 6px 0 0; font-size: 12px; color: var(--danger); word-break: break-all; }
+
+.note { margin: 8px 0 0; font-size: 11px; color: var(--muted); }
+
+/* ── 音量卡片 ── */
+
+.vol-row { display: flex; align-items: center; gap: 10px; }
+
+.vol-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--accent); /* 原生滑块直接上主题色，无需自绘 */
+}
+
+.vol-pct { flex: none; width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+#btn-mute { flex: none; }
+
+/* ── 媒体卡片 ── */
+
+.media-body { display: flex; gap: 10px; align-items: center; }
+
+.media-cover, .media-cover-ph {
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.media-cover { object-fit: cover; }
+
+.media-cover-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 22px;
+}
+
+.media-text { flex: 1; min-width: 0; }
+.media-text p { margin: 0; }
+.media-text p:empty { display: none; }
+
+.media-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-sub, .media-status {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress {
+  height: 6px;
+  margin-top: 10px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.progress i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s linear;
+}
+
+.media-times {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 频谱卡片 ── */
+
+.seg { display: flex; gap: 6px; margin-bottom: 8px; }
+.seg .btn { flex: 1; }
+
+#spec-canvas {
+  display: block;
+  width: 100%;
+  height: 72px;
+  background: var(--bg);
+  border-radius: 6px;
+}

@@ -6,8 +6,7 @@
 //! Sensitive commands MUST go through `require_perm` first.
 //!
 //! Rate-type readings (disk/network bps, GPU usage) keep a persistent
-//! sampler behind a Mutex, same convention as `commands::get_system_stats`:
-//! the first call primes the baseline and reports 0.
+//! sampler behind a Mutex: the first call primes the baseline and reports 0.
 
 mod fs;
 mod shell;
@@ -196,6 +195,19 @@ fn pct(part: u64, total: u64) -> f32 {
 
 static CPU_SYS: Mutex<Option<sysinfo::System>> = Mutex::new(None);
 
+/// CPU + memory only.  `System::new_all()` would also load the full process
+/// table — every process's cmd/environ strings (each read remotely from the
+/// process's PEB on Windows) — which then stays resident for the app's
+/// lifetime even though these commands never touch processes.  get_processes
+/// loads its slice lazily via refresh_processes_specifics instead.
+fn new_light_system() -> sysinfo::System {
+    sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::new()
+            .with_cpu(sysinfo::CpuRefreshKind::everything())
+            .with_memory(sysinfo::MemoryRefreshKind::everything()),
+    )
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CpuInfo {
     pub name: String,
@@ -211,7 +223,7 @@ pub struct CpuInfo {
 #[tauri::command]
 pub async fn get_cpu_info() -> Vec<CpuInfo> {
     let mut guard = CPU_SYS.lock().unwrap_or_else(|e| e.into_inner());
-    let sys = guard.get_or_insert_with(sysinfo::System::new_all);
+    let sys = guard.get_or_insert_with(new_light_system);
     sys.refresh_cpu_all();
     let cpus = sys.cpus();
     vec![CpuInfo {
@@ -258,7 +270,7 @@ pub struct MemoryInfo {
 #[tauri::command]
 pub fn get_memory_info() -> MemoryInfo {
     let mut guard = CPU_SYS.lock().unwrap_or_else(|e| e.into_inner());
-    let sys = guard.get_or_insert_with(sysinfo::System::new_all);
+    let sys = guard.get_or_insert_with(new_light_system);
     sys.refresh_memory();
     MemoryInfo {
         ram: MemoryGroup::new(sys.total_memory(), sys.used_memory()),
@@ -516,34 +528,6 @@ pub fn get_network_info() -> NetworkInfo {
     sampler.primed = true;
     sampler.last = Instant::now();
     NetworkInfo { adapters, local_ips }
-}
-
-/// Public (egress) IP via an external echo service — the one reading a skin
-/// cannot get from the OS.  Blocking HTTP with a hard timeout, hence async.
-#[tauri::command]
-pub async fn get_public_ip(app: AppHandle) -> Result<String, String> {
-    let lang = app.state::<AppState>().lang();
-    let lang_inner = lang.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(5)))
-            .build();
-        let agent = ureq::Agent::new_with_config(config);
-        let mut resp = agent
-            .get("https://api.ipify.org")
-            .call()
-            .map_err(|e| trf(&lang_inner, Key::NetworkError, &[&e.to_string()]))?;
-        let body = resp
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| trf(&lang_inner, Key::NetworkError, &[&e.to_string()]))?;
-        let ip = body.trim().to_string();
-        ip.parse::<std::net::IpAddr>()
-            .map_err(|_| trf(&lang_inner, Key::NetworkError, &["unexpected response body"]))?;
-        Ok(ip)
-    })
-    .await
-    .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?
 }
 
 // ─── GPU (Windows) ───
@@ -847,7 +831,7 @@ pub fn get_os_info() -> system::OsInfo {
 #[tauri::command]
 pub async fn get_processes(sort: Option<String>, limit: Option<usize>) -> system::ProcessList {
     let mut guard = CPU_SYS.lock().unwrap_or_else(|e| e.into_inner());
-    let sys = guard.get_or_insert_with(sysinfo::System::new_all);
+    let sys = guard.get_or_insert_with(new_light_system);
     system::processes(sys, sort.as_deref().unwrap_or("cpu"), limit.unwrap_or(10))
 }
 
@@ -900,7 +884,7 @@ pub fn set_mute(app: AppHandle, window: tauri::WebviewWindow, muted: bool) -> Re
 
 // ─── Media: SMTC now-playing + transport (Windows) ───
 // WinRT async is awaited with blocking .get() — must stay off the main
-// thread, hence async + spawn_blocking (same rule as get_public_ip).
+// thread, hence async + spawn_blocking (same rule as run_command).
 
 #[tauri::command]
 pub async fn get_media_info(app: AppHandle) -> Result<Option<MediaInfo>, String> {

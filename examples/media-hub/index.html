@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!--
+  资源引用一律用相对路径（推荐照抄）——皮肤文件夹改名也不会 404。
+  本皮肤不加载任何外部网络资源（无 CDN、无外链字体/图片）。
+-->
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 外壳即拖动区：按住空白处即可拖动窗口；内部按钮、滑块等交互元素不受影响 -->
+  <div class="shell drag-region">
+    <header class="appbar">
+      <h1 id="skin-title">…</h1>
+      <p class="subtitle" id="subtitle"></p>
+    </header>
+
+    <!-- 面板：填充 + 内部滚动范式，内容超高在面板内滚动，不撑出窗口 -->
+    <main class="panel">
+      <!-- 音量卡片：get_volume（免权限）/ set_volume / set_mute（需 system） -->
+      <section class="card">
+        <h2><span id="vol-heading"></span><code>get_volume · set_volume · set_mute</code></h2>
+        <div class="vol-row">
+          <input type="range" id="vol-slider" min="0" max="100" step="1" value="0">
+          <span class="vol-pct" id="vol-pct"></span>
+          <button class="btn" id="btn-mute" type="button"></button>
+        </div>
+        <p class="status-line" id="vol-status"></p>
+        <p class="error-line" id="vol-error" hidden></p>
+        <p class="note" id="vol-note"></p>
+      </section>
+
+      <!-- 媒体卡片：get_media_info（1 秒轮询）/ media_control（需 system） -->
+      <section class="card">
+        <h2><span id="media-heading"></span><code>get_media_info · media_control</code></h2>
+        <div class="media-body">
+          <img class="media-cover" id="media-cover" alt="" hidden>
+          <div class="media-cover-ph" id="media-cover-ph">♪</div>
+          <div class="media-text">
+            <p class="media-title" id="media-title"></p>
+            <p class="media-sub" id="media-artist"></p>
+            <p class="media-sub" id="media-album"></p>
+            <p class="media-status" id="media-status"></p>
+          </div>
+        </div>
+        <div class="progress"><i id="media-progress"></i></div>
+        <div class="media-times"><span id="media-pos"></span><span id="media-dur"></span></div>
+        <div class="btn-row">
+          <button class="btn" id="btn-prev" type="button">⏮</button>
+          <button class="btn" id="btn-playpause" type="button">⏯</button>
+          <button class="btn" id="btn-next" type="button">⏭</button>
+        </div>
+        <p class="status-line" id="media-feedback"></p>
+        <p class="error-line" id="media-error" hidden></p>
+        <p class="note" id="media-note"></p>
+      </section>
+
+      <!-- 频谱卡片：get_audio_spectrum（环回，免权限）/ get_mic_spectrum（需 mic） -->
+      <section class="card">
+        <h2><span id="spec-heading"></span><code>get_audio_spectrum · get_mic_spectrum</code></h2>
+        <div class="seg">
+          <button class="btn" id="src-loop" type="button"></button>
+          <button class="btn" id="src-mic" type="button"></button>
+        </div>
+        <canvas id="spec-canvas"></canvas>
+        <p class="status-line" id="spec-peak"></p>
+        <p class="error-line" id="spec-error" hidden></p>
+        <p class="note" id="spec-note"></p>
+      </section>
+
+      <!-- 通知卡片：show_notification（需 system） -->
+      <section class="card">
+        <h2><span id="notify-heading"></span><code>show_notification</code></h2>
+        <button class="btn wide" id="btn-notify" type="button"></button>
+        <p class="status-line" id="notify-status" hidden></p>
+        <p class="error-line" id="notify-error" hidden></p>
+        <p class="note" id="notify-note"></p>
+      </section>
+    </main>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

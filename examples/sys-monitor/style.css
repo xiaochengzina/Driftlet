@@ -1,0 +1,332 @@
+/* sys-monitor —— 系统监视仪表板样式（填充 + 内部滚动范式，浅色卡片 UI） */
+
+:root {
+  --accent: #0e75c3;
+  --bg: #f4f6f8;
+  --card: #ffffff;
+  --text: #24313b;
+  --muted: #7c8a95;
+  --border: #e2e8ed;
+  --err: #c0392b;
+  --warn-bg: #fdf3e0;
+  --warn-text: #8a6d1d;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden; /* 不允许窗口级滚动条 */
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent; /* 透明窗口：背景画在外壳上 */
+  user-select: none;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* ── 标题栏（拖动区的一部分） ── */
+
+.appbar {
+  padding: 14px 16px 12px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+}
+
+.appbar-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.appbar h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「免权限」卖点标注 */
+.badge {
+  flex: none;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 9px;
+  color: #ffffff;
+  background: #2fbf71;
+}
+
+.subtitle {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.bridge-warn {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+/* ── 仪表板（填充 + 内部滚动） ── */
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto; /* 内容超高在面板内滚动，不撑出窗口 */
+  padding: 12px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.card h2 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.tag {
+  font-size: 10px;
+  font-weight: 400;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--border);
+  color: var(--muted);
+  vertical-align: 1px;
+}
+
+.hint {
+  margin: 6px 0 0;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.line {
+  margin: 2px 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.line.muted, .muted { color: var(--muted); }
+
+.line.err, .err { color: var(--err); }
+
+.card-error {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--err);
+  word-break: break-all;
+}
+
+/* ── 用量条 ── */
+
+.meter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.meter {
+  flex: 1;
+  min-width: 0;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.meter i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.meter-label {
+  flex: none;
+  width: 36px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.meter-pct {
+  flex: none;
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-value {
+  flex: none;
+  min-width: 52px;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── CPU 每线程小竖条 ── */
+
+.cores {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9px, 1fr));
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.cores i {
+  display: flex;
+  align-items: flex-end;
+  height: 26px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.cores i b {
+  display: block;
+  width: 100%;
+  background: var(--accent);
+  transition: height 0.3s ease;
+}
+
+/* ── GPU / 磁盘 / 网络条目 ── */
+
+.gpu-item, .disk-item, .net-item {
+  padding: 4px 0;
+  border-top: 1px dashed var(--border);
+}
+
+.gpu-item:first-child, .disk-item:first-child, .net-item:first-child {
+  border-top: none;
+}
+
+.gpu-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+/* ── 键值行 ── */
+
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-top: 1px dashed var(--border);
+}
+
+.row:first-of-type { border-top: none; }
+
+.row-label {
+  flex: none;
+  color: var(--muted);
+}
+
+.row-value {
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-value.left {
+  text-align: left;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.row-block {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+/* ── 进程列表 ── */
+
+.proc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.toggle button {
+  border: none;
+  padding: 3px 10px;
+  font-size: 11px;
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toggle button.on {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.proc-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+  border-top: 1px dashed var(--border);
+}
+
+.proc-row:first-of-type { border-top: none; }
+
+.proc-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proc-val {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}

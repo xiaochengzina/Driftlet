@@ -886,6 +886,7 @@ export default class SkinEditor {
           this.showToast(t('editor.captureSaved'), 'success');
           // Refresh skin list to show the new preview thumbnail
           if (window.__app?.skinList) {
+            window.__app.skinList.bumpPreview(this.skinId);
             await window.__app.skinList.refresh();
           }
         })

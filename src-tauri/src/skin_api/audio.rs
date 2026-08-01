@@ -9,8 +9,9 @@
 //! audio device after 30 s without polls (skins come and go; we must not
 //! hold the endpoint open forever).  It re-opens on the next poll.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use super::Spectrum;
 
@@ -73,7 +74,14 @@ pub fn spectrum(bands: usize, source: Source) -> Result<Spectrum, String> {
     if let Some(err) = shared.error.lock().unwrap().clone() {
         return Err(err);
     }
-    let samples: Vec<f32> = shared.samples.lock().unwrap().iter().copied().collect();
+    let samples: Vec<f32> = {
+        // Only the latest FFT_SIZE samples feed the FFT — copying the whole
+        // 8192-sample ring here also extends the lock hold the capture
+        // thread contends with on every packet.
+        let q = shared.samples.lock().unwrap();
+        let take = q.len().min(FFT_SIZE);
+        q.iter().skip(q.len() - take).copied().collect()
+    };
     Ok(compute_spectrum(&samples, bands.clamp(1, 64)))
 }
 
@@ -183,9 +191,20 @@ fn push_capped(q: &mut VecDeque<f32>, v: f32) {
 
 // ─── FFT → bands (pure, unit-tested) ───
 
+/// FFT plan (twiddle tables etc.).  Rebuilding it per call was tens of KB
+/// of setup work at the documented 10–30 fps polling rate; the transform
+/// size here is always FFT_SIZE.
+static FFT_PLAN: LazyLock<Arc<dyn rustfft::Fft<f32>>> =
+    LazyLock::new(|| rustfft::FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE));
+
+thread_local! {
+    /// Reused 16 KB scratch buffer, zeroed before each transform.
+    static FFT_BUF: RefCell<Vec<rustfft::num_complex::Complex32>> =
+        RefCell::new(vec![rustfft::num_complex::Complex32::ZERO; FFT_SIZE]);
+}
+
 fn compute_spectrum(samples: &[f32], bands: usize) -> Spectrum {
     use rustfft::num_complex::Complex32;
-    use rustfft::FftPlanner;
 
     let peak = samples
         .iter()
@@ -196,33 +215,36 @@ fn compute_spectrum(samples: &[f32], bands: usize) -> Spectrum {
     let n = FFT_SIZE;
     let take = samples.len().min(n);
     let start = samples.len() - take;
-    let mut buf = vec![Complex32::ZERO; n];
-    for (i, &s) in samples[start..].iter().enumerate() {
-        let w = hann(i, take);
-        buf[i] = Complex32::new(s * w, 0.0);
-    }
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(n);
-    fft.process(&mut buf);
 
     let sr = SAMPLE_RATE as f32;
     let f_min = 30.0f32;
     let f_max = 16_000.0f32.min(sr * 0.45);
     let ratio = (f_max / f_min).powf(1.0 / bands as f32);
     let mut out = Vec::with_capacity(bands);
-    for b in 0..bands {
-        let lo = f_min * ratio.powi(b as i32);
-        let hi = lo * ratio;
-        let bin_lo = ((lo * n as f32 / sr) as usize).max(1).min(n / 2 - 1);
-        let bin_hi = ((hi * n as f32 / sr) as usize)
-            .max(bin_lo + 1)
-            .min(n / 2);
-        let sum: f32 = (bin_lo..bin_hi).map(|i| buf[i].norm()).sum();
-        let mean = sum / (bin_hi - bin_lo) as f32;
-        // Full-scale sine ≈ N/4 per bin after Hann loss → *4/N ≈ 0 dBFS.
-        let db = 20.0 * (mean * 4.0 / n as f32 + 1e-10).log10();
-        out.push(((db + 60.0) / 60.0).clamp(0.0, 1.0));
-    }
+
+    FFT_BUF.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        buf.fill(Complex32::ZERO);
+        for (i, &s) in samples[start..].iter().enumerate() {
+            let w = hann(i, take);
+            buf[i] = Complex32::new(s * w, 0.0);
+        }
+        FFT_PLAN.process(&mut buf);
+
+        for b in 0..bands {
+            let lo = f_min * ratio.powi(b as i32);
+            let hi = lo * ratio;
+            let bin_lo = ((lo * n as f32 / sr) as usize).max(1).min(n / 2 - 1);
+            let bin_hi = ((hi * n as f32 / sr) as usize)
+                .max(bin_lo + 1)
+                .min(n / 2);
+            let sum: f32 = (bin_lo..bin_hi).map(|i| buf[i].norm()).sum();
+            let mean = sum / (bin_hi - bin_lo) as f32;
+            // Full-scale sine ≈ N/4 per bin after Hann loss → *4/N ≈ 0 dBFS.
+            let db = 20.0 * (mean * 4.0 / n as f32 + 1e-10).log10();
+            out.push(((db + 60.0) / 60.0).clamp(0.0, 1.0));
+        }
+    });
 
     Spectrum { bands: out, peak }
 }

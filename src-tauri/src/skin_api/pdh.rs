@@ -45,15 +45,43 @@ impl PdhMultiCounter {
     /// (instance name, value) for every current instance.
     /// Empty on the priming call and on any PDH failure.
     pub fn sample(&mut self) -> Vec<(String, f64)> {
-        let mut out = Vec::new();
         unsafe {
             if PdhCollectQueryData(self.query) != 0 {
-                return out;
+                return Vec::new();
             }
-            if !self.primed {
-                self.primed = true;
-                return out;
+        }
+        if !self.primed {
+            self.primed = true;
+            return Vec::new();
+        }
+        self.formatted_array()
+            .into_iter()
+            .filter(|(_, _, cstatus)| *cstatus == 0)
+            .map(|(name, value, _)| (name, value))
+            .collect()
+    }
+
+    /// 当前实例名列表（忽略各项数值状态）。
+    /// 供「计数器里有哪些实例」的即时查询：实例名在基线采集后即就位，不受
+    /// 速率计数器两阶段采样限制。会自行触发一次数据采集——对速率计数器而言
+    /// 这只是把基线推进到此刻，不改变 sample() 的既有语义。
+    pub fn instance_names(&mut self) -> Vec<String> {
+        unsafe {
+            if PdhCollectQueryData(self.query) != 0 {
+                return Vec::new();
             }
+        }
+        self.formatted_array()
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect()
+    }
+
+    /// 取回当前格式化实例数组（名字、值、各项状态码）。
+    /// 不采集——调用前须已 PdhCollectQueryData。
+    fn formatted_array(&self) -> Vec<(String, f64, u32)> {
+        let mut out = Vec::new();
+        unsafe {
             let mut size: u32 = 0;
             let mut count: u32 = 0;
             let first = PdhGetFormattedCounterArrayW(
@@ -82,11 +110,8 @@ impl PdhMultiCounter {
                 count as usize,
             );
             for item in items {
-                if item.FmtValue.CStatus != 0 {
-                    continue;
-                }
                 let name = String::from_utf16_lossy(item.szName.as_wide());
-                out.push((name, item.FmtValue.Anonymous.doubleValue));
+                out.push((name, item.FmtValue.Anonymous.doubleValue, item.FmtValue.CStatus));
             }
         }
         out

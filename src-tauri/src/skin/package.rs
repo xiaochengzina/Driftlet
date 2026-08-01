@@ -354,6 +354,24 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn copy_dir_recursive_limits_depth() {
+        let src = unique_dir("deep-src");
+        let mut deep = src.clone();
+        for _ in 0..(MAX_COPY_DEPTH + 2) {
+            deep = deep.join("d");
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("leaf.txt"), "x").unwrap();
+        let dst = unique_dir("deep-dst");
+
+        let err = copy_dir_recursive(&src, &dst).unwrap_err();
+        assert!(err.to_string().contains("nesting"), "unexpected error: {}", err);
+
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dst);
+    }
+
     /// 用 zip writer 造一个皮肤包（Stored 压缩，不依赖 deflate 特性）
     fn write_package(dir: &Path, skin_json: &str, wrap_folder: bool) -> PathBuf {
         write_package_named(dir, "test.dskin", skin_json, wrap_folder)

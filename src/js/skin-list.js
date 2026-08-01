@@ -17,11 +17,26 @@ export default class SkinList {
     this.onSelect = onSelect;
     this.skins = [];
     this.selectedId = null;
+    // 预览图 URL 的缓存戳：值不变则 WebView2 直接命中缓存，避免每次
+    // render 全量重解码；重新截取或皮肤版本更新时才 bump。
+    this.previewVersions = new Map();
+    this._lastVersions = new Map();
+  }
+
+  bumpPreview(skinId) {
+    this.previewVersions.set(skinId, (this.previewVersions.get(skinId) || 0) + 1);
   }
 
   async refresh() {
     try {
-      this.skins = await API.listSkins();
+      const skins = await API.listSkins();
+      // 皮肤更新（版本号变化）可能换了同路径的预览图：版本变化时 bust 一次
+      for (const s of skins) {
+        const prev = this._lastVersions.get(s.id);
+        if (prev !== undefined && prev !== s.version) this.bumpPreview(s.id);
+      }
+      this._lastVersions = new Map(skins.map(s => [s.id, s.version]));
+      this.skins = skins;
     } catch (err) {
       this.skins = [];
       this.showToast(t('list.loadFailed') + String(err), 'error');
@@ -101,10 +116,10 @@ export default class SkinList {
     const deleteTitle = skin.loaded ? t('list.unloadBeforeDelete') : t('common.deleteSkin');
     const deleteDisabled = skin.loaded ? ' disabled' : '';
 
-    // Preview thumbnail（时间戳防 WebView2 缓存旧图：重新截取后 URL 不变会显示旧内容）
+    // Preview thumbnail（缓存戳稳定：仅重新截取/版本更新时 bump，见 bumpPreview）
     let previewHtml = '';
     if (skin.preview) {
-      const src = API.assetUrl(skin.preview) + '?t=' + Date.now();
+      const src = API.assetUrl(skin.preview) + '?v=' + (this.previewVersions.get(skin.id) || 0);
       // alt/src/data-* 一律 escAttr：皮肤包字段进双引号属性，esc() 不转义引号
       previewHtml = `<img class="skin-preview-img" src="${this.escAttr(src)}" alt="${this.escAttr(skin.name)}" loading="lazy">`;
       previewHtml += `<div class="skin-preview-placeholder" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></div>`;

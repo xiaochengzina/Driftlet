@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Driftlet 托盘图标预览</title>
+<style>
+  body { font-family: "Segoe UI", sans-serif; margin: 24px; background: #fff; color: #222; }
+  h1 { font-size: 18px; } h2 { font-size: 14px; margin: 20px 0 8px; }
+  table { border-collapse: collapse; }
+  td { padding: 10px 14px; text-align: center; vertical-align: middle; }
+  .lbl { font-size: 12px; color: #666; }
+  .light { background: #f0f0f0; } .dark { background: #202020; }
+  img { image-rendering: pixelated; display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+<h1>托盘图标预览(src-tauri/icons/tray-*.png)</h1>
+
+<h2>原生尺寸 — 浅色底(上行)/ 深色底(下行)</h2>
+<table id="native"></table>
+
+<h2>放大 4 倍(像素格可见)</h2>
+<table id="zoom"></table>
+
+<script>
+const sizes = [16, 20, 24, 28, 32, 40, 48];
+function build(tableId, factor) {
+  const table = document.getElementById(tableId);
+  for (const bg of ["light", "dark"]) {
+    const tr = document.createElement("tr");
+    for (const s of sizes) {
+      const td = document.createElement("td");
+      td.className = bg;
+      const img = document.createElement("img");
+      img.src = `../src-tauri/icons/tray-${s}.png`;
+      img.width = s * factor; img.height = s * factor;
+      const lbl = document.createElement("div");
+      lbl.className = "lbl";
+      lbl.textContent = `${s}px`;
+      lbl.style.color = bg === "dark" ? "#aaa" : "#666";
+      td.append(img, lbl);
+      tr.append(td);
+    }
+    table.append(tr);
+  }
+}
+build("native", 1);
+build("zoom", 4);
+</script>
+</body>
+</html>

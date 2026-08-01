@@ -2,6 +2,37 @@
 
 本文件记录 Driftlet 的所有重要变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.1] - 2026-08-01
+
+### 修复
+
+- 托盘图标在任务管理器（无可见窗口进程时）与 Win11 托盘拖拽图像中条纹花屏：vendor 修补 tray-icon 的 HICON 创建（上游把 1 字节/像素缓冲误传给期望 1bpp 单色位图的 AND 掩码参数），改用 `CreateIconIndirect` + 合法 1bpp 掩码 + 32bpp 预乘 DIB。
+- 窗口图标的同款 AND 掩码 bug（tao 侧）：屏蔽 Tauri 默认窗口图标（不再运行时创建 HICON），任务栏/Alt+Tab/任务管理器回退到 exe 内嵌的多尺寸图标。
+- 皮肤窗口内按钮/输入框点击无反应：注入桥的拖动逻辑对 `.drag-region` 内任何左键按下都进入系统移动循环并吃掉 click；现按下点落在 `button` / `input` / `select` / `textarea` / `a` / `label` / `[contenteditable]` 上时自动跳过拖动（自 1.0 潜伏，controls-demo 窗口内无按钮未暴露）。
+- 皮肤设置页长说明文字挤压/溢出控件：左侧「标签+说明」单元格补收缩约束（`min-width:0`）与任意处换行；密码输入容器 `flex:1` 的 0 基线在收缩分配中塌成 0px（输入框被顶出卡片右缘、显隐按钮落位异常），改为与其他侧排控件一致的固定 160px 右栏。
+- `get_gpu_info` 显存用量恒为 0 且列表混入重复 GPU：AMD 驱动下 `IDXGIAdapter3::QueryVideoMemoryInfo` 恒返 0，显存用量改用 PDH `\GPU Adapter Memory(*)\Dedicated Usage` 按适配器 LUID 取值；IddCx 虚拟显示器（向日葵 OrayIddDriver 等）会把渲染 GPU 的名字/vid/did/显存整体克隆后混入 DXGI 枚举，按性能计数器实例过滤幽灵适配器。
+
+### 性能
+
+- 系统信息命令不再为 CPU/内存查询常驻全量进程表（sysinfo 收窄刷新范围；进程列表按需窄化加载，不再远程读取每个进程的 PEB 环境块）。
+- 音频频谱：FFT plan 静态缓存 + 采样缓冲复用 + 仅取尾部样本，消除 10–30fps 轮询下的 plan 重建与分配抖动。
+- 管理器皮肤列表预览图缓存戳稳定化：不再每次刷新都全量重解码，仅重新截取或皮肤版本更新时刷新。
+- 实机进程树测量：WebView2 基线约 135MB 私有内存为平台固定成本，主进程本体约 11MB。
+
+### 变更（接口）
+
+- 移除皮肤接口 `get_system_stats`（旧版全合一接口，1.0 起皮肤实际不可调，细粒度命令完整覆盖）与 `get_public_ip`（公网 IP 查询需经第三方服务，皮肤可自行 `fetch`）。皮肤可用命令现为 31 个。
+- 同步移除 ureq 依赖与历史死代码（`pick_skin_folder` / `install_skin` 文件夹安装命令及关联死链）。
+
+### 新增
+
+- 接口示例皮肤三件套（`examples/`，独立 .dskin 分发）：`sys-monitor` 系统监视（零权限，§5.2 只读系统信息全家桶）、`media-hub` 媒体控制台（音量/媒体/频谱/通知）、`toolbox` 本机工具箱（剪贴板/文件/注册表/命令/设置读写）——合起来覆盖全部 31 个皮肤命令。
+
+### 其他
+
+- 安装/卸载程序图标换用应用 logo（nsis `installerIcon` / `uninstallerIcon` → `icons/icon.ico`）；移除 `icon.icns`（不做 macOS 打包）。
+- 示例皮肤默认关闭边框拖拽缩放（`resizable: false`）。
+
 ## [1.0.0] - 2026-07-30
 
 首个正式版。
