@@ -288,8 +288,14 @@ window.__DESK_PP__={{
 }};
 (function(){{
   // Right-click: suppress WebView2's default menu (also disabled via
-  // ICoreWebView2Settings) and open the native skin menu instead.
-  document.addEventListener('contextmenu', function(e){{
+  // ICoreWebView2Settings) and open the native skin menu instead —
+  // unless the page consumed the click itself: a skin that calls
+  // preventDefault() on contextmenu (e.g. an in-card edit) opts out of
+  // the host menu for that click.  Listening on window (last stop of
+  // the bubble path) makes defaultPrevented reflect every page handler,
+  // regardless of where it was registered.
+  window.addEventListener('contextmenu', function(e){{
+    if (e.defaultPrevented) return;
     e.preventDefault();
     window.__DESK_PP__.invoke('show_skin_context_menu');
   }});

@@ -83,14 +83,21 @@ pub fn ensure_aumid_shortcut() -> Result<(), String> {
         return Ok(());
     }
     if lnk.exists() {
-        // Only skip when the shortcut still points at THIS exe.  A stale
-        // target (dev/test binary, uninstalled path) gets the shortcut
-        // rewritten — it would otherwise rot in the Start Menu forever
-        // (the AUMID property survives either way, but the entry itself
-        // would launch a dead path).
-        match shortcut_target(&lnk) {
-            Ok(target) if target == exe => return Ok(()),
-            Ok(_) | Err(_) => {} // fall through and rewrite
+        // Skip only when the shortcut points at THIS exe AND carries OUR
+        // AUMID.  The NSIS installer pre-creates this same .lnk stamped
+        // with the bundle id (com.driftlet.app — tauri-bundler's
+        // SetLnkAppUserModelId uses ${BUNDLEID}): target matches, AUMID
+        // doesn't, and toasts keyed to "Driftlet" silently never show.
+        // That was the user-machine bug — dev machines never ran the
+        // installer, so their self-created shortcut was correct all along.
+        // A stale/dead target (dev/test binary, uninstalled path) gets the
+        // same rewrite treatment.
+        let fresh = matches!(
+            (shortcut_target(&lnk), shortcut_aumid(&lnk)),
+            (Ok(target), Ok(aumid)) if target == exe && aumid == AUMID
+        );
+        if fresh {
+            return Ok(());
         }
     }
     create_shortcut(&exe, &lnk)
@@ -128,6 +135,54 @@ fn shortcut_target(lnk: &std::path::Path) -> Result<std::path::PathBuf, String> 
         Ok(std::path::PathBuf::from(
             String::from_utf16_lossy(&buf[..end]),
         ))
+    }
+}
+
+/// Read the shortcut's System.AppUserModel.ID (IPropertyStore::GetValue).
+/// Any "can't confirm" case (missing property, wrong type, read failure)
+/// is Err — the caller then rewrites the shortcut, always the safe move.
+#[cfg(target_os = "windows")]
+fn shortcut_aumid(lnk: &std::path::Path) -> Result<String, String> {
+    use windows::core::Interface;
+    use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
+    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::System::Variant::VT_LPWSTR;
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+
+    let lnk_w: Vec<u16> = {
+        use std::os::windows::ffi::OsStrExt;
+        lnk.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+    };
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED); // see create_shortcut: never uninit
+        let link: IShellLinkW =
+            CoCreateInstance(&ShellLink, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
+        let persist: IPersistFile = link.cast().map_err(|e| e.to_string())?;
+        persist
+            .Load(
+                PCWSTR(lnk_w.as_ptr()),
+                windows::Win32::System::Com::STGM_READ,
+            )
+            .map_err(|e| e.to_string())?;
+        let store: IPropertyStore = link.cast().map_err(|e| e.to_string())?;
+        let pv: PROPVARIANT = store
+            .GetValue(&PKEY_AppUserModel_ID)
+            .map_err(|e| e.to_string())?;
+        if pv.Anonymous.Anonymous.vt != VT_LPWSTR {
+            return Err("shortcut AUMID property is not a string".into());
+        }
+        let pwsz = pv.Anonymous.Anonymous.Anonymous.pwszVal;
+        if pwsz.is_null() {
+            return Err("shortcut AUMID property is null".into());
+        }
+        // The returned PROPVARIANT is deliberately NOT PropVariantClear'd:
+        // same discipline as create_shortcut — no frees into propsys'
+        // inproc handler.  A handful of bytes once per process.
+        pwsz.to_string().map_err(|e| e.to_string())
     }
 }
 
@@ -214,4 +269,80 @@ mod tests {
     #[ignore = "hardware probe — shows a real notification"]
     fn probe_show_toast() {
         show("Driftlet 通知测试", "如果你在屏幕上看到这条通知，接口工作正常。").unwrap();
-    }}
+    }
+
+    /// Rewrite ONLY the AUMID property of an existing shortcut — mimics what
+    /// the NSIS installer does to our Start Menu entry (its
+    /// SetLnkAppUserModelId stamps the bundle id, not "Driftlet").
+    #[cfg(target_os = "windows")]
+    fn restamp_aumid(lnk: &std::path::Path, id: &str) {
+        use windows::core::Interface;
+        use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
+        use windows::Win32::System::Com::StructuredStorage::{
+            PROPVARIANT, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
+        };
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_ALL, COINIT_MULTITHREADED,
+        };
+        use windows::Win32::System::Variant::VT_LPWSTR;
+        use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+        use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+
+        let lnk_w: Vec<u16> = {
+            use std::os::windows::ffi::OsStrExt;
+            lnk.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+        };
+        let id_w: &'static [u16] =
+            id.encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>().leak();
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_ALL).unwrap();
+            let persist: IPersistFile = link.cast().unwrap();
+            persist
+                .Load(
+                    PCWSTR(lnk_w.as_ptr()),
+                    windows::Win32::System::Com::STGM_READWRITE,
+                )
+                .unwrap();
+            let store: IPropertyStore = link.cast().unwrap();
+            let mut pv = PROPVARIANT::default();
+            pv.Anonymous.Anonymous = std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
+                vt: VT_LPWSTR,
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: PROPVARIANT_0_0_0 {
+                    pwszVal: windows::core::PWSTR(id_w.as_ptr() as *mut u16),
+                },
+            });
+            store.SetValue(&PKEY_AppUserModel_ID, &pv).unwrap();
+            store.Commit().unwrap();
+            persist.Save(PCWSTR(lnk_w.as_ptr()), true).unwrap();
+        }
+    }
+
+    /// Round-trip on real COM against a TEMP shortcut (never the real Start
+    /// Menu entry — that one belongs to the installed app): create_shortcut
+    /// writes, shortcut_target/shortcut_aumid read back, and the installer's
+    /// bundle-id stamp is detected as stale (the user-machine bug case).
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn shortcut_roundtrip_target_and_aumid() {
+        let dir = std::env::temp_dir().join(format!("driftlet-notify-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lnk = dir.join("probe.lnk");
+        let exe = std::env::current_exe().unwrap();
+
+        create_shortcut(&exe, &lnk).unwrap();
+        assert_eq!(shortcut_target(&lnk).unwrap(), exe);
+        assert_eq!(shortcut_aumid(&lnk).unwrap(), AUMID);
+
+        // Installer state: same target, foreign AUMID — must read back as
+        // NOT ours so ensure_aumid_shortcut rewrites instead of skipping.
+        restamp_aumid(&lnk, "com.driftlet.app");
+        assert_eq!(shortcut_target(&lnk).unwrap(), exe);
+        assert_ne!(shortcut_aumid(&lnk).unwrap(), AUMID);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

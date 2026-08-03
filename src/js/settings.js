@@ -24,6 +24,7 @@ export default class Settings {
     this.autostart = false;
     this.theme = 'auto';
     this.hotkey = '';
+    this.hotReload = true;
     this._hotkeyListener = null;
   }
 
@@ -33,6 +34,7 @@ export default class Settings {
     const config = await API.getAppConfig().catch(() => ({ theme: 'auto' }));
     this.theme = config.theme || 'auto';
     this.hotkey = config.hotkey_toggle_skins || '';
+    this.hotReload = config.hot_reload !== false;
 
     this.render();
   }
@@ -93,6 +95,28 @@ export default class Settings {
             <div class="hint">${t('settings.hotkeyHint')}</div>
           </div>
           <button class="theme-btn" id="cfg-hotkey">${this.esc(this.hotkey) || t('settings.hotkeyNone')}</button>
+        </div>
+
+        <div class="settings-row">
+          <div>
+            <label>${t('settings.hotReload')}</label>
+            <div class="hint">${t('settings.hotReloadHint')}</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="cfg-hotreload" ${this.hotReload ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="settings-row">
+          <div>
+            <label>${t('settings.backup')}</label>
+            <div class="hint">${t('settings.backupHint')}</div>
+          </div>
+          <div class="theme-options">
+            <button class="theme-btn" id="cfg-export">${t('settings.backupExport')}</button>
+            <button class="theme-btn" id="cfg-import">${t('settings.backupImport')}</button>
+          </div>
         </div>
 
         <button class="settings-close">${t('common.close')}</button>
@@ -195,6 +219,64 @@ export default class Settings {
       };
       this._hotkeyListener = onKey;
       window.addEventListener('keydown', onKey, true);
+    };
+
+    // 皮肤热重载开关（开发分区，仅 debug 构建的 watcher 读取该标志）
+    overlay.querySelector('#cfg-hotreload').onchange = async (e) => {
+      const on = e.target.checked;
+      try {
+        await API.setHotReload(on);
+        showToast(on ? t('settings.hotReloadOn') : t('settings.hotReloadOff'), 'info');
+      } catch (err) {
+        showToast(t('common.setFailed') + String(err), 'error');
+      }
+    };
+
+    // 布局备份：导出为一个 zip；导入会覆盖全部配置与皮肤，先弹危险确认，
+    // 成功后整页 reload——语言/主题/皮肤列表/配置缓存一次全部重建
+    overlay.querySelector('#cfg-export').onclick = async () => {
+      try {
+        const path = await API.exportConfig();
+        if (path) showToast(t('settings.backupExported', { path }), 'success');
+        else showToast(t('common.canceled'), 'info');
+      } catch (err) {
+        showToast(t('common.setFailed') + String(err), 'error');
+      }
+    };
+    overlay.querySelector('#cfg-import').onclick = () => {
+      const confirmOverlay = document.createElement('div');
+      confirmOverlay.className = 'confirm-overlay';
+      confirmOverlay.innerHTML = `
+        <div class="confirm-dialog">
+          <div class="confirm-icon danger"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+          <h3>${t('settings.backupImportTitle')}</h3>
+          <p>${t('settings.backupImportBody')}</p>
+          <p class="confirm-hint">${t('settings.backupImportHint')}</p>
+          <div class="confirm-buttons">
+            <button class="confirm-btn cancel">${t('common.cancel')}</button>
+            <button class="confirm-btn danger">${t('settings.backupImport')}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(confirmOverlay);
+      const closeConfirm = () => confirmOverlay.remove();
+      confirmOverlay.querySelector('.confirm-btn.cancel').onclick = closeConfirm;
+      confirmOverlay.querySelector('.confirm-btn.danger').onclick = async () => {
+        closeConfirm();
+        try {
+          const done = await API.importConfig();
+          if (done) {
+            showToast(t('settings.backupImported'), 'success');
+            setTimeout(() => location.reload(), 800);
+          } else {
+            showToast(t('common.canceled'), 'info');
+          }
+        } catch (err) {
+          showToast(t('common.setFailed') + String(err), 'error');
+        }
+      };
+      confirmOverlay.addEventListener('click', (e) => {
+        if (e.target === confirmOverlay) closeConfirm();
+      });
     };
 
     const close = () => {

@@ -149,7 +149,7 @@ Rules:
 - For transparency, set `body { background: transparent }` and paint the background on your own container.
 - **The layout must adapt to the window size**: no element may exceed the window's visible area — when the window shrinks, content must scale/reflow with it; neither overflow clipping nor window-level scrollbars are allowed. See §3.3 for how.
 - **Do not use `-webkit-app-region: drag`**. Use the `.drag-region` class for draggable areas instead (see §3.2).
-- Do not listen for `contextmenu` to pop up your own menu — right-click is taken over by the app (it shows the native "Open Skin Settings / Reload Skin / Unload Skin" menu), and right-click is disabled by default inside skins.
+- Right-click anywhere on the page is taken over by the app by default (it shows the native "Open Skin Settings / Reload Skin / Unload Skin" menu, and WebView2's default menu is disabled). If your skin needs to handle right-click on a specific element (e.g. right-click-to-edit on a card): listen for `contextmenu` and call `preventDefault()` — the bridge checks `defaultPrevented` at the end of the window bubble path, and clicks the skin consumed will not open the host menu. (Hosts on 1.0.1 or earlier lack this contract; fall back to a window capture-phase listener plus `stopPropagation()`.)
 - **Prefer `textContent` for dynamic content**; never splice unescaped strings such as user input or task text into `innerHTML` (reason in §6.3).
 
 ### 3.2 Draggable Areas
@@ -392,7 +392,7 @@ const [cpu] = await window.__DESK_PP__.invoke('get_cpu_info');
 
 Returns an array (reserved for multi-socket CPUs; always 1 entry on ordinary machines).
 
-#### `get_gpu_info` (Windows Only)
+#### `get_gpu_info`
 
 ```js
 const gpus = await window.__DESK_PP__.invoke('get_gpu_info');
@@ -457,7 +457,7 @@ const net = await window.__DESK_PP__.invoke('get_network_info');
 // }
 ```
 
-#### `get_audio_spectrum` (Windows Only)
+#### `get_audio_spectrum`
 
 Real-time spectrum of the sound the system is playing (WASAPI loopback capture, no microphone needed). The first call starts the capture thread automatically; after polling stops for about 30 seconds the audio device is released, and polling again restarts it:
 
@@ -492,14 +492,14 @@ const top = await window.__DESK_PP__.invoke('get_processes', { sort: 'cpu', limi
 
 `sort`: `"cpu"` (default) / `"memory"`; `limit` defaults to 10, max 100. `cpu` is a percentage (%) — like CPU info, **the first call returns 0 (baseline)**.
 
-#### `get_volume` (Windows Only)
+#### `get_volume`
 
 ```js
 const v = await window.__DESK_PP__.invoke('get_volume');
 // { volume_pct: 100.0, muted: false }   // system master volume and mute state
 ```
 
-#### `get_media_info` (Windows Only)
+#### `get_media_info`
 
 The media currently playing (SMTC — most players such as NetEase Cloud Music, QQ Music, Spotify, and browser videos integrate with it). **Returns `null` when there is no playback session (not an error)**:
 
@@ -516,7 +516,7 @@ const m = await window.__DESK_PP__.invoke('get_media_info');
 
 Fields the player didn't report are empty strings; progress may likewise be 0.
 
-#### `get_battery_info` (Windows Only)
+#### `get_battery_info`
 
 ```js
 const b = await window.__DESK_PP__.invoke('get_battery_info');
@@ -529,7 +529,7 @@ const b = await window.__DESK_PP__.invoke('get_battery_info');
 // }
 ```
 
-#### `get_idle_time` (Windows Only)
+#### `get_idle_time`
 
 Milliseconds since the user's last keyboard/mouse input:
 
@@ -537,7 +537,7 @@ Milliseconds since the user's last keyboard/mouse input:
 const idleMs = await window.__DESK_PP__.invoke('get_idle_time'); // 45230 = 45.2 seconds idle
 ```
 
-#### `get_foreground_window_info` (Windows Only)
+#### `get_foreground_window_info`
 
 The current foreground window (what the user is using); returns `null` in the rare cases where there is no foreground window:
 
@@ -546,7 +546,7 @@ const w = await window.__DESK_PP__.invoke('get_foreground_window_info');
 // { title: "Document - Word", pid: 12345, process_name: "WINWORD.EXE" }
 ```
 
-#### `get_monitors` (Windows Only)
+#### `get_monitors`
 
 ```js
 const ms = await window.__DESK_PP__.invoke('get_monitors');
@@ -589,7 +589,7 @@ Limits:
 - `skin.json` and `settings.json` (including `.bak` / `.tmp`) are managed by the app — readable, but writing and deleting are forbidden;
 - good for storing the skin's own cache/data; the skin folder is deleted along with the skin — don't use it as a persistent store.
 
-#### Registry Read-Only (Permission `registry`, Windows Only)
+#### Registry Read-Only (Permission `registry`)
 
 ```js
 const v = await window.__DESK_PP__.invoke('read_registry_value', {
@@ -618,7 +618,7 @@ const r = await window.__DESK_PP__.invoke('run_command', {
 - launch failures (command not found, etc.) reject;
 - suited for one-shot query commands; processes needing interaction don't work; grandchild processes of long-running processes may not be cleaned up by the timeout — use with care.
 
-#### System Volume & Media Control (Permission `system`, Windows Only)
+#### System Volume & Media Control (Permission `system`)
 
 ```js
 await window.__DESK_PP__.invoke('set_volume', { volumePct: 60 });  // 0–100
@@ -654,7 +654,7 @@ Allowed targets: `http(s)://`, `mailto:`, local absolute paths (files or folders
 - relative paths and schemes like `file:` / `javascript:`;
 - nonexistent targets and open failures return the same error, indistinguishable.
 
-#### System Notifications (Permission `system`, Windows Only)
+#### System Notifications (Permission `system`)
 
 Pops a Windows toast notification (visible in the Action Center, shown as coming from Driftlet):
 
@@ -667,7 +667,7 @@ await window.__DESK_PP__.invoke('show_notification', { title: 'Reminder', body: 
 - the first call registers a Driftlet shortcut in the Start Menu (a system requirement for non-packaged apps to send notifications) — this is normal;
 - keep the frequency low — users who get spammed will simply turn off notifications for the whole app.
 
-#### Microphone Spectrum (Permission `mic`, Windows Only)
+#### Microphone Spectrum (Permission `mic`)
 
 Same pipeline and same return structure as `get_audio_spectrum` (system loopback, no permission needed), but captures **microphone input**:
 

@@ -164,6 +164,21 @@ const API = {
     return invoke('take_hotkey_error');
   },
 
+  // 布局备份：导出 config/ + skins/ 为 zip（返回保存路径，取消为 null）；
+  // 导入备份 zip（返回是否已导入，取消为 false）
+  exportConfig() {
+    return invoke('export_config');
+  },
+
+  importConfig() {
+    return invoke('import_config');
+  },
+
+  // 皮肤热重载开关（仅开发构建生效）
+  setHotReload(on) {
+    return invoke('set_hot_reload', { on });
+  },
+
   // 系统是否自带窗框修饰（Win11+ DWM 圆角与 1px 轮廓；Win10 无边框修饰）
   isWin11OrNewer() {
     return invoke('is_windows_11_or_newer');

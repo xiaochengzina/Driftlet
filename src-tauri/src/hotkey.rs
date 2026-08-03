@@ -102,6 +102,23 @@ pub fn register_from_config(app: &AppHandle) {
     }
 }
 
+/// Re-sync the registration after the config was swapped wholesale (backup
+/// import): unregister whatever is ACTUALLY registered right now (tracked in
+/// REGISTERED_COMBO — the new config's value can't tell us that), then
+/// register the configured combo fresh.  Plain `register_from_config` must
+/// not be used here: it never unregisters, so a live registration makes the
+/// OS call fail and the error stash would toast "hotkey taken" on the next
+/// manager reload even though nothing is wrong.
+pub fn reregister_from_config(app: &AppHandle) {
+    if let Some(old) = registered_combo() {
+        if let Ok(shortcut) = old.parse::<Shortcut>() {
+            let _ = app.global_shortcut().unregister(shortcut);
+        }
+        set_registered_combo(None);
+    }
+    register_from_config(app);
+}
+
 /// Swap the registered hotkey for `combo` ("" = disable).
 ///
 /// On registration failure (typically the combo is taken by another app)

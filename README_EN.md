@@ -19,7 +19,8 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Tray icon management; closing the main window hides it to the tray
 - Autostart, dark/light theme switching
 - Right-click a skin window to open the skin menu (open config / refresh / unload)
-- A global hotkey hides/shows all loaded skins with one keystroke (default Ctrl+Alt+D, changeable or disabled in Settings), with a synced checked item in the tray menu
+- A global hotkey hides/shows all loaded skins with one keystroke (default Ctrl+Shift+Alt+D, changeable or disabled in Settings), with a synced checked item in the tray menu
+- Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing)
 
 ---
 
@@ -86,6 +87,8 @@ npm run tauri build
 ## Skin Development
 
 > For the full interface documentation and specs, see [`docs/skin-development-guide.md`](docs/skin-development-guide.md); this section is a quick start.
+
+In development builds (`npm run tauri dev`), a loaded skin reloads automatically when its files are saved (300 ms debounce) — no manual right-click refresh needed; it can be turned off on the Settings page.
 
 A skin is a standalone folder containing at least:
 

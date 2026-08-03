@@ -1,5 +1,6 @@
 use tauri::{AppHandle, Emitter, Manager};
 use crate::AppState;
+use crate::backup;
 use crate::i18n::{tr, trf, Key};
 use crate::skin::types::{SkinInfo, SkinDetail, SkinRuntimeConfig, AppConfig};
 use crate::skin::loader;
@@ -1139,6 +1140,50 @@ pub async fn pick_skin_package(window: tauri::WebviewWindow, app: AppHandle) -> 
     }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))
 }
 
+// ─── Layout Backup (export / import) ───
+
+/// 导出布局备份：保存对话框选路径后，把 config/ + skins/ 打成一个 zip
+/// （含备份清单 driftlet-backup.json）。返回保存路径；用户取消返回 None。
+#[tauri::command]
+pub async fn export_config(window: tauri::WebviewWindow, app: AppHandle) -> Result<Option<String>, String> {
+    require_manager(&window)?;
+    use tauri_plugin_dialog::DialogExt;
+    let handle = app.clone();
+    let lang = app.state::<AppState>().lang();
+    let filter_name = tr(&lang, Key::BackupFilterName);
+    let dest = tauri::async_runtime::spawn_blocking(move || {
+        handle.dialog().file()
+            .add_filter(filter_name, &["zip"])
+            .set_file_name("driftlet-backup.zip")
+            .blocking_save_file()
+            .map(|p| p.to_string())
+    }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))?;
+    let Some(dest) = dest else { return Ok(None) };
+    backup::export_backup(&app, std::path::Path::new(&dest))?;
+    Ok(Some(dest))
+}
+
+/// 导入布局备份：校验（体积/条目/zip-slip/必须含 config/config.json）→
+/// 卸载全部皮肤 → 暂存替换 config/ 与 skins/（失败整体回滚）→ 重建运行时
+/// 状态并按备份加载皮肤。用户取消返回 false。
+#[tauri::command]
+pub async fn import_config(window: tauri::WebviewWindow, app: AppHandle) -> Result<bool, String> {
+    require_manager(&window)?;
+    use tauri_plugin_dialog::DialogExt;
+    let handle = app.clone();
+    let lang = app.state::<AppState>().lang();
+    let filter_name = tr(&lang, Key::BackupFilterName);
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        handle.dialog().file()
+            .add_filter(filter_name, &["zip"])
+            .blocking_pick_file()
+            .map(|p| p.to_string())
+    }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))?;
+    let Some(picked) = picked else { return Ok(false) };
+    backup::import_backup(app, std::path::Path::new(&picked)).await?;
+    Ok(true)
+}
+
 /// 检查皮肤包：不是合法皮肤包时返回错误提示；
 /// 合法时返回包信息与安装状态（new / update / reinstall / downgrade），
 /// 前端据此弹确认框。
@@ -1287,6 +1332,18 @@ pub fn set_theme(window: tauri::WebviewWindow, app: AppHandle, theme: String) ->
     let state = app.state::<AppState>();
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.theme = theme;
+    config::save_config(&state.config_dir, &config)
+}
+
+/// 皮肤热重载总开关（持久化 config.hot_reload + 即时翻转运行时标志）。
+/// 仅影响 debug 构建的 watcher（release 从不启动 watcher）。
+#[tauri::command]
+pub fn set_hot_reload(window: tauri::WebviewWindow, app: AppHandle, on: bool) -> Result<(), String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    state.hot_reload_enabled.store(on, std::sync::atomic::Ordering::Relaxed);
+    let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    config.hot_reload = on;
     config::save_config(&state.config_dir, &config)
 }
 

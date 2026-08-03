@@ -5,6 +5,13 @@ $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Driftlet.lnk"
 if (Test-Path $lnk) {
   $sh = New-Object -ComObject WScript.Shell
   'lnk target: ' + $sh.CreateShortcut($lnk).TargetPath
+  # The shortcut's stamped AppUserModelID — MUST be "Driftlet" for toasts.
+  # "com.driftlet.app" = stale NSIS-installer stamp (builds before the
+  # self-heal fix skipped rewriting it and toasts silently never showed;
+  # current builds rewrite it on next app launch).
+  $shell = New-Object -ComObject Shell.Application
+  $item = $shell.NameSpace((Split-Path $lnk)).ParseName((Split-Path $lnk -Leaf))
+  'lnk AUMID: ' + $item.ExtendedProperty('System.AppUserModel.ID')
 }
 '--- notification settings ---'
 $root = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings'

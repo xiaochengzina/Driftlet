@@ -1513,6 +1513,13 @@ html[lang="en"] .config-section h3 .sec-en {
   justify-content: center;
   z-index: 200;
   animation: fadeIn 0.15s var(--ease);
+  /* 窗口太矮、面板超高时允许纵向滚动（配合子级 margin:auto 的安全居中） */
+  overflow-y: auto;
+}
+
+/* 设置页遮罩淡入放慢（确认框保持 0.15s 的轻快节奏） */
+.settings-overlay {
+  animation-duration: 0.25s;
 }
 
 .confirm-dialog,
@@ -1521,10 +1528,13 @@ html[lang="en"] .config-section h3 .sec-en {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
-  animation: popIn 0.2s var(--ease);
+  /* 安全居中：align-items:center 遇到超高子级会把顶部裁掉且滚不到；
+     margin:auto 在空间够时居中、超高时归零从顶部起，滚动可达全部内容 */
+  margin: auto;
 }
 
 .confirm-dialog {
+  animation: popIn 0.2s var(--ease);
   padding: 26px 28px;
   width: 360px;
   max-width: 88vw;
@@ -1628,9 +1638,13 @@ html[lang="en"] .config-section h3 .sec-en {
   margin-top: 8px !important;
 }
 
+/* 设置面板不加面板级入场动画：任何面板 transform 入场都会带动行内容
+   ——位移版（popIn 的 translateY）让整排按钮滑动 ~10px；缩放版绕面板
+   中心进行，偏离中心的按钮仍会被带几 px——反馈均为「按钮在动」。
+   仅随遮罩 fadeIn 整体淡入（确认框仍用 popIn） */
 .settings-panel {
-  padding: 24px 26px;
-  width: 400px;
+  padding: 22px 26px;
+  width: 440px;
   max-width: 88vw;
 }
 
@@ -1647,7 +1661,7 @@ html[lang="en"] .config-section h3 .sec-en {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 13px 0;
+  padding: 11px 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1669,6 +1683,8 @@ html[lang="en"] .config-section h3 .sec-en {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  /* 设置行右侧控件不被左侧长说明压缩（备份行「导出/导入」曾被挤成竖排） */
+  flex-shrink: 0;
 }
 
 .theme-btn {
@@ -1682,6 +1698,8 @@ html[lang="en"] .config-section h3 .sec-en {
 }
 
 .theme-btn:hover {
+  /* 原仅文字变色，过于微弱：补一层底色（active 按钮的渐变盖在其上不受影响） */
+  background: var(--bg-surface);
   color: var(--text-primary);
 }
 

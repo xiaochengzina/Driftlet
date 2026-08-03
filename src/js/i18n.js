@@ -16,6 +16,7 @@ const MESSAGES = {
   'zh-CN': {
     // ── 通用 ──
     'common.cancel': '取消',
+    'common.canceled': '已取消',
     'common.close': '关闭',
     'common.done': '完成',
     'common.delete': '删除',
@@ -96,6 +97,19 @@ const MESSAGES = {
     'settings.hotkeySubHint': 'Esc 取消，Backspace 禁用',
     'settings.hotkeyNone': '未设置',
     'settings.hotkeySaved': '快捷键已更新',
+    'settings.backup': '备份',
+    'settings.backupHint': '导出或导入全部配置与皮肤（换机、分享布局）',
+    'settings.backupExport': '导出',
+    'settings.backupImport': '导入',
+    'settings.backupExported': '备份已导出：{path}',
+    'settings.backupImported': '导入完成，正在重新载入…',
+    'settings.backupImportTitle': '导入布局备份',
+    'settings.backupImportBody': '将用备份文件覆盖当前全部配置与皮肤，此操作不可撤销。',
+    'settings.backupImportHint': '已加载的皮肤会先卸载，导入完成后自动按备份恢复。',
+    'settings.hotReload': '皮肤热重载',
+    'settings.hotReloadHint': '皮肤文件保存后自动重载已加载的皮肤；仅开发构建生效，正常用户无需开启',
+    'settings.hotReloadOn': '已开启皮肤热重载',
+    'settings.hotReloadOff': '已关闭皮肤热重载',
 
     // ── 皮肤配置面板（skin-editor.js） ──
     'editor.byAuthor': '作者：',
@@ -204,6 +218,7 @@ const MESSAGES = {
   en: {
     // ── Common ──
     'common.cancel': 'Cancel',
+    'common.canceled': 'Canceled',
     'common.close': 'Close',
     'common.done': 'Done',
     'common.delete': 'Delete',
@@ -284,6 +299,19 @@ const MESSAGES = {
     'settings.hotkeySubHint': 'Esc cancels, Backspace disables',
     'settings.hotkeyNone': 'Not set',
     'settings.hotkeySaved': 'Hotkey updated',
+    'settings.backup': 'Backup',
+    'settings.backupHint': 'Export or import all settings and skins (for migration or sharing)',
+    'settings.backupExport': 'Export',
+    'settings.backupImport': 'Import',
+    'settings.backupExported': 'Backup exported to {path}',
+    'settings.backupImported': 'Import complete — reloading…',
+    'settings.backupImportTitle': 'Import Layout Backup',
+    'settings.backupImportBody': 'The backup will replace all current settings and skins. This cannot be undone.',
+    'settings.backupImportHint': 'Loaded skins will be unloaded first, then restored from the backup.',
+    'settings.hotReload': 'Skin hot reload',
+    'settings.hotReloadHint': 'Reloads loaded skins when their files are saved; development builds only — regular users do not need this',
+    'settings.hotReloadOn': 'Skin hot reload enabled',
+    'settings.hotReloadOff': 'Skin hot reload disabled',
 
     // ── Skin config panel (skin-editor.js) ──
     'editor.byAuthor': 'By ',

@@ -293,7 +293,7 @@ pub fn compare_versions(a: Option<&str>, b: Option<&str>) -> VersionRelation {
 /// 目录递归复制限深：防恶意构造的超深嵌套耗尽路径/栈
 const MAX_COPY_DEPTH: u32 = 32;
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     copy_dir_recursive_inner(src, dst, 0)
 }
 

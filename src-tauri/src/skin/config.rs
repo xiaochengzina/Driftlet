@@ -52,6 +52,19 @@ pub(crate) fn normalize_mode_flags(config: &mut AppConfig) {
     }
 }
 
+/// Drop persisted entries (skin_settings / loaded_skins) for skins that no
+/// longer exist on disk — folder deleted outside the app, or the author
+/// changed the id — otherwise residue accumulates in config.json forever.
+/// Returns how many entries were removed.  Called at startup (lib.rs setup)
+/// and after a backup import (backup.rs).
+pub fn prune_stale_entries(config: &mut AppConfig, skins: &[crate::skin::types::Skin]) -> usize {
+    let valid: std::collections::HashSet<&str> = skins.iter().map(|s| s.id.as_str()).collect();
+    let before = config.skin_settings.len() + config.loaded_skins.len();
+    config.skin_settings.retain(|id, _| valid.contains(id.as_str()));
+    config.loaded_skins.retain(|id| valid.contains(id.as_str()));
+    before - config.skin_settings.len() - config.loaded_skins.len()
+}
+
 /// Save config to disk atomically (write temp, then rename)
 pub fn save_config(config_dir: &Path, config: &AppConfig) -> Result<(), String> {
     fs::create_dir_all(config_dir)

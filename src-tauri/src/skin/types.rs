@@ -315,12 +315,21 @@ pub struct AppConfig {
     /// style; empty string = disabled).
     #[serde(default = "default_hotkey_toggle_skins")]
     pub hotkey_toggle_skins: String,
+    /// Skin hot reload while developing (debug builds only — release builds
+    /// never start the watcher).  Default on for skin authors; regular users
+    /// don't need it.
+    #[serde(default = "default_hot_reload")]
+    pub hot_reload: bool,
+}
+
+fn default_hot_reload() -> bool {
+    true
 }
 
 /// Default toggle-visibility hotkey. Rarely taken by other apps; users can
 /// rebind or clear it in the settings panel.
 fn default_hotkey_toggle_skins() -> String {
-    "Ctrl+Alt+D".to_string()
+    "Ctrl+Shift+Alt+D".to_string()
 }
 
 fn default_theme() -> String {
@@ -359,6 +368,7 @@ impl Default for AppConfig {
             theme: "auto".to_string(),
             language: default_language(),
             hotkey_toggle_skins: default_hotkey_toggle_skins(),
+            hot_reload: default_hot_reload(),
         }
     }
 }

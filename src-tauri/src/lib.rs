@@ -1,6 +1,11 @@
 mod commands;
+mod backup;
 mod desktop;
 mod hotkey;
+// Debug builds only — in release the module is compiled out entirely so its
+// watcher/helpers don't trigger dead-code warnings during packaging.
+#[cfg(debug_assertions)]
+mod hotreload;
 mod i18n;
 mod skin;
 mod skin_api;
@@ -66,6 +71,10 @@ pub struct AppState {
     /// "Ctrl+Alt+D"). Pulled once by the frontend on init so the user sees
     /// a toast instead of a silent log — mirrors pending_package.
     pub hotkey_error: Mutex<Option<String>>,
+    /// Skin hot reload master switch (mirrors config.hot_reload; toggled by
+    /// the set_hot_reload command).  The watcher thread reads it every tick;
+    /// when false, file events are drained without reloading anything.
+    pub hot_reload_enabled: AtomicBool,
 }
 
 impl AppState {
@@ -162,17 +171,9 @@ pub fn run() {
             let mut app_config = config::load_config(&config_dir);
 
             // Prune persisted entries for skins that no longer exist on disk
-            // (folder deleted outside the app, or the author changed the id) —
-            // otherwise residue accumulates in config.json forever.
+            // (folder deleted outside the app, or the author changed the id).
             {
-                let valid: std::collections::HashSet<&str> =
-                    skins.iter().map(|s| s.id.as_str()).collect();
-                let settings_before = app_config.skin_settings.len();
-                let loaded_before = app_config.loaded_skins.len();
-                app_config.skin_settings.retain(|id, _| valid.contains(id.as_str()));
-                app_config.loaded_skins.retain(|id| valid.contains(id.as_str()));
-                let removed = (settings_before - app_config.skin_settings.len())
-                    + (loaded_before - app_config.loaded_skins.len());
+                let removed = config::prune_stale_entries(&mut app_config, &skins);
                 if removed > 0 {
                     log::info!("Pruned {} config entries of missing skins", removed);
                     if let Err(e) = config::save_config(&config_dir, &app_config) {
@@ -188,6 +189,7 @@ pub fn run() {
             // via take_pending_package_install once it is ready.
             let pending_package = dskin_arg(std::env::args());
             let language = app_config.language.clone();
+            let hot_reload = app_config.hot_reload;
             app.manage(AppState {
                 registry: SkinWindowRegistry::new(),
                 config: Mutex::new(app_config),
@@ -203,6 +205,7 @@ pub fn run() {
                 language: Mutex::new(language),
                 toggle_item: Mutex::new(None),
                 hotkey_error: Mutex::new(None),
+                hot_reload_enabled: AtomicBool::new(hot_reload),
             });
 
             // Auto-load previously loaded skins
@@ -354,6 +357,12 @@ pub fn run() {
                 });
             }
 
+            // Skin hot reload for development: watch the skins directory and
+            // reload loaded skins on file changes.  Debug builds only — the
+            // watcher is pure overhead in production.
+            #[cfg(debug_assertions)]
+            hotreload::start(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -390,6 +399,7 @@ pub fn run() {
             commands::set_theme,
             commands::set_language,
             commands::set_hotkey,
+            commands::set_hot_reload,
             commands::take_hotkey_error,
             commands::is_windows_11_or_newer,
             commands::open_skins_folder,
@@ -397,6 +407,8 @@ pub fn run() {
             commands::list_system_fonts,
             commands::capture_skin_preview,
             commands::take_pending_package_install,
+            commands::export_config,
+            commands::import_config,
             skin_api::get_cpu_info,
             skin_api::get_gpu_info,
             skin_api::get_memory_info,
