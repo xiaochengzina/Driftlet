@@ -199,11 +199,11 @@ function renderMedia() {
   const m = mediaState;
   const has = !!m;
 
-  // 封面：cover_base64 非空时按 data URI 显示，否则显示占位符
+  // 封面：cover_base64 非空时按 data URI 显示（格式取自 cover_mime，未知回退 jpeg），否则显示占位符
   const coverImg = $('media-cover');
   const coverPh = $('media-cover-ph');
   if (has && m.cover_base64) {
-    coverImg.src = `data:image/jpeg;base64,${m.cover_base64}`;
+    coverImg.src = `data:${m.cover_mime || 'image/jpeg'};base64,${m.cover_base64}`;
     coverImg.hidden = false;
     coverPh.hidden = true;
   } else {

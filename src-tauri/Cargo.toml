@@ -1,6 +1,6 @@
 [package]
 name = "driftlet"
-version = "1.0.2"
+version = "1.0.4"
 edition = "2021"
 
 [lib]
@@ -26,6 +26,11 @@ sysinfo = "0.32"
 notify = "8"
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 base64 = "0.22"
+# skin:// 协议路径解码（wry 递交的 URI 保留百分号编码，中文 entry/资源名需先解码）
+percent-encoding = "2"
+# 启动更新检测：阻塞式 HTTPS 调 GitHub releases API（rustls = 全平台自包含，
+# 不依赖系统 OpenSSL）；调用走 spawn_blocking，不进主线程
+ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"
@@ -43,8 +48,11 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D12",
   "Win32_Storage_Xps",
   "Win32_System_Performance",
+  "Win32_System_ProcessStatus",
   "Win32_System_Threading",
   "Win32_System_Power",
   "Win32_System_SystemInformation",
@@ -77,5 +85,18 @@ strip = "symbols"
 # no window is visible, and the tray drag image). The vendored copy builds a
 # proper mask + 32bpp DIB via CreateIconIndirect. See
 # vendor/tray-icon/src/platform_impl/windows/icon.rs (NOTE(driftlet)).
+# Second patch in the same crate: the TaskbarCreated handler uses a quiet
+# NIM_DELETE variant — after an explorer restart the old icon is already
+# gone, so upstream's unconditional eprintln printed a bogus "Error removing
+# system tray icon" on every restart. See mod.rs (NOTE(driftlet)).
+#
+# Vendored tauri-runtime-wry with a patched WindowMessage::Destroy handler:
+# when a window's HWND was already destroyed externally (wallpaper-layer skin
+# SetParent'ed into Progman, killed together with explorer), tao never fires
+# WindowEvent::Destroyed, so the window/webview entries leak in every tauri
+# registry and the label stays taken forever ("already exists" on recreate).
+# The patch detects the dead handle and runs the full Destroyed flow. See
+# vendor/tauri-runtime-wry/src/lib.rs (NOTE(driftlet)).
 [patch.crates-io]
 tray-icon = { path = "vendor/tray-icon" }
+tauri-runtime-wry = { path = "vendor/tauri-runtime-wry" }

@@ -11,6 +11,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use super::Spectrum;
@@ -26,6 +27,10 @@ struct Shared {
     last_poll: Mutex<Instant>,
     /// Last capture-side failure, shown to the caller until capture recovers.
     error: Mutex<Option<String>>,
+    /// 采集线程存活标志：线程入口置位，任何退出路径（spawn 失败后根本
+    /// 没起、COM 初始化失败返回、panic 展开）复位。错误驻留且线程已死时
+    /// spectrum 侧清错重建——否则一次 spawn 失败就是永驻错误。
+    alive: AtomicBool,
 }
 
 /// What to capture: the system's output (loopback) or the microphone.
@@ -46,39 +51,41 @@ pub fn spectrum(bands: usize, source: Source) -> Result<Spectrum, String> {
         Source::Mic => &MIC,
     };
     let shared = {
-        let mut guard = slot.lock().unwrap();
+        let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
         guard
             .get_or_insert_with(|| {
                 let shared = Arc::new(Shared {
                     samples: Mutex::new(VecDeque::with_capacity(RING_CAPACITY)),
                     last_poll: Mutex::new(Instant::now()),
                     error: Mutex::new(None),
+                    alive: AtomicBool::new(false),
                 });
-                let s2 = shared.clone();
-                // spawn 失败不能吞掉：记入错误状态，让后续频谱调用返回
-                // 明确错误，而不是静默地永远返回空数据。
-                if let Err(e) = std::thread::Builder::new()
-                    .name(format!("audio-capture-{:?}", source))
-                    .spawn(move || capture_thread(s2, source))
-                {
-                    *shared.error.lock().unwrap() =
-                        Some(format!("capture thread spawn failed: {}", e));
-                }
+                spawn_capture(&shared, source);
                 shared
             })
             .clone()
     };
 
-    *shared.last_poll.lock().unwrap() = Instant::now();
+    *shared.last_poll.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
 
-    if let Some(err) = shared.error.lock().unwrap().clone() {
-        return Err(err);
+    if let Some(err) = shared.error.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        // 线程还活着（采集暂时失败、5s 后自动重试中）：如实上报错误。
+        // 线程已死（spawn 失败 / COM 初始化失败 / panic）：错误不会自愈，
+        // 清错并重建线程；本次调用先按无数据返回，重建若再失败会把错误
+        // 重新记入，下次调用继续走本分支重试。
+        if shared.alive.load(Ordering::Relaxed) {
+            return Err(err);
+        }
+        *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // 残留的可能是线程死亡前的旧样本，一并清掉再重建
+        shared.samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        spawn_capture(&shared, source);
     }
     let samples: Vec<f32> = {
         // Only the latest FFT_SIZE samples feed the FFT — copying the whole
         // 8192-sample ring here also extends the lock hold the capture
         // thread contends with on every packet.
-        let q = shared.samples.lock().unwrap();
+        let q = shared.samples.lock().unwrap_or_else(|e| e.into_inner());
         let take = q.len().min(FFT_SIZE);
         q.iter().skip(q.len() - take).copied().collect()
     };
@@ -87,29 +94,68 @@ pub fn spectrum(bands: usize, source: Source) -> Result<Spectrum, String> {
 
 // ─── Capture thread ───
 
+/// 启动采集线程。spawn 失败不能吞掉：记入错误状态，让后续频谱调用返回
+/// 明确错误，而不是静默地永远返回空数据（alive 保持 false，下次频谱
+/// 调用会走重建分支再试）。
+fn spawn_capture(shared: &Arc<Shared>, source: Source) {
+    let s2 = shared.clone();
+    if let Err(e) = std::thread::Builder::new()
+        .name(format!("audio-capture-{:?}", source))
+        .spawn(move || capture_thread(s2, source))
+    {
+        *shared.error.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(format!("capture thread spawn failed: {}", e));
+    }
+}
+
+/// 采集线程退出（含 panic 展开）时复位存活标志，允许 spectrum 侧重建；
+/// 统一清空环形缓冲（loop 底部的清空只管 run_capture 正常返回的路径，
+/// panic 展开会跳过它）。
+struct AliveReset(Arc<Shared>);
+
+impl Drop for AliveReset {
+    fn drop(&mut self) {
+        self.0.alive.store(false, Ordering::Relaxed);
+        self.0.samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        if std::thread::panicking() {
+            // panic 展开跳过了错误记录：alive 已假、error 为空时 spectrum
+            // 侧认不到死亡、永不重建——补一条错误让下次调用走重建分支
+            let mut err = self.0.error.lock().unwrap_or_else(|e| e.into_inner());
+            if err.is_none() {
+                *err = Some("capture thread panicked".to_string());
+            }
+        }
+    }
+}
+
 fn capture_thread(shared: Arc<Shared>, source: Source) {
+    shared.alive.store(true, Ordering::Relaxed);
+    let _alive = AliveReset(shared.clone());
     // COM (MTA) once per thread, before any WASAPI call.  S_FALSE (already
     // initialized) is a success HRESULT, so .ok() accepts it.
     if let Err(e) = wasapi::initialize_mta().ok() {
-        *shared.error.lock().unwrap() = Some(format!("COM init failed: {}", e));
+        *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("COM init failed: {}", e));
         return;
     }
     loop {
         // Park until a skin starts polling again.
-        while shared.last_poll.lock().unwrap().elapsed() > Duration::from_secs(2) {
+        while shared.last_poll.lock().unwrap_or_else(|e| e.into_inner()).elapsed() > Duration::from_secs(2) {
             std::thread::sleep(Duration::from_millis(500));
         }
         match run_capture(&shared, source) {
             Ok(()) => {
                 // Went idle — device already released, wait for the next poll.
-                *shared.error.lock().unwrap() = None;
+                *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
             Err(e) => {
                 log::warn!("audio capture ({:?}) failed: {}", source, e);
-                *shared.error.lock().unwrap() = Some(e);
+                *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(e);
                 std::thread::sleep(Duration::from_secs(5));
             }
         }
+        // 退出采集（闲置释放设备/出错重试）后清空环形缓冲：残留旧样本会
+        // 在恢复轮询时被回放成一帧中断前的旧画面
+        shared.samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 }
 
@@ -135,10 +181,14 @@ fn run_capture(shared: &Arc<Shared>, source: Source) -> Result<(), String> {
     let event = client.set_get_eventhandle().map_err(|e| e.to_string())?;
     let capture = client.get_audiocaptureclient().map_err(|e| e.to_string())?;
     client.start_stream().map_err(|e| e.to_string())?;
+    // 采集已实际恢复（如设备热插拔后重开成功）：清除此前驻留的错误——
+    // 否则持续轮询的皮肤要等 30s 闲置退出（run_capture 返回 Ok）后才看到
+    // 错误消失，期间频谱一直报旧错。
+    *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
     const FRAME_BYTES: usize = CHANNELS * 4;
     loop {
-        if shared.last_poll.lock().unwrap().elapsed() > Duration::from_secs(IDLE_STOP_SECS) {
+        if shared.last_poll.lock().unwrap_or_else(|e| e.into_inner()).elapsed() > Duration::from_secs(IDLE_STOP_SECS) {
             let _ = client.stop_stream();
             return Ok(());
         }
@@ -168,7 +218,7 @@ fn run_capture(shared: &Arc<Shared>, source: Source) -> Result<(), String> {
 /// buffers (endpoint idle) become zeros so the visualizer decays.
 fn push_frames(shared: &Arc<Shared>, buf: &[u8], frames: usize, silent: bool) {
     const FRAME_BYTES: usize = CHANNELS * 4;
-    let mut q = shared.samples.lock().unwrap();
+    let mut q = shared.samples.lock().unwrap_or_else(|e| e.into_inner());
     if silent {
         for _ in 0..frames {
             push_capped(&mut q, 0.0);

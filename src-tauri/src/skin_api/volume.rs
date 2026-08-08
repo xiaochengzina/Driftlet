@@ -4,7 +4,6 @@
 //! (already initialized differently) just means "proceed, don't uninit".
 
 use super::VolumeInfo;
-use windows::Win32::Foundation::S_OK;
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
@@ -15,8 +14,12 @@ use windows::Win32::System::Com::{
 
 fn with_endpoint<T>(f: impl FnOnce(&IAudioEndpointVolume) -> Result<T, String>) -> Result<T, String> {
     unsafe {
+        // 每次成功的 CoInitializeEx 都要配对一次 CoUninitialize，而 S_FALSE
+        // （本线程已按同一模型初始化过）同样是成功 HRESULT——只认 S_OK 会
+        // 漏配一次 uninit，引用计数不平衡。RPC_E_CHANGED_MODE（已按别的
+        // 套间模型初始化）是失败码，is_ok() 为 false，正好不配对。
         let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
-        let initialized_here = hr == S_OK;
+        let initialized_here = hr.is_ok();
         let result = (|| {
             let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                 .map_err(|e| e.to_string())?;

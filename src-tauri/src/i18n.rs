@@ -36,6 +36,7 @@ pub enum Key {
     MenuUnload,
     // commands.rs
     InvalidResizeDirection,
+    InvalidPlacement,
     // Only used in the non-Windows fallback arm.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     ResizeWindowsOnly,
@@ -110,6 +111,7 @@ pub enum Key {
     ReadBackupFailed,
     ExportBackupFailed,
     ImportBackupFailed,
+    ImportPartialUnloaded,
     // capture.rs
     WritePreviewFailed,
     WebViewNotReady,
@@ -122,6 +124,7 @@ pub enum Key {
     FileTooLarge,
     ProtectedFile,
     NotTextFile,
+    InvalidBase64,
     RegistryReadFailed,
     RegistryRootInvalid,
     CommandTimeout,
@@ -180,6 +183,7 @@ fn zh(key: Key) -> &'static str {
         Key::MenuReload => "刷新皮肤",
         Key::MenuUnload => "卸载皮肤",
         Key::InvalidResizeDirection => "无效的缩放方向: {}",
+        Key::InvalidPlacement => "未知放置模式: {}",
         Key::ResizeWindowsOnly => "边框缩放仅支持 Windows",
         Key::PreviewNeedsLoadedSkin => "皮肤未加载 — 请先加载皮肤再截取预览",
         Key::SkinNotFound => "皮肤 '{}' 未找到",
@@ -237,7 +241,7 @@ fn zh(key: Key) -> &'static str {
         Key::SkinJsonParseFailed => "skin.json 解析失败: {}",
         Key::PackageMissingId => "不是有效的皮肤包：skin.json 缺少 id 字段",
         Key::EntryFileMissing => "不是有效的皮肤包：入口文件 '{}' 不存在",
-        Key::BackupFilterName => "Driftlet 布局备份",
+        Key::BackupFilterName => "Driftlet 备份",
         Key::BackupNotZip => "不是有效的备份文件（无法作为 zip 打开）",
         Key::BackupTooLarge => "备份文件过大（超过 64 MB）",
         Key::BackupTooManyFiles => "备份文件条目过多",
@@ -247,6 +251,7 @@ fn zh(key: Key) -> &'static str {
         Key::ReadBackupFailed => "读取备份文件失败：{}",
         Key::ExportBackupFailed => "导出备份失败：{}",
         Key::ImportBackupFailed => "导入备份失败：{}",
+        Key::ImportPartialUnloaded => "导入已中止；以下皮肤已被卸载，重新加载即可恢复：{}",
         Key::WritePreviewFailed => "写入预览图失败: {}",
         Key::WebViewNotReady => "WebView2 尚未就绪: {}",
         Key::CapturePreviewCallFailed => "CapturePreview 调用失败: {}",
@@ -257,6 +262,7 @@ fn zh(key: Key) -> &'static str {
         Key::FileTooLarge => "文件超出大小限制",
         Key::ProtectedFile => "该文件由应用管理，禁止修改：{}",
         Key::NotTextFile => "不是文本文件，请用二进制模式读取",
+        Key::InvalidBase64 => "无效的二进制数据（base64 解码失败）",
         Key::RegistryReadFailed => "注册表读取失败：{}",
         Key::RegistryRootInvalid => "无效的注册表根键 '{}'",
         Key::CommandTimeout => "命令执行超时（{} 秒）",
@@ -285,6 +291,7 @@ fn en(key: Key) -> &'static str {
         Key::MenuReload => "Reload Skin",
         Key::MenuUnload => "Unload Skin",
         Key::InvalidResizeDirection => "Invalid resize direction: {}",
+        Key::InvalidPlacement => "Unknown placement mode: {}",
         Key::ResizeWindowsOnly => "Border resize is only supported on Windows",
         Key::PreviewNeedsLoadedSkin => "Skin is not loaded — load it before capturing a preview",
         Key::SkinNotFound => "Skin '{}' not found",
@@ -342,7 +349,7 @@ fn en(key: Key) -> &'static str {
         Key::SkinJsonParseFailed => "Failed to parse skin.json: {}",
         Key::PackageMissingId => "Not a valid skin package: skin.json is missing the id field",
         Key::EntryFileMissing => "Not a valid skin package: entry file '{}' does not exist",
-        Key::BackupFilterName => "Driftlet Layout Backup",
+        Key::BackupFilterName => "Driftlet Backup",
         Key::BackupNotZip => "Not a valid backup (cannot be opened as a zip)",
         Key::BackupTooLarge => "Backup file is too large (over 64 MB)",
         Key::BackupTooManyFiles => "Backup contains too many files",
@@ -352,6 +359,7 @@ fn en(key: Key) -> &'static str {
         Key::ReadBackupFailed => "Failed to read backup: {}",
         Key::ExportBackupFailed => "Failed to export backup: {}",
         Key::ImportBackupFailed => "Failed to import backup: {}",
+        Key::ImportPartialUnloaded => "Import aborted; the following skins were unloaded — reload them to restore: {}",
         Key::WritePreviewFailed => "Failed to write preview image: {}",
         Key::WebViewNotReady => "WebView2 is not ready: {}",
         Key::CapturePreviewCallFailed => "CapturePreview call failed: {}",
@@ -362,6 +370,7 @@ fn en(key: Key) -> &'static str {
         Key::FileTooLarge => "File exceeds the size limit",
         Key::ProtectedFile => "This file is managed by the app and cannot be modified: {}",
         Key::NotTextFile => "Not a text file; read it in binary mode",
+        Key::InvalidBase64 => "Invalid binary data (base64 decode failed)",
         Key::RegistryReadFailed => "Failed to read registry: {}",
         Key::RegistryRootInvalid => "Invalid registry root '{}'",
         Key::CommandTimeout => "Command timed out ({} seconds)",
@@ -431,6 +440,7 @@ mod tests {
         }
         for key in [
             Key::InvalidResizeDirection,
+            Key::InvalidPlacement,
             Key::HotkeyRegisterFailed,
             Key::SkinNotFound,
             Key::ConfigSaveFailed,
@@ -491,6 +501,7 @@ mod tests {
             Key::ReadBackupFailed,
             Key::ExportBackupFailed,
             Key::ImportBackupFailed,
+            Key::ImportPartialUnloaded,
         ] {
             assert_eq!(
                 count(zh(key)),

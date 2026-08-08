@@ -14,10 +14,6 @@ const API = {
     return invoke('get_skin_detail', { skinId });
   },
 
-  refreshSkins() {
-    return invoke('refresh_skins');
-  },
-
   // Skin lifecycle
   loadSkin(skinId) {
     return invoke('load_skin', { skinId });
@@ -36,12 +32,12 @@ const API = {
     return invoke('set_skin_opacity', { skinId, opacity });
   },
 
-  setAlwaysOnTop(skinId, on) {
-    return invoke('set_skin_always_on_top', { skinId, on });
+  setPlacement(skinId, placement) {
+    return invoke('set_skin_placement', { skinId, placement });
   },
 
-  setOnDesktop(skinId, on) {
-    return invoke('set_skin_on_desktop', { skinId, on });
+  setClickThrough(skinId, on) {
+    return invoke('set_skin_click_through', { skinId, on });
   },
 
   setPositionLocked(skinId, locked) {
@@ -73,10 +69,6 @@ const API = {
 
   setSize(skinId, width, height) {
     return invoke('set_skin_size', { skinId, width, height });
-  },
-
-  updateConfig(skinId, config) {
-    return invoke('update_skin_config', { skinId, configUpdate: config });
   },
 
   setSkinCustomSetting(skinId, key, value) {
@@ -133,10 +125,6 @@ const API = {
     return invoke('get_app_config');
   },
 
-  saveAppConfig(config) {
-    return invoke('save_app_config', { newConfig: config });
-  },
-
   // Settings
   setAutostart(on) {
     return invoke('set_autostart', { on });
@@ -179,9 +167,18 @@ const API = {
     return invoke('set_hot_reload', { on });
   },
 
-  // 系统是否自带窗框修饰（Win11+ DWM 圆角与 1px 轮廓；Win10 无边框修饰）
-  isWin11OrNewer() {
-    return invoke('is_windows_11_or_newer');
+  // 更新检测：查 GitHub 最新 release（网络失败 reject，调用方静默处理）；
+  // 开关持久化；「前往下载」打开后端固定的最新 release 页
+  checkUpdate() {
+    return invoke('check_update');
+  },
+
+  setUpdateCheck(on) {
+    return invoke('set_update_check', { on });
+  },
+
+  openReleasePage() {
+    return invoke('open_release_page');
   },
 
   // Utility

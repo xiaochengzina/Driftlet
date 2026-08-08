@@ -7,9 +7,10 @@ const SKIN_SCHEME: &str = "skin";
 
 /// Handle requests for the `skin://` custom protocol.
 ///
-/// URL format: `skin://localhost/{skin-id}/{relative-file-path}?opacity={f64}&locked={0|1}`
+/// URL format: `skin://localhost/{skin-folder}/{relative-file-path}?opacity={f64}&locked={0|1}&resizable={0|1}`
 ///
-/// - The path maps directly under the app's skins directory.
+/// - 首段是皮肤在 skins 目录下的**磁盘文件夹名**（不一定是皮肤 id——文件夹
+///   直装时 id 可能是 slugify 派生值），路径直接映射到 skins 目录之下。
 /// - HTML entry files are injected with the Tauri bridge (drag-region styles,
 ///   opacity, position-lock state, and the `__DESK_PP__` JS helper).
 /// - All other files are served as-is with a guessed MIME type.
@@ -29,7 +30,11 @@ pub fn handle_skin_request<R: tauri::Runtime>(
     let skins_dir = state.skins_dir.clone();
 
     let uri = request.uri();
-    let path = uri.path();
+    // wry 递交的 URI 保留百分号编码（tauri 自家 asset 协议同样先解码再处理）。
+    // 先解码再做 ../冒号/settings 拦截与 canonicalize——中文 entry/资源名才能
+    // 命中；且 ../冒号判定也须落在解码后的语义上（%2e%2e 解码前不像逃逸）。
+    let decoded_path = percent_encoding::percent_decode_str(uri.path()).decode_utf8_lossy();
+    let path = decoded_path.as_ref();
     let relative_path = path.strip_prefix('/').unwrap_or(path);
 
     // Security: reject empty paths and anything that escapes skins_dir.

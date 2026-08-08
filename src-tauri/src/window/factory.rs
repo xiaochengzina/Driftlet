@@ -34,6 +34,51 @@ const FRAMELESS_EXSTYLE: isize = {
         | WS_EX_TRANSPARENT.0 as isize)
 };
 
+/// FRAMELESS_EXSTYLE 的穿透变体：保留 WS_EX_TRANSPARENT|WS_EX_LAYERED。
+/// tao 的 set_ignore_cursor_events 给顶层窗口置这两位（window_state.rs:
+/// IGNORE_CURSOR_EVENT => style_ex |= WS_EX_TRANSPARENT|WS_EX_LAYERED），
+/// OS 命中测试随即整体跳过该窗口（WebView2 子孙窗口根本不会被命中）。
+#[cfg(target_os = "windows")]
+const FRAMELESS_EXSTYLE_PASSTHROUGH: isize = {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WS_EX_WINDOWEDGE, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE,
+    };
+    !(WS_EX_WINDOWEDGE.0 as isize
+        | WS_EX_CLIENTEDGE.0 as isize
+        | WS_EX_DLGMODALFRAME.0 as isize
+        | WS_EX_STATICEDGE.0 as isize)
+};
+
+/// 鼠标穿透登记集：开启穿透的皮肤窗口 HWND。无边框子类（force_frameless /
+/// WM_STYLECHANGING / WM_STYLECHANGED）对登记窗口改用 FRAMELESS_EXSTYLE_PASSTHROUGH
+/// 保留 TRANSPARENT|LAYERED，其余窗口照旧剥净（LAYERED 平时不在我们的
+/// WebView2 渲染假设内）。不保留则穿透位会在下一次清理/5 秒自愈周期被摘回。
+#[cfg(target_os = "windows")]
+static PASSTHROUGH_HWNDS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<isize>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// 登记/注销穿透 HWND。必须先登记再调 set_ignore_cursor_events：tao 经
+/// execute_in_thread 在主线程落 SetWindowLongPtr，其触发的 WM_STYLECHANGING
+/// 由子类按此刻的登记状态决定放行还是剥掉 TRANSPARENT|LAYERED。
+#[cfg(target_os = "windows")]
+pub fn set_passthrough_hwnd(hwnd_val: isize, on: bool) {
+    let mut set = PASSTHROUGH_HWNDS.lock().unwrap_or_else(|e| e.into_inner());
+    if on {
+        set.insert(hwnd_val);
+    } else {
+        set.remove(&hwnd_val);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_passthrough(hwnd_val: isize) -> bool {
+    PASSTHROUGH_HWNDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&hwnd_val)
+}
+
 /// Set per-window DWM attributes + strip frame styles once at creation.
 /// Call BEFORE the window is shown, ON THE WINDOW'S OWNER THREAD.
 ///
@@ -204,7 +249,13 @@ unsafe fn skin_subclass_proc_inner(
             changed = true;
         }
         let e = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let clean_e = e & FRAMELESS_EXSTYLE as isize & !(WS_EX_LAYERED.0 as isize);
+        // 穿透登记窗口保留 TRANSPARENT|LAYERED（见 PASSTHROUGH_HWNDS），
+        // 其余窗口照旧剥净。
+        let clean_e = if is_passthrough(hwnd.0 as isize) {
+            e & FRAMELESS_EXSTYLE_PASSTHROUGH as isize
+        } else {
+            e & FRAMELESS_EXSTYLE as isize & !(WS_EX_LAYERED.0 as isize)
+        };
         if e != clean_e {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, clean_e);
             changed = true;
@@ -372,15 +423,22 @@ unsafe fn skin_subclass_proc_inner(
         // -- Intercept style changes: strip frame bits + block LAYERED/TRANSPARENT --
         // WS_EX_LAYERED is stripped because layered compositing breaks
         // WebView2/DirectComposition rendering.  WS_EX_TRANSPARENT is stripped
-        // so the skin remains clickable.
+        // so the skin remains clickable.  例外：穿透登记窗口（PASSTHROUGH_HWNDS）
+        // 保留 TRANSPARENT|LAYERED——tao 的 set_ignore_cursor_events 靠这两位
+        // 实现命中测试整体跳过。
         WM_STYLECHANGING => {
             let ss = &mut *(l_param.0 as *mut STYLESTRUCT);
             if w_param.0 as i32 == GWL_STYLE.0 {
                 ss.styleNew =
                     ((ss.styleNew as isize & FRAMELESS_STYLE) | WS_POPUP.0 as isize) as u32;
             } else if w_param.0 as i32 == GWL_EXSTYLE.0 {
-                ss.styleNew &= !(WS_EX_LAYERED.0);
-                ss.styleNew = (ss.styleNew as isize & FRAMELESS_EXSTYLE) as u32;
+                if is_passthrough(hwnd.0 as isize) {
+                    ss.styleNew =
+                        (ss.styleNew as isize & FRAMELESS_EXSTYLE_PASSTHROUGH) as u32;
+                } else {
+                    ss.styleNew &= !(WS_EX_LAYERED.0);
+                    ss.styleNew = (ss.styleNew as isize & FRAMELESS_EXSTYLE) as u32;
+                }
             }
             DefSubclassProc(hwnd, msg, w_param, l_param)
         }
@@ -395,7 +453,15 @@ unsafe fn skin_subclass_proc_inner(
                     SetWindowLongPtrW(hwnd, GWL_STYLE, clean as isize);
                 }
             } else if w_param.0 as i32 == GWL_EXSTYLE.0 {
-                let clean = (ss.styleNew as isize & FRAMELESS_EXSTYLE) as u32;
+                let mask = if is_passthrough(hwnd.0 as isize) {
+                    FRAMELESS_EXSTYLE_PASSTHROUGH
+                } else {
+                    // 与 force_frameless / WM_STYLECHANGING 同一口径：非穿透
+                    // 窗口连 WS_EX_LAYERED 一起剥（layered 合成会破坏
+                    // WebView2/DirectComposition 渲染）
+                    FRAMELESS_EXSTYLE & !(WS_EX_LAYERED.0 as isize)
+                };
+                let clean = (ss.styleNew as isize & mask) as u32;
                 if ss.styleNew != clean {
                     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, clean as isize);
                 }
@@ -571,8 +637,8 @@ pub fn force_clean_skin_window(window: &tauri::WebviewWindow) {
 /// Schedule a deferred cleanup on the skin window via raw HWND.
 /// Same semantics as force_clean_skin_window — posts WM_DESK_CLEANUP
 /// to the window's message queue via PostMessageW.
-/// No-op if the HWND is already dead (e.g. pinned window destroyed
-/// together with a reaped WorkerW host).
+/// No-op if the HWND is already dead（通用防御：调用方与窗口销毁存在
+/// 竞态时句柄可能已失效，PostMessage 到死句柄没有意义）。
 #[cfg(target_os = "windows")]
 pub fn force_clean_skin_window_by_hwnd(hwnd_val: isize) {
     use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, IsWindow};
@@ -588,6 +654,145 @@ pub fn force_clean_skin_window_by_hwnd(hwnd_val: isize) {
 
 // ── Public API ──────────────────────────────────────────────────────
 
+/// 布局尺 = 物理客户区宽 ÷ 设计逻辑宽（配置基础尺寸 × 有效 zoom）。
+/// 背景：tao 的 scale_factor 在「建窗时 DPI 96、随后被系统改派到 120
+/// 但不发 WM_DPICHANGED、不重布局」的路径上虚报——窗口物理尺寸=逻辑
+/// 值、缓存却是 1.25；按它强制 rasterization scale 会把内容放大 1.25
+/// 倍：右侧/下缘出现无内容覆盖的黑条、整体被裁（2026-08-06 实测）。
+/// 正确不变量（wry 源码实证）：controller Bounds = 物理客户区，CSS
+/// 视口 = Bounds ÷ rasterization scale——所以 rasterization scale 必须
+/// 等于 物理 ÷ 设计逻辑，而不是 tao 的 scale_factor。取不到设计逻辑宽
+/// 时回退 scale_factor。
+#[cfg(target_os = "windows")]
+fn layout_scale_factor(window: &tauri::WebviewWindow) -> f64 {
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+    let fallback = window.scale_factor().unwrap_or(1.0);
+    let Some(skin_id) = window.label().strip_prefix("skin-").map(|s| s.to_string()) else {
+        return fallback;
+    };
+    let physical_w = match window.hwnd() {
+        Ok(hwnd) => {
+            let mut rc = RECT::default();
+            unsafe {
+                let _ = GetClientRect(HWND(hwnd.0 as isize as *mut _), &mut rc);
+            }
+            rc.right - rc.left
+        }
+        Err(_) => return fallback,
+    };
+    if physical_w <= 0 {
+        return fallback;
+    }
+    let app = window.app_handle();
+    let state = app.state::<crate::AppState>();
+    let entry = {
+        let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        cfg.skin_settings.get(&skin_id).map(|e| (e.width, e.zoom))
+    };
+    let Some((base_w, zoom_cfg)) = entry else {
+        return fallback;
+    };
+    let zoom = match zoom_cfg {
+        Some(z) => crate::commands::clamp_zoom(z),
+        None => {
+            // None = 跟随 skin.json 的 window.zoom 默认（与建窗/面板同一有效值规则）
+            // TODO: 每次调用都重扫皮肤目录。当前调用频率低（仅建窗期
+            // force_webview_rasterization_scale 的 1+3 次/窗），缓存的失效
+            // 处理（skin.json 热编辑）不划算；若将来挂到高频路径需先缓存
+            let skins = crate::skin::loader::scan_skins_directory(&state.skins_dir);
+            match skins.iter().find(|s| s.id == skin_id) {
+                Some(s) => crate::commands::clamp_zoom(s.manifest.window.zoom),
+                None => return fallback,
+            }
+        }
+    };
+    let logical_w = base_w as f64 * zoom;
+    if logical_w <= 0.0 {
+        return fallback;
+    }
+    // 取整到 0.01：物理尺寸是 逻辑×scale 四舍五入来的（247×1.25=308.75→309），
+    // 直接除会带回 0.001 级噪声（309/247=1.25101…）——WebView2 按带噪值
+    // 计算 CSS 视口会产生非整数裁剪，右/下缘露出几像素黑条（实测）。
+    // 真实 DPI 缩放都在 1/96≈0.0104 的网格上，0.01 取整无损。
+    let scale = ((physical_w as f64 / logical_w) * 100.0).round() / 100.0;
+    if scale.is_finite() && scale > 0.1 && scale < 10.0 {
+        scale
+    } else {
+        fallback
+    }
+}
+
+/// Moved/Resized 落盘换算（物理→逻辑）用的有效尺：Windows 上与光栅化
+/// 同源的布局尺（物理客户区 ÷ 设计逻辑宽，见 layout_scale_factor）。
+/// 不再信 tao 的 scale_factor——虚拟屏改派 DPI 路径上它缓存虚报（窗口
+/// 物理尺寸=逻辑值、缓存却报 1.25），按它换算会把落盘的逻辑坐标/尺寸
+/// 写小一倍，重载后窗口错位。非 Windows 无此虚报路径，沿用 scale_factor。
+fn persistence_scale_factor(window: &tauri::WebviewWindow) -> f64 {
+    #[cfg(target_os = "windows")]
+    {
+        layout_scale_factor(window)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        window.scale_factor().unwrap_or(1.0)
+    }
+}
+
+/// 把皮肤窗口 WebView2 的 rasterization scale 强制为窗口的**布局尺**
+/// （物理客户区 ÷ 设计逻辑宽，见 layout_scale_factor；虚拟显示器 DPI
+/// 不一致修复，见 create_skin_window 注释）。
+/// 注意：不要在这里调 `NotifyParentWindowPositionChanged`——实测它会让
+/// controller 按父链重算呈现布局，窗口右/下缘露出 6×4px 无内容黑条
+///（2026-08-06 对照实验定论，原为壁纸层跨进程父链场景；壁纸层虽已
+/// 移除，此结论作为通用防御保留，勿回归）。
+#[cfg(target_os = "windows")]
+fn force_webview_rasterization_scale(window: &tauri::WebviewWindow) {
+    let scale = layout_scale_factor(window);
+    let label = window.label().to_string();
+    // 诊断：布局尺与 tao scale_factor、系统窗口 DPI 三方对照（虚拟屏
+    // 改派 DPI 不发 WM_DPICHANGED 时三者会两两不一致）。
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            use windows::Win32::UI::HiDpi::GetDpiForWindow;
+            let dpi = GetDpiForWindow(windows::Win32::Foundation::HWND(hwnd.0 as isize as *mut _));
+            log::info!(
+                "force_webview_rasterization_scale '{}': scale={} tao_scale={:?} win_dpi={}",
+                label,
+                scale,
+                window.scale_factor().ok(),
+                dpi
+            );
+        }
+    }
+    let _ = window.with_webview(move |webview| unsafe {
+        use windows::core::Interface;
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller3;
+        if let Ok(c3) = webview.controller().cast::<ICoreWebView2Controller3>() {
+            let _ = c3.SetRasterizationScale(scale);
+        }
+    });
+}
+
+/// 调度一组延迟重设（建窗 0.6s / 1.5s / 3s 后各一次）：亮相、DPI 改派
+/// 会让 WebView2 运行时把 rasterization scale 重置回窗口 DPI 值，且时序
+/// 晚于建窗期的单次重设；多次幂等重设覆盖这些迟到重置（正常显示器两
+/// 尺本就相等，无副作用）。
+#[cfg(target_os = "windows")]
+pub(crate) fn schedule_rasterization_force(app: &AppHandle, label: &str) {
+    let handle = app.clone();
+    let label = label.to_string();
+    std::thread::spawn(move || {
+        for wait in [600u64, 900, 1500] {
+            std::thread::sleep(std::time::Duration::from_millis(wait));
+            if let Some(w) = handle.get_webview_window(&label) {
+                force_webview_rasterization_scale(&w);
+            }
+        }
+    });
+}
+
 /// Create a new skin window
 pub fn create_skin_window(
     app: &AppHandle,
@@ -600,12 +805,19 @@ pub fn create_skin_window(
     // 1. Build the skin:// URL. The custom protocol handler reads the file
     //    from the skins directory, injects the Tauri bridge, and serves it.
     //    Relative resources (images, css, js) inside the skin folder just work.
+    //    URL 首段必须是磁盘文件夹名而非皮肤 id：protocol.rs 按首段拼
+    //    skins_dir 下的真实文件路径；文件夹直装时 id 可能是 slugify 派生值
+    //    （如中文文件夹名），id ≠ 文件夹名，用 id 必 404。前端预览图
+    //    （api.js assetUrl 取路径末两段）同样按文件夹名拼 URL。
+    let folder_name = skin.directory.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("Invalid skin directory: {:?}", skin.directory))?;
     let mut skin_url = tauri::Url::parse("skin://localhost")
         .map_err(|e| format!("Failed to build skin URL: {}", e))?;
     {
         let mut segments = skin_url.path_segments_mut()
             .map_err(|_| "Cannot build skin URL path".to_string())?;
-        segments.extend(&[&skin.id, entry]);
+        segments.extend(&[folder_name, entry]);
     }
     skin_url.query_pairs_mut()
         .append_pair("opacity", &config.opacity.to_string());
@@ -650,6 +862,23 @@ pub fn create_skin_window(
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
+    // 远程控制软件的虚拟显示器 DPI 上报不一致（GameViewer/向日葵等虚拟屏：
+    // GetDpiForMonitor 报 96、系统 DPI 实为 120——GameViewer 虚拟屏 +
+    // Win10 21H2 @125% 实测定论）：皮肤窗口建窗后被系统改派到系统 DPI，
+    // WebView2 按新窗口 DPI 重设 rasterization scale(×1.25)，而 tao 按建窗
+    // DPI 布局（窗口物理尺寸=逻辑值）——内容按「窗口矩形×1.25」错位合成：
+    // 圆角/透明区没有内容覆盖透黑底，错位部分还在桌面上留黑色残块。
+    // 对策 = 把 controller 的 rasterization scale 强制回窗口的**布局尺**
+    // （物理客户区 ÷ 设计逻辑宽，见 layout_scale_factor——tao 的
+    // scale_factor 在该路径上虚报，不能作准），两尺一致后视觉树与宿主
+    // 矩形逐像素对齐；正常显示器上两者本就相等（幂等无副作用）。建窗时
+    // 设一次，亮相（可能触发 DPI 改派、运行时会重设）后多次补设。
+    #[cfg(target_os = "windows")]
+    {
+        force_webview_rasterization_scale(&window);
+        schedule_rasterization_force(app, &label);
+    }
+
     // 内容缩放与窗口尺寸同步（窗口尚隐藏，无 100% 闪现）。失败仅降级为
     // 「尺寸对、内容不缩放」（非 Windows 平台兜底），不影响建窗。
     if let Err(e) = window.set_zoom(zoom) {
@@ -667,6 +896,14 @@ pub fn create_skin_window(
         install_frameless(app, hwnd.0 as isize, &skin.id);
         // 边缘吸附状态登记（子类 WM_MOVING 按 HWND 查询）
         crate::window::snap::upsert(hwnd.0 as isize, config.edge_snap, config.snap_gap);
+        // 鼠标穿透：先登记 HWND（子类随即对 TRANSPARENT|LAYERED 放行），再让
+        // tao 置位——顺序反了位会被子类摘回。失效仅降级为「不穿透」，不阻断建窗。
+        if config.click_through {
+            set_passthrough_hwnd(hwnd.0 as isize, true);
+            if let Err(e) = window.set_ignore_cursor_events(true) {
+                log::warn!("set_ignore_cursor_events failed for '{}': {}", skin.id, e);
+            }
+        }
     }
 
     // 4. Show, then schedule one deferred cleanup (runs on the owner thread
@@ -701,7 +938,7 @@ pub fn create_skin_window(
                 tauri::WindowEvent::Moved(position) => {
                     let scale_factor = app_handle
                         .get_webview_window(&label_for_event)
-                        .and_then(|w| w.scale_factor().ok())
+                        .map(|w| persistence_scale_factor(&w))
                         .unwrap_or(1.0);
                     let x = (position.x as f64 / scale_factor).round() as i32;
                     let y = (position.y as f64 / scale_factor).round() as i32;
@@ -719,7 +956,7 @@ pub fn create_skin_window(
                 tauri::WindowEvent::Resized(size) => {
                     let scale_factor = app_handle
                         .get_webview_window(&label_for_event)
-                        .and_then(|w| w.scale_factor().ok())
+                        .map(|w| persistence_scale_factor(&w))
                         .unwrap_or(1.0);
                     let w = (size.width as f64 / scale_factor).round() as u32;
                     let h = (size.height as f64 / scale_factor).round() as u32;
@@ -772,31 +1009,6 @@ pub fn create_skin_window(
     Ok(window)
 }
 
-/// Update an existing skin window at runtime
-pub fn update_window_config(
-    window: &tauri::WebviewWindow,
-    config: &SkinRuntimeConfig,
-) -> Result<(), String> {
-    window.eval(&format!(
-        "document.documentElement.style.opacity='{}';", config.opacity
-    )).map_err(|e| format!("opacity: {}", e))?;
-
-    window.set_always_on_top(config.always_on_top)
-        .map_err(|e| format!("always_on_top: {}", e))?;
-
-    if let (Some(x), Some(y)) = (config.x, config.y) {
-        // Config stores logical pixels.
-        window.set_position(tauri::LogicalPosition::new(x as f64, y as f64))
-            .map_err(|e| format!("position: {}", e))?;
-    }
-
-    // Config stores logical pixels, matching create_skin_window's inner_size.
-    window.set_size(tauri::LogicalSize::new(config.width as f64, config.height as f64))
-        .map_err(|e| format!("size: {}", e))?;
-
-    Ok(())
-}
-
 pub fn skin_window_label(skin_id: &str) -> String {
     format!("skin-{}", skin_id)
 }
@@ -832,6 +1044,9 @@ pub fn close_skin_window_nowait(app: &AppHandle, label: &str) -> Result<(), Stri
                 app.state::<crate::AppState>().pinner.unpin(skin_id, hwnd.0 as isize);
                 // 摘除边缘吸附登记（HWND 会被系统回收复用，不能残留）
                 crate::window::snap::unregister(hwnd.0 as isize);
+                // 摘除穿透登记（同理，HWND 复用不能残留）
+                #[cfg(target_os = "windows")]
+                set_passthrough_hwnd(hwnd.0 as isize, false);
             }
         } else {
             app.state::<crate::AppState>().pinner.unpin(skin_id, 0);
@@ -841,7 +1056,32 @@ pub fn close_skin_window_nowait(app: &AppHandle, label: &str) -> Result<(), Stri
         // No RemoveWindowSubclass: it must run on the owner thread (this
         // usually runs on a worker) and is unnecessary anyway — comctl32
         // destroys the subclass automatically when the window is destroyed.
-        window.close().map_err(|e| format!("Failed to close window: {}", e))?;
+        #[cfg(target_os = "windows")]
+        let hwnd_dead = {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+            window
+                .hwnd()
+                .map(|h| !unsafe { IsWindow(Some(HWND(h.0 as *mut _))) }.as_bool())
+                .unwrap_or(true)
+        };
+        #[cfg(not(target_os = "windows"))]
+        let hwnd_dead = false;
+        if hwnd_dead {
+            // hwnd 已死时的兜底路径（原为壁纸层皮肤随 explorer 重启被连坐
+            // 销毁的场景；壁纸层已移除，该场景不复存在，此分支保留为通用
+            // 防御）：close() 的 label 释放链依赖永远等不到的 tao Destroyed
+            // 事件（窗口管理器不给跨进程子窗投递 WM_DESTROY，tao 的
+            // Window::drop 也只是 PostMessage 到死句柄）——改走 destroy()：
+            // vendored tauri-runtime-wry 的补丁（vendor/tauri-runtime-wry
+            // 的 NOTE(driftlet)）发现死句柄会补发 Destroyed 流程，释放
+            // 全部注册表条目，label 得以复用。
+            window
+                .destroy()
+                .map_err(|e| format!("Failed to destroy window: {}", e))?;
+        } else {
+            window.close().map_err(|e| format!("Failed to close window: {}", e))?;
+        }
     }
     Ok(())
 }
@@ -911,6 +1151,25 @@ fn debounced_config_flush(app: &AppHandle, skin_id: &str) {
             break;
         }
     });
+}
+
+/// 退出兜底：拖动防抖的末次落盘可能还在等定时器（约 0.5–1s），进程退出会
+/// 丢掉它——有 pending 定时器时同步落一次盘。内存配置在每次拖动事件时已
+/// 即时更新，这里只补文件写入；与定时器线程的写入经同一把 config 锁串行
+/// （内容相同，temp+rename 幂等）；无 pending 时零开销。
+pub fn flush_pending_drag_saves(app: &AppHandle) {
+    let any_pending = {
+        let map = DRAG_SAVE_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        map.values().any(|st| st.timer_running)
+    };
+    if !any_pending {
+        return;
+    }
+    let state = app.state::<crate::AppState>();
+    let app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    if let Err(e) = crate::skin::config::save_config(&state.config_dir, &app_config) {
+        log::warn!("Failed to flush pending drag saves on exit: {}", e);
+    }
 }
 
 /// Persist a dragged position (logical pixels).

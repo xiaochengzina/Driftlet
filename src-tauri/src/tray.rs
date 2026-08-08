@@ -212,6 +212,10 @@ fn graceful_exit(app: &AppHandle) {
         let _ = main_win.close();
     }
 
+    // 3.5 拖动防抖的末次落盘可能还在等定时器——同步 flush 后再退，
+    //     否则「拖完皮肤立即退托盘」会丢最终位置/尺寸（内存已更新、磁盘未写）。
+    crate::window::factory::flush_pending_drag_saves(app);
+
     // 4. Now exit. All WebviewWindow handles have been dropped / close() called,
     //    so WebView2 has had time to begin its async teardown.
     //    We call exit(0) on the current (main) thread — not a spawned thread.

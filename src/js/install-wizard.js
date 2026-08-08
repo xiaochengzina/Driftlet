@@ -46,7 +46,9 @@ export default class InstallWizard {
         </button>
       </div>
       <div class="wizard-body" id="wizard-body"></div>`;
-    document.getElementById('app').appendChild(this.overlay);
+    // 挂 document.body（同 settings overlay）：app.js rerender()（语言切换）
+    // 会重写 #app.innerHTML，挂在里面会被静默销毁，detached DOM 继续空转
+    document.body.appendChild(this.overlay);
 
     this.overlay.querySelector('.wizard-close').onclick = () => this.close();
     this._inspect(packagePath);

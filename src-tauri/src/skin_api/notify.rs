@@ -4,7 +4,7 @@
 //!  1. The process has an AppUserModelID (lib.rs calls
 //!     `SetCurrentProcessExplicitAppUserModelID("Driftlet")` at startup);
 //!  2. A Start Menu shortcut carrying the SAME AUMID must exist —
-//!     `ensure_shortcut` creates it on first use.  Without the shortcut,
+//!     `ensure_aumid_shortcut` creates it on first use.  Without the shortcut,
 //!     `CreateToastNotifierWithId` succeeds but the toast never shows.
 //!
 //! Step 2 is the IShellLink + IPropertyStore(PKEY_AppUserModel_ID) dance

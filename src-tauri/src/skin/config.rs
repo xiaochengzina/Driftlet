@@ -21,7 +21,17 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
             let content = content.trim_start_matches('\u{feff}');
             match serde_json::from_str::<AppConfig>(content) {
                 Ok(mut config) => {
-                    normalize_mode_flags(&mut config);
+                    if normalize_mode_flags(&mut config) {
+                        // 迁移结果立即落盘：否则 wallpaper_layer=true 会留到
+                        // 下次偶然保存，每次启动都重复触发迁移与重绘。
+                        if let Err(e) = save_config(config_dir, &config) {
+                            log::warn!("Failed to persist migrated config: {}", e);
+                        }
+                        // 壁纸层迁移：旧版皮肤的壁纸表面可能留有黑色破洞
+                        // （旧版无自愈），一次性强制重绘兜底（见
+                        // normalize_mode_flags 注释）。
+                        crate::desktop::repaint_wallpaper_surfaces_once();
+                    }
                     config
                 }
                 Err(e) => {
@@ -40,16 +50,36 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
     }
 }
 
-/// "always_on_top" and "on_desktop" are mutually exclusive and exactly one
-/// must be on.  Older configs could persist a both-off (or both-on) state;
-/// normalize any invalid combination to the default placement (on-desktop).
-pub(crate) fn normalize_mode_flags(config: &mut AppConfig) {
+/// "always_on_top" / "on_desktop" are mutually exclusive and exactly one
+/// must be on.  Older configs could persist an invalid combination;
+/// normalize any non-single-true state to the default placement
+/// (on-desktop).
+///
+/// 历史字段迁移：`wallpaper_layer`（壁纸层，已随本版本移除）为 true 的
+/// 旧配置一律归一化为贴桌面，并清掉该标志（下次保存即恒为 false）。
+/// 返回是否有条目发生了壁纸层迁移——仅启动加载路径关心：旧版壁纸层
+/// 用户的壁纸表面可能留有黑色破洞，需要一次性强制重绘兜底（见
+/// desktop.rs `repaint_wallpaper_surfaces_once`）。
+pub(crate) fn normalize_mode_flags(config: &mut AppConfig) -> bool {
+    let mut migrated_wallpaper = false;
     for skin_cfg in config.skin_settings.values_mut() {
-        if skin_cfg.always_on_top == skin_cfg.on_desktop {
+        #[allow(deprecated)]
+        if skin_cfg.wallpaper_layer {
+            skin_cfg.wallpaper_layer = false;
+            skin_cfg.always_on_top = false;
+            skin_cfg.on_desktop = true;
+            migrated_wallpaper = true;
+        }
+        let trues = [skin_cfg.always_on_top, skin_cfg.on_desktop]
+            .iter()
+            .filter(|b| **b)
+            .count();
+        if trues != 1 {
             skin_cfg.always_on_top = false;
             skin_cfg.on_desktop = true;
         }
     }
+    migrated_wallpaper
 }
 
 /// Drop persisted entries (skin_settings / loaded_skins) for skins that no

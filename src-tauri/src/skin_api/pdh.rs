@@ -1,7 +1,7 @@
 //! Minimal PDH multi-instance counter reader (Windows only).
 //!
 //! One instance per counter path (`\GPU Engine(*)\Utilization Percentage`,
-//! `\PhysicalDisk(*)\Disk Read Bytes/sec`, ...).  `sample()` collects and
+//! `\LogicalDisk(*)\Disk Read Bytes/sec`, ...).  `sample()` collects and
 //! formats every instance; the first call after creation primes the rate
 //! baseline and returns an empty Vec (same convention as the sysinfo
 //! samplers: first reading is 0).

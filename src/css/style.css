@@ -21,7 +21,7 @@
 
   --text-primary: #102a33;
   --text-secondary: #4d616e;
-  --text-faint: #6e828d;
+  --text-faint: #5d717c;
 
   /* 辅助色 = logo 海浪蓝：深水 #0e75c3（浅浪 #2da0db 的深色端），白底 4.8:1 */
   --accent: #0e75c3;
@@ -30,17 +30,23 @@
   --accent-select: var(--accent);
   --accent-select-soft: var(--accent-soft);
   --accent-select-ring: rgba(14, 117, 195, 0.38);
-  /* 主按钮实色渐变：海浪由浅入深，白字（渐变两端对比度 ≥ 4.5:1） */
+  /* 主按钮实色渐变：海浪由浅入深，白字（渐变两端对比度 ≥ 4.5:1）。
+     --accent-grad 在深色主题下自动取深色块的 from/to（var 在使用处解析） */
   --accent-grad-from: #1279c4;
   --accent-grad-to: #0e68b4;
+  --accent-grad: linear-gradient(150deg, var(--accent-grad-from), var(--accent-grad-to));
   --accent-ink: #ffffff;
 
   --danger: #c2402f;
   --danger-soft: rgba(194, 64, 47, 0.1);
   --danger-btn: #c2402f;
   --danger-btn-hover: #a93425;
+  /* danger 按钮/徽标上的文字与图标色 */
+  --danger-ink: #fff;
   --success: #0e7a4f;
   --success-soft: rgba(14, 122, 79, 0.1);
+  /* 状态徽标描边（.status-badge.loaded 等信号灯 hairline） */
+  --success-ring: rgba(14, 122, 79, 0.35);
 
   /* 海图网格线（空态背景） */
   --chart-line: rgba(14, 117, 195, 0.05);
@@ -49,7 +55,13 @@
   --radius-md: 8px;
   --radius-sm: 6px;
   --shadow-pop: 0 18px 50px rgba(15, 60, 80, 0.18);
+  /* 缓动令牌（规范见 docs/交互动画.md）：
+     --ease      颜色/悬停过渡用（软曲线，hover/color 场景）；
+     --ease-out  入场/出场/按压用（强 ease-out，起步快、显响应） */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  /* 禁用态统一不透明度 */
+  --disabled-opacity: 0.45;
 
   /* 字体：Bahnschrift = 船用仪表刻印（拉丁大写加宽字距），
      中文落回雅黑；坐标/版本/元信息用等宽 */
@@ -77,7 +89,7 @@
 
   --text-primary: #c8dae1;
   --text-secondary: #87a0ab;
-  --text-faint: #5f7883;
+  --text-faint: #6b8794;
 
   /* 天蓝（≈199°）：取自 logo 上半部分的天空蓝（#aadffa 一带）压暗而来 */
   --accent: #5fbde8;
@@ -97,6 +109,7 @@
   --danger-btn-hover: #dc5a4e;
   --success: #46c48d;
   --success-soft: rgba(70, 196, 141, 0.12);
+  --success-ring: rgba(70, 196, 141, 0.35);
 
   /* 海图网格线（空态背景） */
   --chart-line: rgba(110, 196, 236, 0.05);
@@ -129,12 +142,6 @@ body {
   overflow: hidden;
 }
 
-/* Win10 无 DWM 窗框修饰（Win11 会画 1px 轮廓），自补一圈内描边。
-   box-sizing: border-box 全局生效，描边画在窗口内侧不占布局。 */
-html.no-native-frame #app {
-  border: 1px solid var(--border);
-}
-
 /* 交互元素不参与窗口拖动 */
 input, button, select, textarea {
   -webkit-app-region: no-drag !important;
@@ -148,7 +155,7 @@ button {
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -225,20 +232,29 @@ textarea:focus-visible {
   top: -1px;
 }
 
-/* 标题栏版本号：等宽坐标牌式；取自 tauri.conf.json，获取失败留空时整体隐藏 */
-.brand-version {
+/* 标题栏版本号 / 侧栏皮肤数量徽标：等宽坐标牌式描边徽章（共用基样式）。
+   内容为空时（版本获取失败 / 无皮肤时 JS 置空字符串）:empty 整体收起 */
+.brand-version,
+.sidebar-count {
   padding: 2px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--accent);
-  font-size: 10px;
+  font-size: 10.5px;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
 }
 
-.brand-version:empty {
+.brand-version:empty,
+.sidebar-count:empty {
   display: none;
+}
+
+/* 版本号取自 tauri.conf.json；标题栏内不被压缩，版本字符串可复制 */
+.brand-version {
+  flex-shrink: 0;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .win-btns {
@@ -256,7 +272,7 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 /* hover-ok 门控：窗口隐藏/失焦时由 JS 摘除，重显后等第一次真实
@@ -269,7 +285,7 @@ body.hover-ok .win-btn:hover {
 
 body.hover-ok .win-btn-close:hover {
   background: var(--danger-btn);
-  color: #fff;
+  color: var(--danger-ink);
 }
 
 /* ── 整体布局 ── */
@@ -316,21 +332,10 @@ body.hover-ok .win-btn-close:hover {
   letter-spacing: 0.5px;
 }
 
-/* 皮肤数量徽标：无皮肤时 JS 置空字符串，:empty 收起 */
+/* 皮肤数量徽标：基样式与 .brand-version 共用（见标题栏区），此处仅微调 */
 .sidebar-count {
   min-width: 20px;
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--accent);
-  font-size: 10.5px;
-  font-family: var(--font-mono);
   text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
-.sidebar-count:empty {
-  display: none;
 }
 
 .skin-list {
@@ -356,15 +361,15 @@ body.hover-ok .win-btn-close:hover {
   height: 32px;
   border: none;
   border-radius: var(--radius-sm);
-  background-image: linear-gradient(150deg, var(--accent-grad-from), var(--accent-grad-to));
+  background-image: var(--accent-grad);
   color: var(--accent-ink);
   font-size: 12.5px;
   font-weight: 650;
   letter-spacing: 0.3px;
-  transition: filter 0.15s var(--ease);
+  transition: filter 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
-.btn-add:hover {
+body.hover-ok .btn-add:not(:disabled):hover {
   filter: brightness(1.07);
 }
 
@@ -383,10 +388,10 @@ body.hover-ok .win-btn-close:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
-.icon-btn:hover {
+body.hover-ok .icon-btn:hover {
   color: var(--text-primary);
   border-color: var(--border-strong);
   background: var(--bg-surface);
@@ -433,7 +438,7 @@ body.hover-ok .win-btn-close:hover {
     transform 0.15s var(--ease);
 }
 
-.skin-card:hover {
+body.hover-ok .skin-card:hover {
   border-color: var(--border-strong);
   background: var(--bg-surface-hover);
   transform: translateY(-1px);
@@ -543,7 +548,7 @@ body.hover-ok .win-btn-close:hover {
 }
 
 .status-badge.loaded {
-  border-color: rgba(70, 196, 141, 0.35);
+  border-color: var(--success-ring);
   background: var(--success-soft);
   color: var(--success);
 }
@@ -573,22 +578,24 @@ body.hover-ok .win-btn-close:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), opacity 0.15s var(--ease);
   flex-shrink: 0;
   padding: 0;
   opacity: 0;
 }
 
-.skin-card:hover .skin-delete-btn,
+body.hover-ok .skin-card:hover .skin-delete-btn,
 .skin-delete-btn:focus-visible {
   opacity: 1;
 }
 
 .skin-delete-btn:hover {
   background: var(--danger-btn);
-  color: #fff;
+  color: var(--danger-ink);
 }
 
+/* 浮在预览图上的特殊场景：0.3 比全局 --disabled-opacity 更低，
+   避免禁用删除钮在图上过于显眼，故保留字面值 */
 .skin-delete-btn.disabled {
   opacity: 0.3 !important;
   cursor: not-allowed;
@@ -608,11 +615,11 @@ body.hover-ok .win-btn-close:hover {
   border: 1px solid var(--accent);
   background: transparent;
   color: var(--accent);
-  transition: all 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
-.load-btn:hover {
-  background-image: linear-gradient(150deg, var(--accent-grad-from), var(--accent-grad-to));
+body.hover-ok .load-btn:not(:disabled):hover {
+  background-image: var(--accent-grad);
   border-color: transparent;
   color: var(--accent-ink);
 }
@@ -622,11 +629,11 @@ body.hover-ok .win-btn-close:hover {
   color: var(--text-secondary);
 }
 
-.load-btn.unload:hover {
+body.hover-ok .load-btn.unload:not(:disabled):hover {
   background: var(--danger-btn);
   background-image: none;
   border-color: var(--danger-btn);
-  color: #fff;
+  color: var(--danger-ink);
 }
 
 /* ── 主面板 ── */
@@ -699,12 +706,14 @@ body.hover-ok .win-btn-close:hover {
   max-width: 640px;
   margin: 0 auto;
   padding: 26px 30px 36px;
-  animation: fadeUp 0.25s var(--ease);
+  animation: contentFade 0.15s var(--ease-out);
 }
 
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
+/* 内容区入场：纯透明渐变，不带位移——选皮肤/切页签是每天数十次的
+   列表导航，位移入场会拖慢感知（规范见 docs/交互动画.md 频率表） */
+@keyframes contentFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* 面板头部：日志页眉——名称/元信息 + 运行状态，下缘虚线海图尺 */
@@ -746,6 +755,9 @@ body.hover-ok .win-btn-close:hover {
   font-family: var(--font-mono);
   color: var(--text-secondary);
   margin-top: 6px;
+  /* 头部作者/版本/路径行需可复制（body 全局 user-select:none） */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .config-panel .subtitle:empty {
@@ -814,7 +826,7 @@ html[lang="en"] .config-section h3 .sec-en {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 0;
+  padding: 12px 0;
 }
 
 /* 左侧「标签+说明」单元格：必须可收缩（min-width:0），长说明文字在单元格内
@@ -877,7 +889,7 @@ html[lang="en"] .config-section h3 .sec-en {
 }
 
 .toggle input:checked + .slider {
-  background-image: linear-gradient(150deg, var(--accent-grad-from), var(--accent-grad-to));
+  background-image: var(--accent-grad);
   border-color: transparent;
 }
 
@@ -887,8 +899,14 @@ html[lang="en"] .config-section h3 .sec-en {
 }
 
 .toggle input:disabled + .slider {
-  opacity: 0.4;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
+}
+
+/* 原生 checkbox 被 opacity:0 藏掉且尺寸 0×0，焦点描边画在滑块上 */
+.toggle input:focus-visible + .slider {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* 滑块 */
@@ -949,7 +967,7 @@ html[lang="en"] .config-section h3 .sec-en {
 }
 
 .range-slider:disabled {
-  opacity: 0.4;
+  opacity: var(--disabled-opacity);
 }
 
 /* 数字输入（坐标读数） */
@@ -967,23 +985,12 @@ html[lang="en"] .config-section h3 .sec-en {
   color: var(--text-faint);
 }
 
+/* 基样式（padding/背景/边框/焦点环等）与 .cfg-input/.cfg-select/.cfg-textarea
+   共用，见下方公共选择器组；此处仅保留数字输入的专属项 */
 .num-inputs input {
   width: 74px;
-  padding: 6px 8px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 12.5px;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  outline: none;
-  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
-}
-
-.num-inputs input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .num-inputs input:disabled {
@@ -991,8 +998,12 @@ html[lang="en"] .config-section h3 .sec-en {
 }
 
 /* 皮肤自定义设置控件 */
+/* 输入控件公共基样式：数字输入 / 设置输入·下拉 / 长文本逐字相同的部分；
+   差异项（宽度、等宽字体、resize 等）在各自规则单独覆盖 */
+.num-inputs input,
 .cfg-input,
-.cfg-select {
+.cfg-select,
+.cfg-textarea {
   padding: 6px 8px;
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -1003,8 +1014,10 @@ html[lang="en"] .config-section h3 .sec-en {
   transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 
+.num-inputs input:focus,
 .cfg-input:focus,
-.cfg-select:focus {
+.cfg-select:focus,
+.cfg-textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -1030,10 +1043,16 @@ html[lang="en"] .config-section h3 .sec-en {
 .cfg-input[type="number"],
 .cfg-input[type="time"],
 .cfg-input[type="date"],
-.cfg-input[type="datetime-local"],
 .cfg-input[type="password"],
 .cfg-select {
   width: 160px;
+}
+
+/* 中文环境的原生日期时间控件约需 205px（与 .dt-time 一致），
+   不随侧排控件的 160px，单独放宽 */
+.cfg-input[type="datetime-local"] {
+  width: 205px;
+  min-width: 205px;
 }
 
 .cfg-color {
@@ -1068,7 +1087,7 @@ html[lang="en"] .config-section h3 .sec-en {
   transition: background 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 
-.cfg-tab:hover {
+body.hover-ok .cfg-tab:hover {
   color: var(--text-primary);
 }
 
@@ -1092,25 +1111,12 @@ html[lang="en"] .config-section h3 .sec-en {
   margin-bottom: 8px;
 }
 
-/* 长文本 */
+/* 长文本（基样式与焦点环见上方公共选择器组，此处仅专属项） */
 .cfg-textarea {
   width: 100%;
-  padding: 6px 8px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 12.5px;
   font-family: inherit;
   line-height: 1.5;
   resize: vertical;
-  outline: none;
-  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
-}
-
-.cfg-textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* 多选开关（chips） */
@@ -1130,10 +1136,10 @@ html[lang="en"] .config-section h3 .sec-en {
   /* 皮肤作者给的长选项文本（或无空格长串）不得撑破卡片 */
   max-width: 100%;
   overflow-wrap: anywhere;
-  transition: all 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
-.cfg-chip:not(:disabled):hover {
+body.hover-ok .cfg-chip:not(:disabled):hover {
   border-color: var(--border-strong);
   color: var(--text-primary);
 }
@@ -1162,7 +1168,7 @@ html[lang="en"] .config-section h3 .sec-en {
   background: var(--bg-input);
   border: none;
   border-right: 1px solid var(--border);
-  transition: all 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
   /* 长选项文本（或无空格长串）在段内换行，而不是被 overflow:hidden 裁掉 */
   overflow-wrap: anywhere;
 }
@@ -1171,7 +1177,7 @@ html[lang="en"] .config-section h3 .sec-en {
   border-right: none;
 }
 
-.cfg-segment:not(:disabled):hover {
+body.hover-ok .cfg-segment:not(:disabled):hover {
   color: var(--text-primary);
 }
 
@@ -1229,7 +1235,7 @@ html[lang="en"] .config-section h3 .sec-en {
   transition: transform 0.12s var(--ease), border-color 0.12s var(--ease), box-shadow 0.12s var(--ease);
 }
 
-.cfg-swatch:not(:disabled):hover {
+body.hover-ok .cfg-swatch:not(:disabled):hover {
   transform: scale(1.12);
 }
 
@@ -1295,8 +1301,8 @@ html[lang="en"] .config-section h3 .sec-en {
   padding: 0;
 }
 
-.cfg-pw-toggle:hover {
-  color: var(--text);
+body.hover-ok .cfg-pw-toggle:not(:disabled):hover {
+  color: var(--text-primary);
   background: var(--accent-soft);
 }
 
@@ -1354,7 +1360,7 @@ html[lang="en"] .config-section h3 .sec-en {
   transition: color 0.15s var(--ease), border-color 0.15s var(--ease);
 }
 
-.task-del:not(:disabled):hover {
+body.hover-ok .task-del:not(:disabled):hover {
   color: var(--danger);
   border-color: var(--danger);
 }
@@ -1380,7 +1386,7 @@ html[lang="en"] .config-section h3 .sec-en {
 }
 
 .todo-check:checked {
-  background-image: linear-gradient(150deg, var(--accent-grad-from), var(--accent-grad-to));
+  background-image: var(--accent-grad);
   border-color: transparent;
 }
 
@@ -1416,21 +1422,23 @@ html[lang="en"] .config-section h3 .sec-en {
   border: 1px solid var(--border-strong);
   background: transparent;
   color: var(--text-primary);
-  transition: all 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), filter 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
-.action-btn:hover {
-  background: var(--bg-surface-hover);
+/* 只改 background-color：简写 background 会把 .action-btn.primary 的
+   渐变 background-image 一并重置（本规则特异性已高于变体规则） */
+body.hover-ok .action-btn:not(:disabled):hover {
+  background-color: var(--bg-surface-hover);
 }
 
 .action-btn.primary {
-  background-image: linear-gradient(150deg, var(--accent-grad-from), var(--accent-grad-to));
+  background-image: var(--accent-grad);
   border-color: transparent;
   color: var(--accent-ink);
   font-weight: 650;
 }
 
-.action-btn.primary:hover {
+body.hover-ok .action-btn.primary:not(:disabled):hover {
   filter: brightness(1.07);
 }
 
@@ -1439,10 +1447,10 @@ html[lang="en"] .config-section h3 .sec-en {
   color: var(--danger);
 }
 
-.action-btn.danger:hover {
+body.hover-ok .action-btn.danger:not(:disabled):hover {
   background: var(--danger-btn);
   border-color: var(--danger-btn);
-  color: #fff;
+  color: var(--danger-ink);
 }
 
 /* ── Toast ── */
@@ -1462,8 +1470,11 @@ html[lang="en"] .config-section h3 .sec-en {
   color: var(--text-primary);
   z-index: 300;
   box-shadow: var(--shadow-pop);
-  animation: toastIn 0.25s var(--ease);
+  animation: toastIn 0.25s var(--ease-out);
   max-width: 320px;
+  /* 错误信息/路径需可复制（body 全局 user-select:none） */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* 类型色点：与左侧色条同色系，带微光 */
@@ -1479,7 +1490,7 @@ html[lang="en"] .config-section h3 .sec-en {
 
 .toast.success { border-left-color: var(--success); }
 .toast.error { border-left-color: var(--danger); }
-.toast.info { border-left-color: var(--accent); }
+/* .toast.info 无需覆盖：基规则的 border-left 已是 var(--accent) */
 
 .toast.success::before { background: var(--success); box-shadow: 0 0 6px var(--success); }
 .toast.error::before { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
@@ -1489,9 +1500,9 @@ html[lang="en"] .config-section h3 .sec-en {
   to { transform: none; opacity: 1; }
 }
 
-/* 向上缓缓淡出（单例提示，见 src/js/toast.js） */
+/* 向上淡出（单例提示，见 src/js/toast.js）：0.2s 收在 300ms UI 预算内 */
 .toast-out {
-  animation: toastOut 0.45s var(--ease) forwards;
+  animation: toastOut 0.2s var(--ease-out) forwards;
   pointer-events: none;
 }
 
@@ -1512,7 +1523,7 @@ html[lang="en"] .config-section h3 .sec-en {
   align-items: center;
   justify-content: center;
   z-index: 200;
-  animation: fadeIn 0.15s var(--ease);
+  animation: fadeIn 0.15s var(--ease-out);
   /* 窗口太矮、面板超高时允许纵向滚动（配合子级 margin:auto 的安全居中） */
   overflow-y: auto;
 }
@@ -1534,7 +1545,7 @@ html[lang="en"] .config-section h3 .sec-en {
 }
 
 .confirm-dialog {
-  animation: popIn 0.2s var(--ease);
+  animation: popIn 0.2s var(--ease-out);
   padding: 26px 28px;
   width: 360px;
   max-width: 88vw;
@@ -1578,10 +1589,11 @@ html[lang="en"] .config-section h3 .sec-en {
   font-weight: 600;
 }
 
-.confirm-hint {
-  font-size: 11px !important;
-  color: var(--danger) !important;
-  margin-top: 8px !important;
+/* 特异性高于 .confirm-dialog p（0,2,0 > 0,1,1），无需 !important */
+.confirm-dialog .confirm-hint {
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 8px;
 }
 
 .confirm-buttons {
@@ -1596,7 +1608,7 @@ html[lang="en"] .config-section h3 .sec-en {
   border-radius: var(--radius-sm);
   font-size: 12.5px;
   font-weight: 550;
-  transition: all 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), border-color 0.15s var(--ease), filter 0.15s var(--ease), transform 0.12s var(--ease-out);
   border: 1px solid var(--border-strong);
 }
 
@@ -1605,37 +1617,49 @@ html[lang="en"] .config-section h3 .sec-en {
   color: var(--text-primary);
 }
 
-.confirm-btn.cancel:hover {
+body.hover-ok .confirm-btn.cancel:not(:disabled):hover {
   background: var(--bg-surface-hover);
 }
 
 .confirm-btn.danger {
   background: var(--danger-btn);
   border-color: var(--danger-btn);
-  color: #fff;
+  color: var(--danger-ink);
 }
 
-.confirm-btn.danger:hover {
+body.hover-ok .confirm-btn.danger:not(:disabled):hover {
   background: var(--danger-btn-hover);
   border-color: var(--danger-btn-hover);
 }
 
 .confirm-btn.primary {
-  background-image: linear-gradient(150deg, var(--accent-grad-from), var(--accent-grad-to));
+  background-image: var(--accent-grad);
   border-color: transparent;
   color: var(--accent-ink);
   font-weight: 650;
 }
 
-.confirm-btn.primary:hover {
+body.hover-ok .confirm-btn.primary:not(:disabled):hover {
   filter: brightness(1.07);
 }
 
-/* 确认框中的中性提示（如“设置数据将保留”），区别于红色危险提示 */
-.confirm-note {
-  font-size: 11px !important;
-  color: var(--success) !important;
-  margin-top: 8px !important;
+/* 更新弹窗「不再提示更新」勾选行（confirm 系弹层复用，居中一行） */
+.update-remind {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.update-remind input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 /* 设置面板不加面板级入场动画：任何面板 transform 入场都会带动行内容
@@ -1670,9 +1694,14 @@ html[lang="en"] .config-section h3 .sec-en {
 }
 
 .settings-row label {
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
+}
+
+/* 页签页入场：纯透明淡入（display 切换即重播），与配置面板同参数 */
+.settings-page {
+  animation: contentFade 0.15s var(--ease-out);
 }
 
 /* 主题选择：分段控件 */
@@ -1694,17 +1723,18 @@ html[lang="en"] .config-section h3 .sec-en {
   background: transparent;
   color: var(--text-secondary);
   font-size: 12.5px;
-  transition: all 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
-.theme-btn:hover {
-  /* 原仅文字变色，过于微弱：补一层底色（active 按钮的渐变盖在其上不受影响） */
-  background: var(--bg-surface);
+body.hover-ok .theme-btn:not(:disabled):hover {
+  /* 原仅文字变色，过于微弱：补一层底色。只改 background-color——
+     简写 background 会重置 .theme-btn.active 的渐变 background-image */
+  background-color: var(--bg-surface);
   color: var(--text-primary);
 }
 
 .theme-btn.active {
-  background-image: linear-gradient(150deg, var(--accent-grad-from), var(--accent-grad-to));
+  background-image: var(--accent-grad);
   color: var(--accent-ink);
   font-weight: 650;
 }
@@ -1718,12 +1748,26 @@ html[lang="en"] .config-section h3 .sec-en {
   background: transparent;
   color: var(--text-primary);
   font-size: 13px;
-  transition: all 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
-.settings-close:hover {
+body.hover-ok .settings-close:hover {
   background: var(--bg-surface-hover);
   border-color: var(--border-strong);
+}
+
+/* 按压反馈：可按压按钮统一 scale(0.97)，120ms 强 ease-out（各自的
+   transition 已含 transform 项；规范见 docs/交互动画.md） */
+.win-btn:not(:disabled):active,
+.icon-btn:not(:disabled):active,
+.btn-add:not(:disabled):active,
+.load-btn:not(:disabled):active,
+.action-btn:not(:disabled):active,
+.theme-btn:not(:disabled):active,
+.confirm-btn:not(:disabled):active,
+.cfg-chip:not(:disabled):active,
+.settings-close:not(:disabled):active {
+  transform: scale(0.97);
 }
 
 /* ── 动画 ── */
@@ -1745,7 +1789,7 @@ html[lang="en"] .config-section h3 .sec-en {
   background: var(--bg-app);
   display: flex;
   flex-direction: column;
-  animation: fadeIn 0.15s var(--ease);
+  animation: fadeIn 0.15s var(--ease-out);
 }
 
 .wizard-titlebar {
@@ -1789,7 +1833,7 @@ html[lang="en"] .config-section h3 .sec-en {
   width: 380px;
   max-width: 100%;
   text-align: center;
-  animation: popIn 0.2s var(--ease);
+  animation: popIn 0.2s var(--ease-out);
 }
 
 .wizard-pkg-icon {
@@ -1956,7 +2000,7 @@ html[lang="en"] .config-section h3 .sec-en {
   text-align: center;
   color: var(--text-secondary);
   font-size: 13px;
-  animation: fadeIn 0.15s var(--ease);
+  animation: fadeIn 0.15s var(--ease-out);
 }
 
 .wizard-status-sub {
@@ -2020,15 +2064,50 @@ html[lang="en"] .config-section h3 .sec-en {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-faint);
-  border: 2px solid transparent;
-  background-clip: padding-box;
 }
 
-/* ── 降低动态效果偏好 ── */
+/* ── 降低动态效果偏好 ──
+   降级而非清零：颜色/透明度反馈与加载 spinner 保留（保可理解性），
+   位移/缩放类运动移除（规范见 docs/交互动画.md）。
+   下列规则与原规则同特异性、位于文件末尾，靠层叠顺序覆盖 */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+  /* 位移/缩放类入场降级为纯透明渐变（contentFade/fadeIn 本就纯透明，无需覆盖） */
+  .confirm-dialog,
+  .wizard-card,
+  .toast {
+    animation-name: reducedFade;
   }
+  .toast-out {
+    animation-name: reducedFadeOut;
+  }
+  /* hover 位移/缩放关闭（颜色过渡保留）；滑块 thumb 保留基准 45° 旋转 */
+  body.hover-ok .skin-card:hover,
+  body.hover-ok .cfg-swatch:not(:disabled):hover {
+    transform: none;
+  }
+  .range-slider::-webkit-slider-thumb:hover {
+    transform: rotate(45deg);
+  }
+  /* 按压缩放关闭 */
+  .win-btn:not(:disabled):active,
+  .icon-btn:not(:disabled):active,
+  .btn-add:not(:disabled):active,
+  .load-btn:not(:disabled):active,
+  .action-btn:not(:disabled):active,
+  .theme-btn:not(:disabled):active,
+  .confirm-btn:not(:disabled):active,
+  .cfg-chip:not(:disabled):active,
+  .settings-close:not(:disabled):active {
+    transform: none;
+  }
+}
+
+@keyframes reducedFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes reducedFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }

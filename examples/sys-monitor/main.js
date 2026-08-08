@@ -3,7 +3,7 @@
 /**
  * sys-monitor —— 免权限系统信息仪表板。
  *
- * 演示文档 §5.2 全部 12 个只读系统信息命令（均无需声明 permissions）：
+ * 演示文档 §5.2 中除 3 个音量/媒体相关外的 12 个只读系统信息命令（均无需声明 permissions）：
  *   速率类（每秒轮询）：get_cpu_info / get_gpu_info / get_memory_info /
  *     get_disks_info / get_network_info / get_processes / get_battery_info /
  *     get_idle_time / get_foreground_window_info
@@ -296,13 +296,16 @@ async function refreshMemory() {
 }
 
 function renderMemory() {
-  const { ram, swap } = state.mem || {};
+  const { ram, swap, commit } = state.mem || {};
   setBar('ram-bar', ram?.usage_pct);
   setText('ram-pct', fmtPct(ram?.usage_pct));
   setText('ram-text', ram ? t('usedOf', fmtBytes(ram.used), fmtBytes(ram.total)) : '—');
   setBar('swap-bar', swap?.usage_pct);
   setText('swap-pct', fmtPct(swap?.usage_pct));
   setText('swap-text', swap ? t('usedOf', fmtBytes(swap.used), fmtBytes(swap.total)) : '—');
+  setBar('commit-bar', commit?.usage_pct);
+  setText('commit-pct', fmtPct(commit?.usage_pct));
+  setText('commit-text', commit ? t('usedOf', fmtBytes(commit.used), fmtBytes(commit.total)) : '—');
 }
 
 // get_disks_info

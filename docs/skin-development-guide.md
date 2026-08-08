@@ -384,7 +384,7 @@ const [cpu] = await window.__DESK_PP__.invoke('get_cpu_info');
 //   name: "Intel(R) Core(TM) i7-12700",
 //   physical_cores: 12,        // physical core count
 //   logical_cores: 20,         // logical thread count
-//   frequency_mhz: 4800,       // current max frequency (MHz)
+//   frequency_mhz: 4800,       // current frequency (MHz, same reading as Task Manager's "Speed"; may exceed base clock under turbo)
 //   usage: 23.5,               // total usage %
 //   usage_per_core: [10.1, ...] // per-thread usage %
 // }
@@ -398,25 +398,29 @@ Returns an array (reserved for multi-socket CPUs; always 1 entry on ordinary mac
 const gpus = await window.__DESK_PP__.invoke('get_gpu_info');
 // [{
 //   name: "NVIDIA GeForce RTX 3060",
+//   gpu_type: "discrete",          // adapter type: "discrete" | "integrated"
 //   usage: 12.0,               // usage % (summed across engines, capped at 100)
-//   vram_total: 12884901888,   // dedicated VRAM (bytes)
+//   vram_total: 12884901888,   // VRAM total (bytes): discrete = dedicated, integrated = shared system memory
 //   vram_used: 4294967296,
 //   vram_usage_pct: 33.3
 // }]
 ```
 
-Multiple GPUs return multiple entries; for integrated GPUs the VRAM semantics are driver-defined (usually much smaller than shared memory).
+Multiple GPUs return multiple entries; for integrated GPUs (unified memory) VRAM total/used are reported as shared system memory — "dedicated + shared" can exceed physical RAM, so it is not used as the accounting basis.
 
 #### `get_memory_info`
 
 ```js
 const mem = await window.__DESK_PP__.invoke('get_memory_info');
 // {
-//   ram:  { total, used, free, usage_pct, free_pct },  // physical memory
-//   swap: { total, used, free, usage_pct, free_pct }   // virtual memory (page file)
+//   ram:    { total, used, free, usage_pct, free_pct },  // physical memory
+//   swap:   { total, used, free, usage_pct, free_pct },  // page file (paged pool)
+//   commit: { total, used, free, usage_pct, free_pct }   // virtual memory (committed)
 // }
-// all sizes in bytes; percentages 0–100
+// all sizes in bytes; percentages 0–100; commit is Windows-only (null elsewhere)
 ```
+
+For virtual memory usage, read `commit`: Task Manager's "Committed xx/yy GB" — used = committed bytes, total = commit limit (RAM + page file − system reserve). `swap` is only the spill written to the page file and often stays 0 when RAM is plentiful.
 
 #### `get_disks_info`
 
@@ -449,11 +453,11 @@ const net = await window.__DESK_PP__.invoke('get_network_info');
 // {
 //   adapters: [{
 //     name: "Ethernet",
-//     ips: ["192.168.1.10", "fe80::1"],   // IPs of this adapter (loopback excluded)
+//     ips: ["192.168.1.10"],   // IPs of this adapter (loopback and IPv6 link-local excluded)
 //     mac: "AA:BB:CC:DD:EE:FF",
 //     upload_bps: 10240, download_bps: 204800  // bytes/sec (0 on first call)
 //   }],
-//   local_ips: ["192.168.1.10", ...]      // all LAN IPs of this machine (deduplicated)
+//   local_ips: ["192.168.1.10", ...]      // all IPs of this machine (deduplicated, same filtering)
 // }
 ```
 
@@ -463,7 +467,7 @@ Real-time spectrum of the sound the system is playing (WASAPI loopback capture, 
 
 ```js
 const { bands, peak } = await window.__DESK_PP__.invoke('get_audio_spectrum', { bands: 32 });
-// bands: [0.12, 0.85, ...]  // energy per band 0–1, logarithmically distributed 30Hz–16kHz; the bands param defaults to 32, max 64
+// bands: [0.12, 0.85, ...]  // energy per band 0–1, logarithmically distributed 30Hz–16kHz; the bands param defaults to 32, clamped to 1–64
 // peak: 0.42                // instantaneous peak volume 0–1
 ```
 
@@ -474,11 +478,13 @@ Rejects when there is no audio device or capture fails (recovers automatically a
 ```js
 const os = await window.__DESK_PP__.invoke('get_os_info');
 // {
-//   os_name: "Windows 11 Pro", os_version: "10.0.22631", build: 22631,
+//   os_name: "Windows 11 Pro", os_version: "11 (22631)", build: 22631,
 //   is_windows_11: true, host_name: "DESKTOP-ABC", user_name: "you",
 //   uptime_secs: 86400
 // }
 ```
+
+`os_name` is the product name (registry ProductName); `os_version` follows the `"{major} ({build})"` format.
 
 #### `get_processes`
 
@@ -490,7 +496,7 @@ const top = await window.__DESK_PP__.invoke('get_processes', { sort: 'cpu', limi
 // }
 ```
 
-`sort`: `"cpu"` (default) / `"memory"`; `limit` defaults to 10, max 100. `cpu` is a percentage (%) — like CPU info, **the first call returns 0 (baseline)**.
+`sort`: `"cpu"` (default) / `"memory"` (any other value falls back to `"cpu"`); `limit` defaults to 10, clamped to 1–100. `cpu` is a whole-machine percentage 0–100 (100 = all cores fully busy, same accounting as Task Manager), **the first call returns 0 (baseline)**.
 
 #### `get_volume`
 
@@ -510,11 +516,12 @@ const m = await window.__DESK_PP__.invoke('get_media_info');
 //   title: "Song title", artist: "Artist", album: "Album",
 //   status: "playing",                  // playing | paused | stopped
 //   position_secs: 42.5, duration_secs: 231.0,
-//   cover_base64: "<jpeg/png base64>"   // cover art; null when the source app doesn't provide one
+//   cover_base64: "<image base64>",     // cover art; null when the source app doesn't provide one
+//   cover_mime: "image/jpeg"            // cover format (sniffed from content); null when unrecognized
 // }
 ```
 
-Fields the player didn't report are empty strings; progress may likewise be 0.
+Fields the player didn't report are empty strings; progress may likewise be 0. `position_secs` is a snapshot of the player's last report and does not advance on its own during playback (reporting cadence varies by player — interpolate yourself if you need a smooth progress bar).
 
 #### `get_battery_info`
 
@@ -546,6 +553,8 @@ const w = await window.__DESK_PP__.invoke('get_foreground_window_info');
 // { title: "Document - Word", pid: 12345, process_name: "WINWORD.EXE" }
 ```
 
+`title` is capped at 512 characters (truncated beyond that); `process_name` is an empty string when it can't be determined (e.g. protected processes without sufficient privileges).
+
 #### `get_monitors`
 
 ```js
@@ -559,7 +568,7 @@ const ms = await window.__DESK_PP__.invoke('get_monitors');
 // }]
 ```
 
-Note that rect/work_area are **physical pixels**, differing from the logical pixels used in window config by a scale_factor.
+Note that rect/work_area are **physical pixels**, differing from the logical pixels used in window config by a scale_factor. A secondary monitor's `rect.x/y` can be negative (virtual coordinates left of / above the primary monitor).
 
 ### 5.3 Sensitive Capabilities (Require permissions in skin.json)
 
@@ -586,7 +595,7 @@ Limits:
 
 - `path` is always relative to the skin folder: absolute paths, `..`, path segments containing colons, and symlink escapes are rejected;
 - read ≤ 32MB, write ≤ 16MB;
-- `skin.json` and `settings.json` (including `.bak` / `.tmp`) are managed by the app — readable, but writing and deleting are forbidden;
+- `skin.json` and `settings.json` (including `.bak` / `.tmp`) are managed by the app — readable, but writing and deleting are forbidden (only these four files directly under the skin root; same-named files in subdirectories are unrestricted);
 - good for storing the skin's own cache/data; the skin folder is deleted along with the skin — don't use it as a persistent store.
 
 #### Registry Read-Only (Permission `registry`)
@@ -599,7 +608,7 @@ const v = await window.__DESK_PP__.invoke('read_registry_value', {
 ```
 
 - `root`: `HKCU` / `HKLM` / `HKCR` / `HKU` (full names like `HKEY_CURRENT_USER` are also accepted);
-- `kind`: `string` / `expand_string` / `multi_string` (value is an array) / `dword` / `qword` / `binary` (value is base64);
+- `kind`: `string` / `expand_string` / `multi_string` (value is an array) / `dword` / `qword` / `binary` (value is base64); `qword` is returned as a JSON number and loses precision beyond 2^53 (rare in practice);
 - read-only interface, no writing. Rejects when the key or value doesn't exist.
 
 #### Running Commands (Permission `shell`)
@@ -613,15 +622,16 @@ const r = await window.__DESK_PP__.invoke('run_command', {
 // { code: 0, stdout: "...", stderr: "" }
 ```
 
-- `timeoutMs`: default 30000, max 120000; on timeout the process is killed and the call rejects;
-- `stdout` / `stderr` are each truncated at 1MB; GBK output on Chinese Windows is transcoded automatically;
+- `timeoutMs`: default 30000, clamped to 100–120000 (milliseconds, decimals are rounded); on timeout the process is killed and the call rejects;
+- `stdout` / `stderr` are each truncated at 1MB (truncation does not stop the command from finishing normally); GBK output on Chinese Windows is transcoded automatically;
+- `code` is the process exit code (it can be negative for abnormal exits, e.g. -1073741819 = 0xC0000005);
 - launch failures (command not found, etc.) reject;
-- suited for one-shot query commands; processes needing interaction don't work; grandchild processes of long-running processes may not be cleaned up by the timeout — use with care.
+- suited for one-shot query commands; processes needing interaction don't work; grandchild processes of long-running processes may not be cleaned up by the timeout, and output can be incomplete while a grandchild holds the output pipes — use with care.
 
 #### System Volume & Media Control (Permission `system`)
 
 ```js
-await window.__DESK_PP__.invoke('set_volume', { volumePct: 60 });  // 0–100
+await window.__DESK_PP__.invoke('set_volume', { volumePct: 60 });  // 0–100, out-of-range values are clamped
 await window.__DESK_PP__.invoke('set_mute', { muted: true });
 
 const ok = await window.__DESK_PP__.invoke('media_control', { action: 'play_pause' });
@@ -746,6 +756,8 @@ The platform can't see inside skin pages; the following are on you:
 
 During development you can also test the full double-click install chain with a command-line argument: `npm run tauri dev -- -- "D:\path\x.dskin"`.
 
+Additionally, debug builds (`npm run tauri dev`) support skin hot reload: off by default; once enabled on the Settings page, a watcher recursively watches the whole skins directory, and a loaded skin reloads automatically after its file changes settle behind a 300 ms debounce — no manual right-click reload needed.
+
 ### 7.2 Debugging in a Plain Browser
 
 A skin is essentially a web page — layout, styles, and most logic can be debugged by opening `index.html` directly in a browser (or via the frontend preview after `npm run dev`):
@@ -840,6 +852,6 @@ The repo ships four example skins. `controls-demo` is the reference implementati
 | `examples/media-hub` | Volume read/set/mute, SMTC media info (cover / progress / status) and playback control (play_pause/next/previous), dual-source spectrum from system loopback and microphone (live canvas bars + peak line, paused while hidden, device auto-released ~30s after polling stops), toast notifications; permissions `system` + `mic` |
 | `examples/toolbox` | Clipboard read/write, skin-directory file write/read/list/delete, read-only registry (preset + custom keys), command execution (preset `ver`/`ipconfig` + custom, showing code/stdout/stderr), opening links (including a rejected `.exe` target demo), `skin_get_setting` / `skin_set_setting` (the only read channel for `password` values, writing settings back, syncing manager-side edits via `desk-setting-changed`); permissions `files` / `registry` / `shell` / `clipboard` / `system` |
 
-All four skins also follow: bilingual UI that follows the manager language, dynamic content rendered exclusively via `textContent` / DOM APIs, no crashes when the bridge is missing (plain-browser preview), and rejected-command error text displayed inline in the corresponding card.
+The four skins `controls-demo` / `sys-monitor` / `media-hub` / `toolbox` also follow: bilingual UI that follows the manager language, dynamic content rendered exclusively via `textContent` / DOM APIs, no crashes when the bridge is missing (plain-browser preview), and rejected-command error text displayed inline in the corresponding card.
 
 `controls-demo` and `sys-monitor` declare no `permissions` — every capability they use is permission-free.

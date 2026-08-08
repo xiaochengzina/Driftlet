@@ -1,5 +1,15 @@
 //! Skin-facing backend APIs: read-only system information plus the
-//! permission-gated capabilities (`files` / `registry` / `shell`).
+//! permission-gated capabilities.  Six permissions, each gating its own
+//! command set:
+//!
+//!   * `files`     — skin_read_file / skin_write_file / skin_list_dir /
+//!                   skin_delete_file (sandboxed to the skin's own folder)
+//!   * `registry`  — read_registry_value
+//!   * `shell`     — run_command
+//!   * `system`    — set_volume / set_mute / media_control / open_external /
+//!                   show_notification
+//!   * `clipboard` — read_clipboard_text / write_clipboard_text
+//!   * `mic`       — get_mic_spectrum
 //!
 //! Skins call these through `window.__DESK_PP__.invoke` — the bridge is a
 //! raw passthrough, so every command registered here is skin-callable.
@@ -41,6 +51,8 @@ use crate::AppState;
 #[derive(Debug, Clone, Serialize)]
 pub struct GpuInfo {
     pub name: String,
+    /// "discrete" | "integrated"（核显：D3D12 UMA 统一内存适配器）
+    pub gpu_type: String,
     pub usage: f32,
     pub vram_total: u64,
     pub vram_used: u64,
@@ -79,6 +91,9 @@ pub struct MediaInfo {
     pub duration_secs: f64,
     /// JPEG/PNG bytes as base64, when the source app provides artwork.
     pub cover_base64: Option<String>,
+    /// cover_base64 的格式（"image/jpeg" | "image/png" | ...），按 magic
+    /// bytes 嗅探；认不出来为 null（皮肤自行回退）。
+    pub cover_mime: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -137,7 +152,8 @@ pub struct MonitorInfo {
 pub const PERM_FILES: &str = "files";
 pub const PERM_REGISTRY: &str = "registry";
 pub const PERM_SHELL: &str = "shell";
-/// State-changing system controls: volume, media transport, open_external.
+/// State-changing system controls: volume (set_volume / set_mute), media
+/// transport (media_control), open_external, show_notification.
 pub const PERM_SYSTEM: &str = "system";
 /// Clipboard read+write (read can expose what the user just copied).
 pub const PERM_CLIPBOARD: &str = "clipboard";
@@ -208,6 +224,37 @@ fn new_light_system() -> sysinfo::System {
     )
 }
 
+/// 当前频率与任务管理器「速度」同算法：名义频率 × PDH `\Processor
+/// Information(_Total)\% Processor Performance`（该计数器 = 实测频率占名义
+/// 频率的百分比，全平台逐秒真实波动，turbo 时超 100%——TM 速度可超基准值
+/// 即源于此）。两条弯路：sysinfo 的频率来自 `CallNtPowerInformation` 的
+/// `CurrentMhz`，硬件自主 P-state（Speed Shift）的机器上恒为基准频率；
+/// PDH 直读 MHz 的 `Processor Frequency` 计数器在部分平台（台式机实测）
+/// 也恒报名义值。PDH 未就绪（首调基线/计数器缺失）时回退 sysinfo 静态值。
+#[cfg(target_os = "windows")]
+static CPU_PERF_PDH: Mutex<Option<pdh::PdhMultiCounter>> = Mutex::new(None);
+
+#[cfg(target_os = "windows")]
+fn cpu_performance_pct() -> Option<f64> {
+    let mut guard = CPU_PERF_PDH.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        *guard = pdh::PdhMultiCounter::new(
+            "\\Processor Information(_Total)\\% Processor Performance",
+        );
+    }
+    guard
+        .as_mut()?
+        .sample()
+        .into_iter()
+        .map(|(_, v)| v)
+        .find(|v| *v > 0.0)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn cpu_performance_pct() -> Option<f64> {
+    None
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CpuInfo {
     pub name: String,
@@ -222,15 +269,21 @@ pub struct CpuInfo {
 /// cores into one entry on typical PCs.  async：采样重负载不跑主线程。
 #[tauri::command]
 pub async fn get_cpu_info() -> Vec<CpuInfo> {
+    let perf_pct = cpu_performance_pct();
     let mut guard = CPU_SYS.lock().unwrap_or_else(|e| e.into_inner());
     let sys = guard.get_or_insert_with(new_light_system);
     sys.refresh_cpu_all();
     let cpus = sys.cpus();
+    let nominal_mhz = cpus.iter().map(|c| c.frequency()).max().unwrap_or(0);
     vec![CpuInfo {
         name: cpus.first().map(|c| c.brand().to_string()).unwrap_or_default(),
         physical_cores: sys.physical_core_count().unwrap_or(0),
         logical_cores: cpus.len(),
-        frequency_mhz: cpus.iter().map(|c| c.frequency()).max().unwrap_or(0),
+        // 任务管理器同款：名义频率 × 实测性能百分比；PDH 未就绪回退静态名义值
+        frequency_mhz: perf_pct
+            .map(|p| (nominal_mhz as f64 * p / 100.0).round() as u64)
+            .filter(|v| *v > 0)
+            .unwrap_or(nominal_mhz),
         usage: sys.global_cpu_usage(),
         usage_per_core: cpus.iter().map(|c| c.cpu_usage()).collect(),
     }]
@@ -255,7 +308,9 @@ impl MemoryGroup {
             used,
             free: total.saturating_sub(used),
             usage_pct,
-            free_pct: 100.0 - usage_pct,
+            // total 为 0（swap 禁用等）时按 0/0 报：给 free_pct 100 等于
+            // 宣称「不存在的空间全空着」
+            free_pct: if total == 0 { 0.0 } else { 100.0 - usage_pct },
         }
     }
 }
@@ -265,6 +320,10 @@ pub struct MemoryInfo {
     pub ram: MemoryGroup,
     /// Virtual memory = page file (swap), matching Task Manager's "分页" pool.
     pub swap: MemoryGroup,
+    /// 虚拟内存（提交）= 任务管理器「已提交 xx/yy GB」：total = 提交限制
+    /// （物理内存 + 页面文件总量 − 系统保留），used = 已提交字节数。
+    /// 页面文件用量在现代系统常恒 0，虚拟内存压力要看这组。仅 Windows 提供。
+    pub commit: Option<MemoryGroup>,
 }
 
 #[tauri::command]
@@ -275,7 +334,28 @@ pub fn get_memory_info() -> MemoryInfo {
     MemoryInfo {
         ram: MemoryGroup::new(sys.total_memory(), sys.used_memory()),
         swap: MemoryGroup::new(sys.total_swap(), sys.used_swap()),
+        commit: commit_group(),
     }
+}
+
+/// 已提交/提交限制走 psapi `GetPerformanceInfo`（与任务管理器同源）：
+/// 直查内核计数器，无 PDH 两阶段采样，首次调用即有效。
+#[cfg(target_os = "windows")]
+fn commit_group() -> Option<MemoryGroup> {
+    use windows::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFORMATION};
+    let mut info = PERFORMANCE_INFORMATION::default();
+    info.cb = std::mem::size_of::<PERFORMANCE_INFORMATION>() as u32;
+    unsafe { GetPerformanceInfo(&mut info, info.cb) }.ok()?;
+    let page = info.PageSize as u64;
+    Some(MemoryGroup::new(
+        info.CommitLimit as u64 * page,
+        info.CommitTotal as u64 * page,
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn commit_group() -> Option<MemoryGroup> {
+    None
 }
 
 // ─── Disks ───
@@ -450,7 +530,8 @@ pub fn get_disk_space(app: AppHandle, path: String) -> Result<DiskSpace, String>
         used,
         free,
         usage_pct,
-        free_pct: 100.0 - usage_pct,
+        // 与 MemoryGroup 同约定：total 为 0（空光驱等）按 0/0 报
+        free_pct: if total == 0 { 0.0 } else { 100.0 - usage_pct },
     })
 }
 
@@ -501,7 +582,12 @@ pub fn get_network_info() -> NetworkInfo {
             .ip_networks()
             .iter()
             .map(|n| n.addr.to_string())
-            .filter(|a| !a.starts_with("127.") && a != "::1")
+            // 回环（127. / ::1）与 IPv6 链路本地（fe80: 前缀——Windows
+            // 实配的链路本地地址都在此前缀下）不进列表——皮肤展示的
+            // 「本机 IP」要的是可路由地址
+            .filter(|a| {
+                !a.starts_with("127.") && a != "::1" && !a.to_ascii_lowercase().starts_with("fe80:")
+            })
             .collect();
         for ip in &ips {
             if !local_ips.contains(ip) {
@@ -532,8 +618,10 @@ pub fn get_network_info() -> NetworkInfo {
 
 // ─── GPU (Windows) ───
 
+/// async：DXGI 枚举 + PDH 采样 + 建 D3D12 设备（UMA 判定）都是重负载，
+/// 不跑主线程——同 get_cpu_info / get_disks_info 的写法，逻辑不变。
 #[tauri::command]
-pub fn get_gpu_info(app: AppHandle) -> Result<Vec<GpuInfo>, String> {
+pub async fn get_gpu_info(app: AppHandle) -> Result<Vec<GpuInfo>, String> {
     #[cfg(target_os = "windows")]
     {
         let _ = &app; // used only by the non-Windows arm
@@ -807,7 +895,7 @@ pub async fn run_command(
     window: tauri::WebviewWindow,
     command: String,
     args: Option<Vec<String>>,
-    timeout_ms: Option<u64>,
+    timeout_ms: Option<f64>,
 ) -> Result<shell::CommandOutput, String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -1005,8 +1093,9 @@ pub fn open_external(app: AppHandle, window: tauri::WebviewWindow, target: Strin
 
 /// Open with the OS default handler (browser / associated app).  Windows
 /// uses ShellExecuteW directly — the shell plugin's `open` is deprecated.
+/// pub(crate)：管理器的「前往下载」（commands::open_release_page）也走这里。
 #[cfg(target_os = "windows")]
-fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
+pub(crate) fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -1031,7 +1120,7 @@ fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
+pub(crate) fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
     std::process::Command::new("open")
         .arg(target)
         .spawn()
@@ -1040,7 +1129,7 @@ fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
 }
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
+pub(crate) fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
     std::process::Command::new("xdg-open")
         .arg(target)
         .spawn()
@@ -1121,5 +1210,85 @@ mod tests {
         println!("MEM   : {:#?}", super::get_memory_info());
         println!("DISKS : {:#?}", tauri::async_runtime::block_on(super::get_disks_info()));
         println!("NET   : {:#?}", super::get_network_info());
+    }
+
+    #[test]
+    #[ignore = "hardware probe — run manually with --nocapture"]
+    fn probe_cpu_frequency() {
+        // 第一次 = PDH 基线（None → 回退 sysinfo 静态值）；第二次 = 实测值
+        println!("first : {:?}", super::cpu_performance_pct());
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        println!("second: {:?}", super::cpu_performance_pct());
+    }
+
+    /// 对比「任务管理器速度」的候选口径（实测结论：直读 MHz 的 Processor
+    /// Frequency 计数器在台式机平台恒报名义值 2808 不跳动——i5-8400 实测；
+    /// % Processor Performance 全平台逐秒真实波动、turbo 超 100%，TM 速度
+    /// = 名义频率 × 该百分比）。前半段空闲、后半段部分核加负载。
+    #[test]
+    #[ignore = "hardware probe — run manually with --nocapture"]
+    fn probe_cpu_frequency_variants() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        const NOMINAL_MHZ: f64 = 2808.0; // 本机 i5-8400，按实际机器调整
+
+        let mut freq = super::pdh::PdhMultiCounter::new(
+            "\\Processor Information(*)\\Processor Frequency",
+        )
+        .expect("freq counter");
+        let mut perf = super::pdh::PdhMultiCounter::new(
+            "\\Processor Information(*)\\% Processor Performance",
+        )
+        .expect("perf counter");
+        let _ = freq.sample(); // 基线
+        let _ = perf.sample();
+
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let mut workers = Vec::new();
+        println!("phase  | freq_Total | core min~max | core avg | %Perf_Total | nominal×%Perf");
+        for round in 0..8 {
+            if round == 4 {
+                // 半载：6 核机器起 3 个自旋线程
+                for _ in 0..3 {
+                    let s = stop.clone();
+                    workers.push(std::thread::spawn(move || {
+                        let mut x = 0u64;
+                        while !s.load(Ordering::Relaxed) {
+                            x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+                            std::hint::black_box(x);
+                        }
+                    }));
+                }
+            }
+            std::thread::sleep(Duration::from_secs(1));
+            let f = freq.sample();
+            let p = perf.sample();
+            let total_f = f.iter().find(|(n, _)| n == "_Total").map(|(_, v)| *v);
+            let cores: Vec<f64> = f
+                .iter()
+                .filter(|(n, _)| n != "_Total")
+                .map(|(_, v)| *v)
+                .filter(|v| *v > 0.0)
+                .collect();
+            let total_p = p.iter().find(|(n, _)| n == "_Total").map(|(_, v)| *v);
+            let min = cores.iter().cloned().reduce(f64::min).unwrap_or(0.0);
+            let max = cores.iter().cloned().reduce(f64::max).unwrap_or(0.0);
+            let avg = cores.iter().sum::<f64>() / cores.len().max(1) as f64;
+            println!(
+                "round{} | {:9.0} | {:5.0}~{:5.0} | {:8.0} | {:11.1} | {:12.0}",
+                round,
+                total_f.unwrap_or(f64::NAN),
+                min,
+                max,
+                avg,
+                total_p.unwrap_or(f64::NAN),
+                total_p.unwrap_or(0.0) * NOMINAL_MHZ / 100.0,
+            );
+        }
+        stop.store(true, Ordering::Relaxed);
+        for w in workers {
+            let _ = w.join();
+        }
     }
 }

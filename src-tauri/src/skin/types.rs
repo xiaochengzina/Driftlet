@@ -31,8 +31,9 @@ pub struct SkinManifest {
     pub entry: String,
     #[serde(default)]
     pub window: WindowDefaults,
-    /// 敏感能力声明（"files" / "registry" / "shell"）。皮肤调用对应的后端
-    /// 命令前必须在此声明，否则后端拒绝并返回 PermissionDenied。
+    /// 敏感能力声明（"files" / "registry" / "shell" / "system" / "clipboard"
+    /// / "mic"，对应 skin_api 的 PERM_* 常量）。皮肤调用对应的后端命令前
+    /// 必须在此声明，否则后端拒绝并返回 PermissionDenied。
     /// 未知名一律忽略；只读系统信息命令不需要声明。
     #[serde(default)]
     pub permissions: Vec<String>,
@@ -226,6 +227,13 @@ pub struct SkinRuntimeConfig {
     pub opacity: f64,
     pub always_on_top: bool,
     pub on_desktop: bool,
+    /// **已移除（deprecated）**：壁纸层功能已随本版本删除（维护成本定论，
+    /// 见 docs/关键机制.md「壁纸层（已移除）」）。此字段仅为 serde 读取
+    /// 旧 config 并交由 `normalize_mode_flags` 迁移为贴桌面而保留——任何
+    /// 新代码不得使用；迁移后保存即恒为 false。
+    #[serde(default)]
+    #[deprecated = "壁纸层已移除；仅为读取并迁移旧配置保留，勿用于新代码"]
+    pub wallpaper_layer: bool,
     pub x: Option<i32>,
     pub y: Option<i32>,
     pub width: u32,
@@ -241,6 +249,12 @@ pub struct SkinRuntimeConfig {
     /// 基础尺寸 × zoom，内容经 WebView2 ZoomFactor 同倍缩放。
     #[serde(default)]
     pub zoom: Option<f64>,
+    /// 鼠标穿透开关：开启后皮肤窗口不再响应鼠标（点击直达下层窗口/桌面），
+    /// 交互（拖动、点按）只能先回管理器关闭。实现机制见 docs/关键机制.md
+    /// 「鼠标穿透」——tao 的 set_ignore_cursor_events 给顶层窗口置
+    /// WS_EX_TRANSPARENT|WS_EX_LAYERED，无边框子类按 HWND 登记放行这两位。
+    #[serde(default)]
+    pub click_through: bool,
     /// 边缘吸附开关：拖动窗口靠近屏幕边缘或其他皮肤窗口边缘时自动对齐
     ///（屏幕边缘优先）。仅作用于交互式拖动（WM_MOVING），不影响面板
     /// 输入的精确坐标。
@@ -256,11 +270,13 @@ pub struct SkinRuntimeConfig {
 impl SkinRuntimeConfig {
     /// 按 skin.json 的 window 默认值构造（尚未持久化过配置的皮肤）：
     /// 位置 x/y 与用户覆盖项（resizable/zoom 等）保持未设，跟随默认值。
+    #[allow(deprecated)]
     pub fn from_manifest(manifest: &SkinManifest) -> Self {
         Self {
             opacity: manifest.window.opacity,
             always_on_top: manifest.window.always_on_top,
             on_desktop: manifest.window.on_desktop,
+            wallpaper_layer: false,
             x: None,
             y: None,
             width: manifest.window.width,
@@ -268,6 +284,7 @@ impl SkinRuntimeConfig {
             position_locked: false,
             resizable: None,
             zoom: None,
+            click_through: false,
             edge_snap: false,
             snap_gap: 0,
         }
@@ -275,6 +292,7 @@ impl SkinRuntimeConfig {
 }
 
 impl Default for SkinRuntimeConfig {
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             opacity: 1.0,
@@ -282,6 +300,7 @@ impl Default for SkinRuntimeConfig {
             // on-desktop, so a fresh skin starts pinned, not topmost.
             always_on_top: false,
             on_desktop: true,
+            wallpaper_layer: false,
             x: None,
             y: None,
             width: 300,
@@ -289,6 +308,7 @@ impl Default for SkinRuntimeConfig {
             position_locked: false,
             resizable: None,
             zoom: None,
+            click_through: false,
             edge_snap: false,
             snap_gap: 0,
         }
@@ -299,7 +319,6 @@ impl Default for SkinRuntimeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub version: u32,
-    pub skins_directories: Vec<String>,
     pub loaded_skins: Vec<String>,
     pub skin_settings: HashMap<String, SkinRuntimeConfig>,
     /// Launch on system startup
@@ -316,13 +335,21 @@ pub struct AppConfig {
     #[serde(default = "default_hotkey_toggle_skins")]
     pub hotkey_toggle_skins: String,
     /// Skin hot reload while developing (debug builds only — release builds
-    /// never start the watcher).  Default on for skin authors; regular users
-    /// don't need it.
+    /// never start the watcher).  Default off; skin authors enable it in the
+    /// settings panel while developing.
     #[serde(default = "default_hot_reload")]
     pub hot_reload: bool,
+    /// 启动时自动检测 GitHub 新版本（默认开）。设置页可关；更新弹窗里勾选
+    /// 「不再提示更新」后取消也会关掉它。
+    #[serde(default = "default_update_check")]
+    pub update_check: bool,
 }
 
 fn default_hot_reload() -> bool {
+    false
+}
+
+fn default_update_check() -> bool {
     true
 }
 
@@ -354,14 +381,13 @@ fn default_language() -> String {
         .to_string()
     }
     #[cfg(not(windows))]
-    "zh-CN".to_string()
+    "en".to_string() // 非 Windows 无 UI 语言探测，按「everything else en」
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             version: 2,
-            skins_directories: Vec::new(),
             loaded_skins: Vec::new(),
             skin_settings: HashMap::new(),
             autostart: false,
@@ -369,14 +395,7 @@ impl Default for AppConfig {
             language: default_language(),
             hotkey_toggle_skins: default_hotkey_toggle_skins(),
             hot_reload: default_hot_reload(),
+            update_check: default_update_check(),
         }
     }
-}
-
-/// Position helper
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct Position {
-    pub x: i32,
-    pub y: i32,
 }

@@ -2,6 +2,85 @@
 
 本文件记录 Driftlet 的所有重要变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.4] - 2026-08-08
+
+### 新增
+
+- **鼠标穿透恢复**（皮肤「窗口」页开关，逐皮肤、默认关）：开启后点击/滚动穿透到下层窗口或桌面，皮肤不再响应鼠标，恢复交互回管理器面板关闭。机制 = tao `set_ignore_cursor_events` 给顶层窗口置 `WS_EX_TRANSPARENT|WS_EX_LAYERED`，OS 命中测试整体跳过窗口（含 WebView2 子孙）——当年两轮失败的真正根因是自家无边框子类无条件摘这两位（5 秒自愈兜底重剥），并非组合无效；现子类按 HWND 登记（`PASSTHROUGH_HWNDS`）对穿透窗口放行两位，命门 = 先登记再置位。旧担忧「LAYERED 破 DirectComposition 渲染」在当前 WebView2 运行时不成立（同形态最小 demo 实证）；壁纸层移除后「鼠标免疫」需求由本功能承接（贴桌面 + 穿透 = 纯展示挂件）。
+- **更新检测**（设置页开关，默认开）：每次启动后台比对公开仓库（github.com/xiaochengzina/Driftlet）最新 release 与当前版本（数字段比较，v 前缀/短号段归一），发现新版本则亮出管理器窗口弹提示——「前往下载」打开最新 release 页（URL 后端固定，复用 `open_target_impl` 的 ShellExecuteW 直开默认浏览器），「取消」仅关闭；勾选「不再提示更新」后取消 = 关闭更新检测并补弹「已关闭」告知（可在设置页重新开启）。网络失败/无更新一律静默不打断启动。HTTPS 走 ureq（rustls 全平台自包含，不依赖系统 OpenSSL），阻塞调用放 `spawn_blocking`（10s 超时）；前端直连被 CSP `connect-src 'self'` 拦住，故检查全程在后端。主窗口 capabilities 补 `allow-show`/`allow-unminimize`/`allow-set-focus`（亮窗用）。
+
+### 移除
+
+- 管理器 Win10 的 1px CSS 内描边（原生阴影已接管窗口边缘分离，描边冗余）：`is_windows_11_or_newer` 命令、invoke 注册、前端 `isWin11OrNewer` wrapper 与挂类逻辑、`html.no-native-frame #app` CSS 规则一并摘除；`parse_windows_build` 函数本体保留（皮肤接口 `get_os_info` 自用），其在 skin_api 的 pub(crate) 再导出随命令移除；关键机制中英文档同步改写。
+- **壁纸层功能移除**（原「放置三态」中的第三态，皮肤 SetParent 进桌面 WorkerW/Progman 做子窗 = 桌面图标之下、壁纸之上、鼠标物理免疫）：实现依赖全套未文档化内部结构（Progman/WorkerW/DefView 类名、`0x052C` 消息、z-order band、explorer 重托管行为），Win11 24H2 已改过一次桌面渲染管线，且失败形态全是静默视觉故障（不可见/黑底/残块）只能逐版本现场验证——综合判定维护成本高于功能价值，完整摘除（`window/wallpaper.rs`、自愈巡检钩子、前端选项、命令臂）。旧配置 `wallpaper_layer: true` 由 `normalize_mode_flags` 自动迁移为贴桌面，放置归双态（置顶/贴桌面）。完整机制与病根史见 git 历史与 `tools/win32-probes/wp-*` 探针；本节下述壁纸层修复条目为本周期工作记录，随本移除一并作废。保留物：虚拟显示器 DPI 修复（下条，与壁纸层无关）、vendored tauri-runtime-wry 死句柄 `Destroyed` 补丁。
+
+### 修复
+
+- 管理器「窗口」页切换显示层级时整页闪一遍淡入（同皮肤数据回灌的通用病根，三处叠加各修一处）：①层级按钮成功后整页 `load()` 重绘——改选中态就地迁移到被点按钮，点当前档位变纯 no-op（失败才整页回滚）；②后端 reload（置顶→正常/重新加载/热重载）连发 `skin-unloaded` + `skin-loaded` 各触发一次编辑器重载——`onLoadStateChange` 改同皮肤 80ms 合并为一次刷新；③`.config-panel` 入场动画对同皮肤重绘也重播——`render` 加 `animate` 开关，仅换肤/首次展示播放（语言切换重绘同免）。皮肤窗口自身的销毁重建（置顶→正常的 HWND 重建）是机制所需，不在此项。
+- 管理器窗口在 Win10 上没有系统原生阴影：建窗的 `shadow(false)` 是皮肤去框提交（82b0f12）顺手带上的（该提交目标仅皮肤窗口），并非产品决定——改 `shadow(true)`，经 tao `with_undecorated_shadow` 调 `DwmExtendFrameIntoClientArea`（1px 边距）启用无边框原生阴影，与其它自绘标题栏软件同款；皮肤窗口保持 `shadow(false)` 不动（桌面挂件不能有阴影）；Win11 行为不变（DWM 本就为无边框窗口画阴影/圆角/轮廓）。
+- 皮肤圆角/透明区透黑底、桌面留黑色残块（GameViewer 等远程控制虚拟显示器 + Win10 高 DPI 环境，实测定位）：虚拟屏 DPI 上报不一致（`GetDpiForMonitor` 报 96、系统 DPI 实为 120），皮肤窗口建窗后被系统改派到系统 DPI，WebView2 按新窗口 DPI 重设 rasterization scale（×1.25），而 tao 按建窗 DPI 布局（`scale_factor()`=1.0）——内容按「窗口矩形×1.25」错位合成：圆角/透明区没有内容覆盖透黑底、错位部分在桌面留残块（普通/不透明/置顶窗口同样发生，与壁纸层无关）。现建窗后与亮相后各把 controller 的 rasterization scale 强制为窗口的「布局尺」（`force_webview_rasterization_scale`；`layout_scale_factor` = 物理客户区 ÷ 设计逻辑宽，取整到 0.01——tao 的 `scale_factor()` 在该路径上虚报，不能作准），两尺一致后视觉树与宿主矩形逐像素对齐；正常显示器上两者本就相等，幂等无副作用。
+- Win10 壁纸层不显示，三处病根（Win10 21H2 实测定位）：①`ensure_wallpaper_workerw` 只在「宿主 == Progman」时执行，而 Win10 经典形态的图标宿主是顶层 WorkerW，壁纸从未被搬进独立窗口；②存在性检查把图标宿主（本身就是全屏可见 WorkerW）误判成壁纸窗口，永不催生；③Win10 收到 `0x052C` 后 explorer 会把 DefView 重托管进新建 WorkerW，钉入时选定的目标瞬间作废，皮肤留在旧父窗被壁纸盖住。现钉入目标按实时拓扑判别：经典形态钉进壁纸 WorkerW（Win10 的 DefView 内容盖在宿主整个子窗口带之上，钉进宿主必被盖——探针 `wp-plain-child-test.ps1` 红方块矩阵实证：钉进壁纸 WorkerW = 可见、图标在上、鼠标免疫；顶层 z 贴附方案曾评估为候选，实测 Win10 z-order band 隔离使顶层窗进不了桌面层，跨带锚点 `SetWindowPos` 静默无效，探针 `wp-xproc-anchor-test.ps1`），24H2+ 维持钉进 Progman 紧随 DefView 之下；存在性检查排除图标宿主；巡检发现形态/父窗漂移（`needs_converge`，单向收敛）即在主线程补 pin（顺带还原漂移中被摘掉的 WS_VISIBLE）。
+- 壁纸层皮肤圆角/透明区域透黑底、移动后原位置留黑色残块不自愈（Win10）：壁纸 WorkerW 带 `WS_CLIPCHILDREN`，WM_PAINT 把子窗（皮肤）区域从壁纸绘制中裁掉形成父表面黑洞，且 explorer 不为挪出区域补绘（GDI 补绘全试无效）。现 pin 时**先摘该样式位再 SetParent**（顺序命门），巡检每 tick 复查（explorer 重设就再摘）——摘掉后绘制全表面，圆角透出壁纸、移动无残块。
+- 管理器「窗口」页缩放比例滑块在皮肤未加载时仍可拖动并触发保存（同页其余控件均已禁用）：补齐 `disabled`。
+- 管理器密码显隐按钮 hover 变色静默失效：样式引用了未定义的 `var(--text)`，改为 `var(--text-primary)`。
+- 浅色主题下「已加载」徽标描边错用深色主题绿（与深绿文字/光点色系相拼）：新增 `--success-ring` 变量随主题切换。
+- `datetime-local` 输入固定 160px 裁切中文环境原生控件：拆出单独定宽 205px（与 `.dt-time` 一致）。
+- 全量代码审查修复（四个 P0）：①skin.json 只写 `"always_on_top": true` 产出「两真」非法放置态（`on_desktop` serde 默认 true）——当次建窗置顶+钉桌面叠加，重启后被归一化静默归贴桌面吞掉作者意图，现 manifest 解析后归一化（显式 aot 赢；与持久化配置的 desktop-wins 语境不同：持久化值无法区分显式/默认，manifest 是作者源文件）；②skin:// URL 首段用皮肤 id 而协议按文件夹名取文件，中文名文件夹直装（loader 支持 slugify 派生 id）皮肤窗口必 404、管理器预览却正常——首段改用磁盘文件夹名；③音频采集错误状态粘连：错误只在采集闲置 30s 退出时清除，持续轮询的皮肤设备热插拔后频谱永久报错——`start_stream` 成功即清错；④fs 沙箱写路径「先建目录、后做包含性校验」，经符号链接可在沙箱外创建空目录（文件本身仍被拦住）——先对最深已存在祖先 canonicalize + 包含性校验，通过后再建目录。
+- 虚拟显示器路径拖动/缩放皮肤，位置尺寸逐次累积偏移：Moved/Resized 落盘换算仍按 tao `scale_factor()`（该路径虚报，渲染层已修、持久化层漏修）——改用与 `layout_scale_factor` 同源的持久化尺（`persistence_scale_factor`）。
+- 「显示层级」点击当前已选中按钮即整窗重建闪烁：`set_skin_placement` 无变化调用直返，不再 reload。
+- 音频采集线程 spawn 失败一次即永久失能：加线程存活标志，error 命中且线程已死时重建。
+- 皮肤中文 entry/资源名经 skin:// 加载 404：协议路径未做百分号解码（wry 递交的 URI 保留编码）——先解码再做 `..`/冒号/settings 拦截与 canonicalize。
+- 「拖完皮肤立即退托盘」丢最终位置/尺寸：拖动防抖落盘定时器（约 0.5–1s）随进程退出丢失——`graceful_exit` 前同步 flush（`flush_pending_drag_saves`，无 pending 零开销）。
+- 皮肤经 `skin_write_file`/`skin_delete_file` 的自写触发自身热重载（toolbox 保存即整皮 reload）：文件名清单覆盖不了任意自写路径，改「最近自写集合」（规范化绝对路径 + 数秒 TTL），watcher 消耗式过滤。
+- 备份导出与导入/安装并发可产出缺皮肤的备份（导入 rename+copy 窗口期 skins/ 缺失或半拷贝，导出不持锁照样遍历）：导出路径持 `install_lock`。
+- 备份导入重建后热重载开关显示与实际脱节：`rebuild_runtime` 未同步 `hot_reload_enabled` 原子镜像（双写约定漏了一处）。
+- 双击 .dskin 偶发无响应：第二实例转发的 `open-skin-package` 事件在管理器 webview 未就绪时丢失——转发同时写 `pending_package`（前端 take 幂等，与冷启动兜底一致）。
+- 非 UTF-8 命令行参数（lone surrogate 文件名）启动静默闪退：`env::args()` 遇非法 Unicode 即 panic 且发生在错误框就绪前——改 `args_os()` + 有损转换。
+- `shell` 权限命令 `try_wait` 出错分支子进程裸跑、reader 线程阻塞泄漏（与超时分支清理不对称）：补 kill+wait+join；亚秒超时错误显示「0 秒」改 `as_secs_f64()`。
+- `get_gpu_info` 同步命令跑主线程（DXGI 枚举 + PDH + 建 D3D12 设备）——改 async（对齐 get_cpu_info/get_disks_info）。
+- 设置面板：主题/语言按钮选择器 `.theme-btn:not(.lang-btn)` 过度匹配（命中热键/导出/导入按钮，靠 onclick 覆盖顺序幸免）——收窄为 `[data-theme]`/`[data-lang]`；自启动/热重载开关保存失败不回滚勾选态——catch 回滚；语言切换全量重绘静默销毁打开中的安装向导（overlay 挂 #app 内被 innerHTML 重写）——改挂 document.body。
+- 跨平台可编译性：`set_skin_edge_snap`/`set_skin_snap_gap` 的 `window.hwnd()` 补 cfg 门控（非 Windows 编译失败）；`default_language` 非 Windows 分支硬编码 zh-CN 改 en（与自身注释一致）；维护线程整体 cfg(windows)（非 Windows 每 5 秒空转）。
+- 皮肤接口返回值批量勘正（按返回值审查逐项修复）：①`get_os_info` 的 `build` 恒 null、`is_windows_11` 恒 true——sysinfo 0.32 的 Windows `os_version` 是「{major} ({build})」无点号格式（注册表 CurrentBuildNumber 拼装），按「10.0.22631」点号三段解析从未生效，兼容两种格式重解析；`os_name` 原恒为 "Windows"，改产品名（`long_os_version` = 注册表 ProductName，如 "Windows 11 Pro"）；管理器 `is_windows_11_or_newer` 同根同病一并修（Win10 自绘 1px 边框曾误判为不需要）；②`run_command` 超长输出三条——`read_capped` 读满 1MB 即关管道读端（子进程再写吃 broken pipe 出错退出，或阻塞到超时被杀，均非文档承诺的「截断后正常返回」）改读满后丢弃后续字节直排 EOF；1MB 截断切断多字节 UTF-8 致整篇合法 UTF-8 回退 OEM 按 GBK 误码——截断回退到字符边界（仅末尾 ≤3 字节残尾才截，GBK 流不受影响）；孙进程继承管道写端时 reader `join` 无限阻塞（正常返回与超时 reject 都被拖住）——reader 改 channel 回传，超时/出错分支 detach 不 join，正常分支 2 秒宽限后按空输出放行；`try_wait` 中途出错误报「命令启动失败」改通用任务失败；`timeoutMs` 参数 u64 改 f64（小数/负数不再触发 serde 英文报错，取整后钳制 100–120000）；③`get_processes` 的 `cpu` 由单核口径（sysinfo 公式 100×Δ进程/Δ系统×核数，量程 0–100×核数，文档却写「与 CPU 同理」）除以核数归一化到整机 0–100（任务管理器同口径）；④音频采集闲置/出错退出后环形缓冲不清空，恢复轮询时回放一帧中断前旧样本——退出即清空（线程重建分支同清，panic 展开由 `AliveReset::drop` 统一清空并补记错误触发重建）；⑤`skin_write_file` 的 base64 解码失败误报「无效的路径 '\<base64\>'」——新增专用错误文案（中英）；`skin_list_dir` 单项 metadata 失败不再编造 `is_dir:false, size:0`（跳过该项，避免目录被呈现成 0 字节文件）；受保护文件名单匹配收窄到皮肤根目录直下（子目录里的同名文件原被误伤拒写），并拒绝尾点/尾空格分量（Windows 文件 API 剥尾点会让「settings.json.」落盘成 settings.json 绕过名单）；⑥`get_network_info` 的 `ips`/`local_ips` 滤掉 IPv6 链路本地地址（fe80::/10，原只滤回环）；内存 `MemoryGroup` 与 `get_disk_space` 在 total=0（swap 禁用/空光驱）时 `free_pct` 由 100 改 0（「不存在的空间全空着」语义不通）。
+- `get_cpu_info` 的 `frequency_mhz` 恒为基准频率不跳动（实测恒定 1600MHz）：sysinfo 的值来自 `CallNtPowerInformation` 的 `CurrentMhz`，硬件自主 P-state（Speed Shift）的现代 Windows 上该字段不跟踪动态频率——改为任务管理器「速度」同款算法：名义频率 × PDH `\Processor Information(_Total)\% Processor Performance`（该计数器 = 实测频率占名义频率的百分比，全平台逐秒真实波动，turbo 时超 100%、显示值可超基准频率，与 TM 一致）；直读 MHz 的 `Processor Frequency` 计数器不采用（在部分平台上恒报名义值，i5-8400 台式机实测恒定 2808）。PDH 未就绪（首调基线/计数器缺失）时回退 sysinfo 静态值。
+- release 打包编译失败（E0433）：`hotreload` 模块整体 `#[cfg(debug_assertions)]` 门控（release 编译期排除），而 `skin_api/fs.rs` 的 `write_file`/`delete_file` 两处 `note_self_write` 调用未同步门控——调用点补同款 cfg，debug 热重载行为不变。
+
+### 变更
+
+- 交互动画统一治理（规范落 `docs/交互动画.md`，源自项目本地新装的 emilkowalski skills 审计法，完整规则目录在 `.agents/skills/review-animations/STANDARDS.md`）：①缓动分治——全局唯一弱曲线 `--ease`（近 ease-in-out）原包揽入场/出场/按压全场景，新增强 ease-out 令牌 `--ease-out: cubic-bezier(0.23, 1, 0.32, 1)`，入场/出场/按压统一换用，`--ease` 收敛回悬停/颜色场景（UI 禁用 ease-in 系起步慢的曲线）；②时长收进 300ms UI 预算——toast 出场 0.45s→0.2s；③高频降载——选皮肤/切页签的内容区入场由 fadeUp（0.25s 带 6px 位移）改 contentFade（0.15s 纯透明）：列表导航属每天数十次场景，位移入场拖慢感知；④按压反馈补齐——九类按钮（win/icon/add/load/action/theme/confirm/chip/settings-close）统一 `:active scale(0.97)`，各自 transition 精确追加 `transform 0.12s var(--ease-out)`（保持无 transition:all 约定）；⑤`prefers-reduced-motion` 由「0.01ms 一刀切清零」改「降级非清零」——颜色/透明度反馈与加载 spinner 保留（可理解性），位移/缩放类入场改播纯透明帧、hover/按压 transform 关闭（文件末尾同特异性层叠覆盖，开关滑块 12px 微距位移按状态指示保留）；⑥设置页签页切换补 0.15s 纯透明淡入（display 切换即重播，与配置面板同参数）。
+- 设置面板选项渐多超高滚动，改为页签布局（与皮肤编辑器 `cfg-tabs` 同一套视觉与交互模式）：通用（开机自启动、自动检测更新、全局快捷键）/ 外观（主题、语言）/ 高级（备份、皮肤热重载），页签态随语言切换重绘保留；面板高度回落到最小窗口（640×460）内，不再需要滚动。
+- 管理器「窗口」页文案优化：「锁定位置」→「禁止拖动」（开关与反馈同步）、「放置位置」→「显示层级」且桌面态选项→「正常」；显示层级提示按 Pinner 实际行为重写——正常层级 = 普通程序窗口 Z 序规则（可遮挡、交互时浮起），仅「显示桌面」时不被隐藏；禁止拖动/鼠标穿透/边缘吸附提示去重复、顺语序。
+- 配置页反馈降噪：各保存项与开关成功不再弹 toast（控件状态迁移即是反馈），仅失败提示；鼠标穿透开启保留警示性提示；15 个随降噪废弃的文案键（中英双语）同步清除。
+- 交互补全：删除/重置确认弹窗支持 Esc 关闭、初始焦点落在「取消」、关闭摘除键盘监听；列表与配置页加载/卸载按钮点击即禁用防连点并发；开关键盘焦点可见（`focus-visible` 描边）；禁用按钮 hover 不再触发动效（统一 `:not(:disabled)` 门控）；toast、皮肤路径、版本号等文本可选中复制；窗口重显假 hover 门控（`body.hover-ok`）覆盖全部交互元素（原仅窗口按钮）。
+- 样式一致性与可维护性：`--text-faint` 对比度提至 WCAG AA（小字 4.5:1）；行标签字号统一 13px；禁用透明度收编 `--disabled-opacity`；主色渐变收编 `--accent-grad`（7 处）、danger 语义白收编 `--danger-ink`；输入控件基样式与焦点环（3 组）、版本/数量徽章（2 枚）重复规则合并；删除死代码 `.confirm-note` 与 no-op 规则；`transition: all` 全量改为精确属性列表；`.confirm-hint` 三连 `!important` 改特异性实现。
+- 全量代码审查变更项：①删除三个死命令及配套——`update_skin_config`（另有三处与单项 setter 不一致：缺归一化、忽略 zoom、多项改动静默不生效）、`refresh_skins`、`save_app_config`，连同 `factory::update_window_config`、前端三个 wrapper 与注册项一并摘除；②安装与加载校验口径补齐——entry 名安全规则与 skin.json 1MB 上限下沉到安装期（原仅扫描期拦截，问题包「装完即消失」），持久化类 setter（placement/click_through/edge_snap/snap_gap）补皮肤存在性校验，`remove_skin` 走 install_lock 防并发安装竞争，`reset_skin_config` 连 .bak/.tmp 一并清理，`get_skin_detail` 返回的 zoom 先钳制；③pack-skin 校验对齐安装端并重新构建 exe——补 Windows 保留设备名（con/aux/com1 等打包期即拒）、manifest 镜像补齐 5 个字段（类型错误打包期即拒）、entry 名安全规则、1MB 检查、排除清单大小写不敏感+非根目录排除提示；④文档同步——CHANGELOG 补 [1.0.3] 节（壁纸层放置新增、commit 组、核显显存修复等漏记/错放条目归位），英文版关键机制 GPU 与 tray 补丁条目翻译同步、预览截图独立成节，README 双版更新文案与功能清单（鼠标穿透），皮肤开发指南 §7.1 热重载说明，路线图/设计系统机制描述更新；⑤可维护性——扫描去重按文件夹名排序（确定性），删除死代码（Position 结构体、skins_directories 字段、common.installFailed 死 key、冗余簿记/回补、tsc 空转步骤），「未知放置模式」等用户可见错误走 i18n（含备份导入部分卸载新词条），权限清单/PDH 示例/notify 函数名等注释失真修正，gpu/audio 锁统一防中毒写法。
+- `get_gpu_info` 返回值新增 `gpu_type` 字段（`"discrete"` 独显 / `"integrated"` 核显，复用 D3D12 UMA 判定，无需新建设备查询）；核显显存口径由「专用 + 共享系统内存」改为仅共享系统内存——专用段只是 BIOS 划分的一小块，「专用 + 共享」合计可能超出物理内存，总量/占用/百分比统一按共享计（核显占用本来也几乎全部落在共享计数器）。
+- `get_media_info` 新增 `cover_mime` 字段（封面 MIME，按 magic bytes 嗅探 jpeg/png/gif/bmp/webp，认不出为 null）——皮肤不再盲猜 `image/jpeg`；media-hub 示例同步改用该字段。
+- `get_media_info.position_secs` 文档补注快照语义（播放器上报值，不随播放推进，需平滑进度请自行插值）；`run_command` 文档补全 `code` 负值口径、timeout 下限 100ms、孙进程持管输出不全；`get_foreground_window_info` 补注 title 512 截断与 process_name 空串；`get_monitors` 补注副屏 rect 可为负坐标；`get_audio_spectrum` bands 与 `set_volume` 补注钳制行为；`read_registry_value` 补注 qword 超 2^53 丢精度；`get_os_info` 示例按实际格式勘正（`os_version: "11 (22631)"`）。
+
+## [1.0.3] - 2026-08-05
+
+### 新增
+
+- 壁纸层放置（放置升三态：置顶 / 桌面 / 壁纸层）：皮肤 `SetParent` 进桌面图标宿主、z 序紧随 DefView 之下——桌面图标之下、壁纸之上，可见但三键/滚轮/悬停物理免疫；统一 `set_skin_placement` 命令替换旧双命令；explorer 重启自愈重建 + 活体 z 序复检。
+- 内存信息接口新增 commit 组（虚拟内存/已提交）：psapi `GetPerformanceInfo` 取提交量与提交限制，与任务管理器同源；sys-monitor 示例与开发指南同步。
+
+### 修复
+
+- 壁纸层只在装了动态壁纸软件的机器上可用：原生 Win11 24H2+ 桌面的壁纸不是窗口——explorer 用 DirectComposition 把它画在 Progman 子窗口带之上，皮肤钉入后必被盖住不可见。钉入前现会检测并给 Progman 发 `0x052C` 催生接管壁纸渲染的全屏 WorkerW（壁纸搬进窗口后 z 序恢复生效），巡检顺带补发（带冷却）；动态壁纸软件此前替用户发过该消息，故开发机一直正常。
+- explorer 重启后壁纸层皮肤有概率掉到桌面层级、可交互：自愈在 explorer 刚重启的窗口期（Progman/DefView 尚未重建）就触发重建，pin 找不到宿主失败、回退成普通窗口且不再重试。现自愈等宿主就绪（`host_ready()`）才重建，pin 失败一律进待重试表、宿主就绪后经主线程补钉（覆盖开机自启早于 explorer 的同型竞态）。
+- explorer 重启后壁纸层皮肤无法自愈、手动加载报 `already exists`：进程被杀时窗口管理器不给跨进程子窗投递 `WM_DESTROY`，tao 的 `Destroyed` 永不触发，Tauri 注册表条目与 label 永久卡死。关闭路径检测到死句柄改走 `destroy()`，并 vendor 修补 tauri-runtime-wry：destroy 时发现死句柄补发完整 `Destroyed` 流程释放 label。
+- 壁纸层 SetParent 失败残留：失败时已登记条目与 WS_CHILD 样式不回滚，巡检会把普通顶层窗反复压到桌面宿主之下致其僵尸不可见；现失败即摘登记并还原样式。
+- explorer 重启后控制台报 "Error removing system tray icon"：tray-icon 的 TaskbarCreated 处理先删旧图标，而旧图标已随死掉的任务栏消失、删除必然失败，上游无条件 `eprintln!` 打出噪音日志（托盘本身经 NIM_ADD 正常恢复）；vendored crate 该路径改走安静变体（第二个 NOTE(driftlet) 补丁）。
+- 核显显存占用恒 0、总量失真：核显等统一内存适配器的显存总量与占用均按「专用 + 共享系统内存」计算（任务管理器同口径——核显专用段只是 BIOS 划分的一小块，只取专用会得到占用恒 0、总量失真）；核显判定走 D3D12 UMA 架构查询（`D3D12_FEATURE_DATA_ARCHITECTURE.UMA`，结果按 LUID 缓存），不按专用显存大小猜（APU 可在 BIOS 划出 1GB+ 专用段）。
+- 备份导出/导入按钮防重入：原生文件对话框存续期间禁用按钮，重复点击不再叠开多个选择器；导入确认框同步防叠开。
+
+### 变更
+
+- 皮肤热重载默认关闭：皮肤作者开发时在设置页自行开启；备份文案去「布局」——文件选择器过滤器与导入弹窗标题由「Driftlet 布局备份」改为「Driftlet 备份」，弹窗红字警告改为「未在备份中的皮肤将会被覆盖移除」。
+- 管理器「窗口」页分区调整：拖拽调整大小/缩放比例/边缘吸附/吸附间距移入「位置和大小」分区；缩放提示语随位置变化改为「上方宽高」。
+- 管理器配置行距调宽：表单行上下内边距 8px→12px，开关等设置项不再拥挤。
+- 放置三态文案收紧：「贴桌面」简化为「桌面」，hint 去掉 Win+D 并补全语义（桌面在普通窗口之下，壁纸层只显示不交互）；边缘吸附提示语去掉结尾「（不会移出屏幕）」（中英同步）。
+
 ## [1.0.2] - 2026-08-03
 
 ### 新增

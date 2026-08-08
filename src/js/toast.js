@@ -2,7 +2,7 @@
  * toast.js — 全局单例信息提示
  *
  * 同一时刻只显示一条：新提示立即替换旧提示，快速连续操作不会堆叠。
- * 显示 2.2s 后向上缓缓淡出（0.45s，见 style.css 的 toastOut），
+ * 显示 2.2s 后向上淡出（0.2s，见 style.css 的 toastOut），
  * 动画结束后移除元素。
  */
 let current = null;

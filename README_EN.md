@@ -14,13 +14,15 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Skin permission model: sensitive capabilities must be declared in `permissions` in `skin.json` (6 kinds: file / registry / Shell / system control / clipboard / microphone); the install wizard lists them one by one and flags high-risk items (see "Security Model")
 - Custom skin settings: declare config items in `skin.json` (19 control types + groups + descriptions); the config panel is generated automatically
 - Adjust a skin's opacity, position, size, and zoom (the "Window" tab can enable resize-by-dragging: shows a frame hint, drag edges/corners to resize directly; zoom scales the whole window and its content from 50%–200%)
-- Always on top / pin to desktop (mutually exclusive, pin to desktop by default), lock position
+- Always on top / pin to desktop (mutually exclusive, pin to desktop by default), disable dragging
+- Click-through (per-skin toggle on the "Window" tab, off by default): clicks and scrolls pass through to the window or desktop below — combined with pin-to-desktop the skin becomes a pure display widget
 - Capture preview images for skins
 - Tray icon management; closing the main window hides it to the tray
 - Autostart, dark/light theme switching
 - Right-click a skin window to open the skin menu (open config / refresh / unload)
 - A global hotkey hides/shows all loaded skins with one keystroke (default Ctrl+Shift+Alt+D, changeable or disabled in Settings), with a synced checked item in the tray menu
 - Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing)
+- Startup update check (on by default, can be turned off in Settings): prompts when a new GitHub release is available, with a one-click jump to the download page or an option to stop reminding
 
 ---
 
@@ -68,7 +70,10 @@ npm run tauri build
 │   └── skin_api/         # System info and sensitive-capability commands callable by skins (require_perm authorization)
 ├── src-tauri/capabilities/ # Window permissions: default.json (main window) / skin.json (skin windows, empty permissions)
 ├── examples/             # Example skin sources (reference; shipped as standalone .dskin, not bundled)
-│   └── controls-demo/    # Demo of all settings controls (bilingual; UI language follows the manager)
+│   ├── controls-demo/        # Demo of all settings controls (bilingual; UI language follows the manager)
+│   ├── sys-monitor/          # System monitor (the read-only system-info API set)
+│   ├── media-hub/            # Media console (volume / media / spectrum / notifications)
+│   └── toolbox/              # Local toolbox (clipboard / files / registry / commands / settings read-write)
 ├── tools/
 │   ├── pack-skin.exe     # Skin packaging tool (standalone, generates .dskin)
 │   ├── pack-skin/        # Packaging tool source (Rust)
@@ -88,7 +93,7 @@ npm run tauri build
 
 > For the full interface documentation and specs, see [`docs/skin-development-guide.md`](docs/skin-development-guide.md); this section is a quick start.
 
-In development builds (`npm run tauri dev`), a loaded skin reloads automatically when its files are saved (300 ms debounce) — no manual right-click refresh needed; it can be turned off on the Settings page.
+In development builds (`npm run tauri dev`), a loaded skin can reload automatically when its files are saved (300 ms debounce) — no manual right-click refresh needed; hot reload is off by default and takes effect once enabled on the Settings page.
 
 A skin is a standalone folder containing at least:
 

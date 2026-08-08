@@ -365,7 +365,12 @@ unsafe extern "system" fn tray_proc(
             userdata.tooltip = *tooltip;
         }
         _ if msg == *S_U_TASKBAR_RESTART => {
-            remove_tray_icon(userdata.hwnd, userdata.internal_id);
+            // NOTE(driftlet): after an explorer restart the icon is already
+            // gone with the dead taskbar, so this delete failing is the
+            // NORMAL case — upstream's unconditional eprintln in
+            // remove_tray_icon prints a bogus "Error removing system tray
+            // icon" on every explorer restart. Use the quiet variant here.
+            remove_tray_icon_quiet(userdata.hwnd, userdata.internal_id);
             if userdata.visible {
                 register_tray_icon(
                     userdata.hwnd,
@@ -603,6 +608,19 @@ unsafe fn register_tray_icon(
 
 #[inline]
 unsafe fn remove_tray_icon(hwnd: HWND, id: u32) {
+    remove_tray_icon_impl(hwnd, id, true);
+}
+
+// NOTE(driftlet): same as remove_tray_icon but without the error print —
+// used on the TaskbarCreated path, where NIM_DELETE is expected to fail
+// (the icon died with the old explorer instance).
+#[inline]
+unsafe fn remove_tray_icon_quiet(hwnd: HWND, id: u32) {
+    remove_tray_icon_impl(hwnd, id, false);
+}
+
+#[inline]
+unsafe fn remove_tray_icon_impl(hwnd: HWND, id: u32, log_err: bool) {
     let mut nid = NOTIFYICONDATAW {
         uFlags: NIF_ICON,
         hWnd: hwnd,
@@ -610,7 +628,8 @@ unsafe fn remove_tray_icon(hwnd: HWND, id: u32) {
         ..std::mem::zeroed()
     };
 
-    if Shell_NotifyIconW(NIM_DELETE, &mut nid as _) == FALSE {
+    let deleted = Shell_NotifyIconW(NIM_DELETE, &mut nid as _) != FALSE;
+    if log_err && !deleted {
         eprintln!("Error removing system tray icon");
     }
 }

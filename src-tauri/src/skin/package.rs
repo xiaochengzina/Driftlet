@@ -32,7 +32,8 @@ pub struct PackageInfo {
     pub description_en: Option<String>,
     /// skin.json 声明的中英双语开关：决定前端是否启用 *_en 文案
     pub bilingual: bool,
-    /// skin.json 声明的敏感能力（"files" / "registry" / "shell"），
+    /// skin.json 声明的敏感能力（"files" / "registry" / "shell" / "system" /
+    /// "clipboard" / "mic"，对应 skin_api 的 PERM_* 常量），
     /// 安装向导展示给用户确认
     pub permissions: Vec<String>,
     /// "new" | "update" | "reinstall" | "downgrade"
@@ -148,11 +149,25 @@ pub fn install_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
     // ④ 恢复用户设置值，然后删除旧目录。恢复写回失败时保留 .old，
     // 用户数据不丢，可手动找回。
     if had_dest {
-        if let Ok(bytes) = fs::read(old.join(crate::skin::settings::SETTINGS_FILENAME)) {
-            fs::write(dest.join(crate::skin::settings::SETTINGS_FILENAME), bytes)
-                .map_err(|e| trf(lang, Key::RestoreSettingsFailed, &[&e.to_string()]))?;
+        // 读旧设置失败要区分：NotFound = 本来就没有用户设置，跳过正常收尾；
+        // 其他错误（权限/占用等）保留 .old 并告警——静默删掉 .old 会把用户
+        // 设置一起带走
+        match fs::read(old.join(crate::skin::settings::SETTINGS_FILENAME)) {
+            Ok(bytes) => {
+                fs::write(dest.join(crate::skin::settings::SETTINGS_FILENAME), bytes)
+                    .map_err(|e| trf(lang, Key::RestoreSettingsFailed, &[&e.to_string()]))?;
+                let _ = fs::remove_dir_all(&old);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let _ = fs::remove_dir_all(&old);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to read old settings.json for skin '{}' ({}), keeping {:?} for manual recovery",
+                    id, e, old
+                );
+            }
         }
-        let _ = fs::remove_dir_all(&old);
     }
 
     Ok(Skin {
@@ -237,7 +252,19 @@ fn find_skin_root(extract_dir: &Path, lang: &str) -> Result<PathBuf, String> {
 
 /// 读取并解析包内 skin.json（容忍 UTF-8 BOM）
 fn read_manifest(base: &Path, lang: &str) -> Result<SkinManifest, String> {
-    let content = fs::read_to_string(base.join("skin.json"))
+    let path = base.join("skin.json");
+    // 与 loader 同一体积上限：包内清单同样视为小文件，超限即异常（解压
+    // 总量上限管不住「一个超大 skin.json + 少量小文件」的畸形包）
+    let size = fs::metadata(&path)
+        .map_err(|e| trf(lang, Key::ReadSkinJsonFailed, &[&e.to_string()]))?
+        .len();
+    if size > loader::MAX_MANIFEST_BYTES {
+        return Err(format!(
+            "skin.json too large ({} bytes, limit {} bytes)",
+            size, loader::MAX_MANIFEST_BYTES
+        ));
+    }
+    let content = fs::read_to_string(&path)
         .map_err(|e| trf(lang, Key::ReadSkinJsonFailed, &[&e.to_string()]))?;
     serde_json::from_str(content.trim_start_matches('\u{feff}'))
         .map_err(|e| trf(lang, Key::SkinJsonParseFailed, &[&e.to_string()]))
@@ -252,6 +279,12 @@ fn require_package_id(manifest: &SkinManifest, lang: &str) -> Result<String, Str
 }
 
 fn check_entry_exists(base: &Path, manifest: &SkinManifest, lang: &str) -> Result<(), String> {
+    // 与 loader 同一套 entry 名校验：含 "../\\:" 的 entry 即使此刻在解压
+    // 目录里找得到，装上后也会被 loader 拒载——皮肤「装完即消失」，必须
+    // 在安装前拦下
+    if !loader::is_valid_entry_name(&manifest.entry) {
+        return Err(format!("Invalid entry file name '{}'", manifest.entry));
+    }
     if base.join(&manifest.entry).exists() {
         Ok(())
     } else {

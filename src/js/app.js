@@ -10,6 +10,7 @@ import SkinList from './skin-list.js';
 import SkinEditor from './skin-editor.js';
 import InstallWizard from './install-wizard.js';
 import Settings, { initTheme, refreshOpenSettings } from './settings.js';
+import { initUpdateCheck } from './update-check.js';
 import { t, initI18n } from './i18n.js';
 
 window.__app = null;
@@ -28,7 +29,7 @@ class App {
   constructor() {
     this.skinList = null;
     this.skinEditor = null;
-    this.settings = null;
+    this._loadStateTimers = new Map();
     window.__app = this;
     this.init();
   }
@@ -36,14 +37,6 @@ class App {
   async init() {
     // 先确定界面语言，再做首次渲染
     await initI18n();
-    // Win10 的 DWM 不给无边框窗口画 1px 轮廓（Win11 会），窗口边缘只剩
-    // 纯色边缺立体感——给 <html> 挂类，由 CSS 补一圈内描边；Win11 保持
-    // 原生观感不动。渲染前挂好，避免边框闪入。
-    try {
-      if (!(await API.isWin11OrNewer())) {
-        document.documentElement.classList.add('no-native-frame');
-      }
-    } catch { /* 探测失败按现代系统处理，不补描边 */ }
     this.renderShell();
     this.bindGlobalGuards();
     this.bindWindowControls();
@@ -78,6 +71,9 @@ class App {
     } catch (err) {
       console.error('takeHotkeyError failed:', err);
     }
+
+    // 启动更新检测（默认开；内部自行处理失败与弹窗，不阻塞首屏）
+    initUpdateCheck();
   }
 
   // Backend-originated events: the skin right-click menu and the tray can
@@ -93,11 +89,11 @@ class App {
     });
     listen('skin-loaded', async (event) => {
       await this.skinList.refresh();
-      await this.onLoadStateChange(event.payload, true);
+      await this.onLoadStateChange(event.payload);
     });
     listen('skin-unloaded', async (event) => {
       await this.skinList.refresh();
-      await this.onLoadStateChange(event.payload, false);
+      await this.onLoadStateChange(event.payload);
     });
   }
 
@@ -267,10 +263,8 @@ class App {
 
     if (settingsBtn) {
       settingsBtn.onclick = async () => {
-        const s = new Settings();
-        this.settings = s;
-        await s.open();
-        this.settings = null;
+        // 防叠开由 settings.js 模块级 openSettings 负责，此处无需簿记
+        await new Settings().open();
       };
     }
   }
@@ -310,10 +304,18 @@ class App {
   // 自己发起的）都会 emit skin-loaded / skin-unloaded（commands.rs），
   // 列表按钮不再直连 editor.load，避免两路并发双调。
   // 删除选中的皮肤走 onSelect(null) → onSkinSelect → editor.clear()
-  async onLoadStateChange(skinId, _loaded) {
-    if (this.skinEditor.skinId === skinId) {
-      await this.skinEditor.load(skinId);
-    }
+  // reload 路径（层级「置顶→正常」/重新加载/热重载）会连发 unloaded +
+  // loaded 两个事件，按皮肤各自 80ms 合并为一次刷新（否则整页连着重绘
+  // 两遍；计时器必须按皮肤分键——「全部重载」连发多皮肤事件，共享一个
+  // 计时器会让先到的皮肤刷新被后到者挤掉）
+  onLoadStateChange(skinId) {
+    clearTimeout(this._loadStateTimers.get(skinId));
+    this._loadStateTimers.set(skinId, setTimeout(() => {
+      this._loadStateTimers.delete(skinId);
+      if (this.skinEditor.skinId === skinId) {
+        this.skinEditor.load(skinId);
+      }
+    }, 80));
   }
 
   showToast(msg, type) {

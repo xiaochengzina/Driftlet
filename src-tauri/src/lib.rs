@@ -10,6 +10,7 @@ mod i18n;
 mod skin;
 mod skin_api;
 mod tray;
+mod update;
 mod window;
 mod capture;
 
@@ -45,13 +46,17 @@ pub struct AppState {
     /// ThreadId of the event-loop (main) thread.  Win32 window work such as
     /// SetWindowSubclass must run on this thread — see window::factory.
     pub main_thread_id: std::thread::ThreadId,
-    /// .dskin package passed on the command line at cold start (double-click
-    /// install).  Stored here because the frontend may not be ready to
-    /// receive an event yet — it pulls this once on startup.
+    /// .dskin package handed to us either on the command line at cold start
+    /// or forwarded by a second instance (single_instance callback).  Stored
+    /// here because the frontend may not be ready to receive an event yet —
+    /// it pulls this via take_pending_package_install once ready.
     pub pending_package: Mutex<Option<String>>,
-    /// Serializes package installs: a second double-click install while one
-    /// is still running would otherwise race remove_dir_all vs copy on the
-    /// same skin directory (IO error, not a hang — but let's be correct).
+    /// Serializes mutations of the data dirs: package installs (a second
+    /// double-click install while one is still running would otherwise race
+    /// remove_dir_all vs copy on the same skin directory — IO error, not a
+    /// hang — but let's be correct) and backup import/export (the import's
+    /// staged rename/copy must not overlap an export's read, or the backup
+    /// would capture a half-swapped skins/).
     /// tokio Mutex：guard 是 Send，可以持有跨过 .await（装完还要 reload）。
     pub install_lock: tauri::async_runtime::Mutex<()>,
     /// Serializes load-modify-save on a skin folder's `settings.json`, which
@@ -72,7 +77,8 @@ pub struct AppState {
     /// a toast instead of a silent log — mirrors pending_package.
     pub hotkey_error: Mutex<Option<String>>,
     /// Skin hot reload master switch (mirrors config.hot_reload; toggled by
-    /// the set_hot_reload command).  The watcher thread reads it every tick;
+    /// the set_hot_reload command, and re-synced from the imported config by
+    /// backup::rebuild_runtime).  The watcher thread reads it every tick;
     /// when false, file events are drained without reloading anything.
     pub hot_reload_enabled: AtomicBool,
 }
@@ -95,6 +101,11 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(path) = dskin_arg(args.into_iter()) {
                 log::info!("Second instance handed us a skin package: {}", path);
+                // 管理器 webview 未就绪时 emit 的事件会丢 —— 同时写入
+                // pending_package 兜底：前端 take_pending_package_install
+                // 幂等拉取（与冷启动同一约定）
+                *app.state::<AppState>().pending_package.lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(path.clone());
                 tray::show_manager_window(app);
                 let _ = app.emit("open-skin-package", path);
             }
@@ -187,7 +198,9 @@ pub fn run() {
             let main_thread_id = std::thread::current().id();
             // Cold-start double-click install: the frontend pulls this
             // via take_pending_package_install once it is ready.
-            let pending_package = dskin_arg(std::env::args());
+            // args() 对非 UTF-8 参数直接 panic（release 无控制台 GUI =
+            // 静默闪退），这里用 args_os() + to_string_lossy() 容错
+            let pending_package = dskin_arg(std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()));
             let language = app_config.language.clone();
             let hot_reload = app_config.hot_reload;
             app.manage(AppState {
@@ -251,7 +264,10 @@ pub fn run() {
             .inner_size(960.0, 640.0)
             .min_inner_size(640.0, 460.0)
             .decorations(false)
-            .shadow(false)
+            // 无边框窗口的原生阴影：经 tao with_undecorated_shadow 调
+            // DwmExtendFrameIntoClientArea（1px 边距），与其它自绘标题栏
+            // 软件同款；皮肤窗口必须保持 shadow(false)（见 factory.rs）
+            .shadow(true)
             .resizable(true)
             .center()
             .visible(false)
@@ -310,7 +326,7 @@ pub fn run() {
             // Register the configured global hotkey (failures only log).
             hotkey::register_from_config(app.handle());
 
-            // Periodic frameless maintenance timer.
+            // Periodic frameless maintenance timer (Windows only).
             //
             // SetWindowSubclass only works on the window's OWNER thread, and
             // a failed/somehow-removed subclass leaves the window with tao's
@@ -320,6 +336,8 @@ pub fn run() {
             // window (self-healing), then post a deferred cleanup.  The
             // cleanup itself is a near-no-op when styles are clean (no
             // SWP_FRAMECHANGED storm → DWM is never re-triggered).
+            // 所有实际工作都是 Win32 窗口修补，非 Windows 不建线程空转。
+            #[cfg(target_os = "windows")]
             {
                 let h = app.handle().clone();
                 std::thread::spawn(move || {
@@ -333,26 +351,21 @@ pub fn run() {
                         if windows.is_empty() {
                             continue;
                         }
-                        #[cfg(target_os = "windows")]
-                        {
-                            let h2 = h.clone();
-                            let _ = h.run_on_main_thread(move || {
-                                for (skin_id, hwnd) in &windows {
-                                    factory::ensure_frameless_subclass(*hwnd);
-                                    factory::force_clean_skin_window_by_hwnd(*hwnd);
-                                    // Keep WebView2's default context menu
-                                    // disabled (self-healing; the creation-time
-                                    // retry in factory only covers startup).
-                                    if let Some(window) = h2.get_webview_window(
-                                        &factory::skin_window_label(skin_id),
-                                    ) {
-                                        factory::disable_default_context_menu(&window);
-                                    }
+                        let h2 = h.clone();
+                        let _ = h.run_on_main_thread(move || {
+                            for (skin_id, hwnd) in &windows {
+                                factory::ensure_frameless_subclass(*hwnd);
+                                factory::force_clean_skin_window_by_hwnd(*hwnd);
+                                // Keep WebView2's default context menu
+                                // disabled (self-healing; the creation-time
+                                // retry in factory only covers startup).
+                                if let Some(window) = h2.get_webview_window(
+                                    &factory::skin_window_label(skin_id),
+                                ) {
+                                    factory::disable_default_context_menu(&window);
                                 }
-                            });
-                        }
-                        #[cfg(not(target_os = "windows"))]
-                        let _ = windows;
+                            }
+                        });
                     }
                 });
             }
@@ -370,13 +383,12 @@ pub fn run() {
             commands::start_skin_resize,
             commands::list_skins,
             commands::get_skin_detail,
-            commands::refresh_skins,
             commands::load_skin,
             commands::unload_skin,
             commands::reload_skin,
             commands::set_skin_opacity,
-            commands::set_skin_always_on_top,
-            commands::set_skin_on_desktop,
+            commands::set_skin_placement,
+            commands::set_skin_click_through,
             commands::set_skin_position_locked,
             commands::set_skin_resizable,
             commands::set_skin_zoom,
@@ -385,7 +397,6 @@ pub fn run() {
             commands::set_skin_position,
             commands::show_skin_context_menu,
             commands::set_skin_size,
-            commands::update_skin_config,
             commands::set_skin_custom_setting,
             commands::reset_skin_config,
             commands::pick_skin_package,
@@ -393,15 +404,16 @@ pub fn run() {
             commands::install_skin_package,
             commands::remove_skin,
             commands::get_app_config,
-            commands::save_app_config,
             commands::set_autostart,
             commands::get_autostart,
             commands::set_theme,
             commands::set_language,
             commands::set_hotkey,
             commands::set_hot_reload,
+            commands::check_update,
+            commands::set_update_check,
+            commands::open_release_page,
             commands::take_hotkey_error,
-            commands::is_windows_11_or_newer,
             commands::open_skins_folder,
             commands::open_skin_folder,
             commands::list_system_fonts,

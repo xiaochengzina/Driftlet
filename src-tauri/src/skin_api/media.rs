@@ -49,7 +49,7 @@ pub fn info() -> Result<Option<MediaInfo>, String> {
         }
     }
 
-    let cover_base64 = props
+    let cover = props
         .as_ref()
         .and_then(|p| p.Thumbnail().ok())
         .and_then(read_thumbnail);
@@ -61,7 +61,8 @@ pub fn info() -> Result<Option<MediaInfo>, String> {
         status: status.to_string(),
         position_secs,
         duration_secs,
-        cover_base64,
+        cover_base64: cover.as_ref().map(|(b, _)| b.clone()),
+        cover_mime: cover.and_then(|(_, m)| m.map(str::to_string)),
     }))
 }
 
@@ -85,9 +86,10 @@ pub fn control(action: MediaAction) -> Result<bool, String> {
 
 /// Artwork is optional and often small (≤ a few hundred KB); any failure
 /// just means "no cover". 2 MB cap guards against pathological streams.
+/// 返回 (base64, mime)：SMTC 不给图片格式，按 magic bytes 嗅探。
 fn read_thumbnail(
     reference: windows::Storage::Streams::IRandomAccessStreamReference,
-) -> Option<String> {
+) -> Option<(String, Option<&'static str>)> {
     let stream = reference.OpenReadAsync().ok()?.get().ok()?;
     let size = stream.Size().ok()?;
     if size == 0 || size > 2 * 1024 * 1024 {
@@ -97,7 +99,25 @@ fn read_thumbnail(
     let loaded = reader.LoadAsync(size as u32).ok()?.get().ok()?;
     let mut buf = vec![0u8; loaded as usize];
     reader.ReadBytes(&mut buf).ok()?;
-    Some(base64::engine::general_purpose::STANDARD.encode(buf))
+    let mime = sniff_image_mime(&buf);
+    Some((base64::engine::general_purpose::STANDARD.encode(buf), mime))
+}
+
+/// 常见图片格式的 magic bytes；认不出来返回 None（皮肤自行决定回退格式）。
+fn sniff_image_mime(buf: &[u8]) -> Option<&'static str> {
+    if buf.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if buf.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        Some("image/png")
+    } else if buf.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if buf.starts_with(b"BM") {
+        Some("image/bmp")
+    } else if buf.len() >= 12 && buf.starts_with(b"RIFF") && &buf[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

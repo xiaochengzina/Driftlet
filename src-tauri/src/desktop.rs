@@ -52,14 +52,14 @@ mod imp {
 
     use tauri::AppHandle;
     use windows::core::w;
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowExW, GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindow,
-        GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-        SetWindowLongPtrW, SetWindowPos, ShowWindow, GW_HWNDNEXT, GW_HWNDPREV, GWL_EXSTYLE,
-        HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, SET_WINDOW_POS_FLAGS, SW_RESTORE, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSENDCHANGING, SWP_NOSIZE, WS_EX_APPWINDOW,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        FindWindowExW, GetClassNameW, GetForegroundWindow, GetShellWindow, GetSystemMetrics,
+        GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
+        IsWindowVisible, SetWindowLongPtrW, SetWindowPos, ShowWindow, GW_CHILD, GW_HWNDNEXT,
+        GW_HWNDPREV, GWL_EXSTYLE, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, SET_WINDOW_POS_FLAGS,
+        SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+        SWP_NOSENDCHANGING, SWP_NOSIZE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     /// How often the enforcement loop re-verifies that every pinned skin
@@ -355,10 +355,84 @@ mod imp {
         }
     }
 
+    // ── 壁纸层移除的一次性迁移重绘 ───────────────────────────────────────
+
+    /// 壁纸层移除的升级路径兜底（不是壁纸层功能的残留）：旧版本把皮肤
+    /// 钉进壁纸 WorkerW 的用户，其壁纸表面可能留有黑色窗形破洞（旧版无
+    /// 任何自愈，且洞不自愈）；升级到无壁纸层版本后这些洞无人清理，会
+    /// 长期留在用户壁纸上。`normalize_mode_flags` 迁移到 wallpaper_layer
+    /// 条目时调用一次：对所有候选壁纸表面做 SW_HIDE→SW_SHOW 强制全表面
+    /// 重绘（实测唯一可愈手段）。后台线程 1 秒延迟执行（等启动稳定），
+    /// 无迁移配置时零成本。
+    pub fn repaint_wallpaper_surfaces_once() {
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(1000));
+            unsafe {
+                let Some(shell) = get_default_shell_window() else {
+                    return;
+                };
+                let host = get_desktop_icons_host_window().unwrap_or(HWND(null_mut()));
+                let mut surfaces: Vec<HWND> = Vec::new();
+                // 经典形态：全屏可见的顶层 WorkerW（≠图标宿主）
+                let mut w = HWND(null_mut());
+                loop {
+                    w = FindWindowExW(Some(HWND(null_mut())), Some(w), w!("WorkerW"), None)
+                        .unwrap_or(HWND(null_mut()));
+                    if w.0.is_null() {
+                        break;
+                    }
+                    if w != host && is_fullscreen_visible(w) {
+                        surfaces.push(w);
+                    }
+                }
+                // 24H2+ 形态：Progman 的全屏 WorkerW 子窗（≠图标宿主）
+                let mut child = GetWindow(shell, GW_CHILD).unwrap_or(HWND(null_mut()));
+                while !child.0.is_null() {
+                    if child != host && is_fullscreen_visible(child) && class_is(child, "WorkerW") {
+                        surfaces.push(child);
+                    }
+                    child = GetWindow(child, GW_HWNDNEXT).unwrap_or(HWND(null_mut()));
+                }
+                for s in surfaces {
+                    if IsWindow(Some(s)).as_bool() {
+                        log::info!("migration: repaint wallpaper surface {:p} (hide->show)", s.0);
+                        let _ = ShowWindow(s, SW_HIDE);
+                        std::thread::sleep(Duration::from_millis(60));
+                        let _ = ShowWindow(s, SW_SHOW);
+                    }
+                }
+            }
+        });
+    }
+
+    /// 全屏可见判定：系统常驻一批 136x39 的隐藏 WorkerW，按「可见 +
+    /// 不小于主屏」过滤。
+    fn is_fullscreen_visible(h: HWND) -> bool {
+        unsafe {
+            if !IsWindowVisible(h).as_bool() {
+                return false;
+            }
+            let mut rc = RECT::default();
+            if GetWindowRect(h, &mut rc).is_err() {
+                return false;
+            }
+            (rc.right - rc.left) >= GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN)
+                && (rc.bottom - rc.top) >= GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN)
+        }
+    }
+
+    fn class_is(h: HWND, name: &str) -> bool {
+        unsafe {
+            let mut buf = [0u16; 64];
+            let n = GetClassNameW(h, &mut buf);
+            n > 0 && String::from_utf16_lossy(&buf[..n as usize]) == name
+        }
+    }
+
 }
 
 #[cfg(target_os = "windows")]
-pub use imp::Pinner;
+pub use imp::{repaint_wallpaper_surfaces_once, Pinner};
 
 #[cfg(not(target_os = "windows"))]
 pub struct Pinner;
@@ -370,3 +444,6 @@ impl Pinner {
     pub fn pin(&self, _: &str, _: isize) {}
     pub fn unpin(&self, _: &str, _: isize) {}
 }
+
+#[cfg(not(target_os = "windows"))]
+pub fn repaint_wallpaper_surfaces_once() {}

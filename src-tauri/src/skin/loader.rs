@@ -20,7 +20,12 @@ pub fn scan_skins_directory(skins_dir: &Path) -> Vec<Skin> {
         }
     };
 
-    for entry in entries.flatten() {
+    // read_dir 的返回顺序随文件系统而变（无字典序保证）——先按文件夹名
+    // 排序再扫描，下面重复 id 去重的「保留第一个」才有确定性
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
         let path = entry.path();
         if !path.is_dir() {
             continue;
@@ -66,7 +71,7 @@ pub fn scan_skins_directory(skins_dir: &Path) -> Vec<Skin> {
 }
 
 /// skin.json 体积上限：手写/打包的清单都是小文件，超限即视为异常
-const MAX_MANIFEST_BYTES: u64 = 1024 * 1024; // 1 MB
+pub(crate) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024; // 1 MB
 
 /// Parse skin.json from a skin directory
 pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
@@ -85,8 +90,18 @@ pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
 
     // Strip a UTF-8 BOM if present — skin.json is often hand-edited and
     // Windows editors save UTF-8 with a BOM, which serde_json rejects.
-    let manifest: SkinManifest = serde_json::from_str(content.trim_start_matches('\u{feff}'))
+    let mut manifest: SkinManifest = serde_json::from_str(content.trim_start_matches('\u{feff}'))
         .map_err(|e| format!("Invalid skin.json: {}", e))?;
+
+    // 两真归一化：on_desktop 是 serde default_true（types.rs），skin.json
+    // 只写 "always_on_top": true 会读出两真。manifest 是作者源文件，显式
+    // 写 always_on_top 即作者意图 → aot 赢，on_desktop 置回 false。
+    // 注意这与 config.rs normalize_mode_flags 的 desktop-wins 语境不同：
+    // 那里处理的是持久化配置，serde 读回后无法区分「用户显式写 true」与
+    // 「default_true 补的 true」，只能保守地 desktop 赢。
+    if manifest.window.always_on_top {
+        manifest.window.on_desktop = false;
+    }
 
     // entry 必须是皮肤文件夹内的单一文件名：拒绝目录穿越（".."）、子目录
     // 分隔符与 ADS/盘符冒号
@@ -104,7 +119,7 @@ pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
 }
 
 /// entry 字段校验：纯文件名，不含路径分隔符、".." 与冒号
-fn is_valid_entry_name(entry: &str) -> bool {
+pub(crate) fn is_valid_entry_name(entry: &str) -> bool {
     !entry.is_empty()
         && !entry.contains("..")
         && !entry.contains('/')

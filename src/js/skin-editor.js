@@ -78,8 +78,9 @@ export default class SkinEditor {
       this.unlistenSetting = null;
     }
 
-    // 切换皮肤时回到「窗口」页
-    if (skinId !== this.skinId) this.activeTab = 'general';
+    // 切换皮肤时回到「窗口」页；同皮肤刷新 = 数据回灌，不播入场动画（防闪）
+    const skinChanged = skinId !== this.skinId;
+    if (skinChanged) this.activeTab = 'general';
     this.skinId = skinId;
     // 先取到局部变量，过代际校验后再写 this.detail：
     // 防止过期一代把旧皮肤的 detail 留在新 skinId 下
@@ -107,7 +108,7 @@ export default class SkinEditor {
     } else {
       this.systemFonts = null;
     }
-    this.render();
+    this.render(skinChanged);
 
     // Listen for position updates when the user drags the skin window.
     // The backend already persists the position on every Moved event
@@ -243,7 +244,9 @@ export default class SkinEditor {
     }
   }
 
-  render() {
+  // animate 仅用于换肤/首次展示：同皮肤的数据回灌（开关、层级切换、
+  // 后端事件同步）传 false 跳过入场动画，否则面板每次都闪一遍淡入
+  render(animate = false) {
     if (!this.detail) return this.clear();
 
     const d = this.detail;
@@ -254,7 +257,7 @@ export default class SkinEditor {
     const customHidden = this.activeTab !== 'custom';
 
     this.container.innerHTML = `
-      <div class="config-panel">
+      <div class="config-panel" ${animate ? '' : 'style="animation:none"'}>
         <div class="cfg-header">
           <div class="cfg-header-main">
             <h2>${this.esc(dispName(d))}</h2>
@@ -289,28 +292,15 @@ export default class SkinEditor {
           <h3>${t('editor.behavior')}<span class="sec-en">BEHAVIOR</span></h3>
           <div class="form-row">
             <div>
-              <label>${t('editor.alwaysOnTop')}</label>
-              <span class="hint">${t('editor.alwaysOnTopHint')}</span>
+              <label>${t('editor.placement')}</label>
+              <span class="hint">${t('editor.placementHint')}</span>
             </div>
-            <label class="toggle">
-              <input type="checkbox" id="cfg-ontop"
-                ${cfg.always_on_top ? 'checked' : ''}
-                ${!d.loaded ? 'disabled' : ''}>
-              <span class="slider"></span>
-            </label>
-          </div>
-
-          <div class="form-row">
-            <div>
-              <label>${t('editor.onDesktop')}</label>
-              <span class="hint">${t('editor.onDesktopHint')}</span>
+            <div class="theme-options">
+              <button class="theme-btn ${cfg.always_on_top ? 'active' : ''}" id="cfg-place-top"
+                ${!d.loaded ? 'disabled' : ''}>${t('editor.placeTop')}</button>
+              <button class="theme-btn ${cfg.on_desktop ? 'active' : ''}" id="cfg-place-desktop"
+                ${!d.loaded ? 'disabled' : ''}>${t('editor.placeDesktop')}</button>
             </div>
-            <label class="toggle">
-              <input type="checkbox" id="cfg-ondesktop"
-                ${cfg.on_desktop ? 'checked' : ''}
-                ${!d.loaded ? 'disabled' : ''}>
-              <span class="slider"></span>
-            </label>
           </div>
 
           <div class="form-row">
@@ -328,51 +318,15 @@ export default class SkinEditor {
 
           <div class="form-row">
             <div>
-              <label>${t('editor.resizable')}</label>
-              <span class="hint">${t('editor.resizableHint')}</span>
+              <label>${t('editor.clickThrough')}</label>
+              <span class="hint">${t('editor.clickThroughHint')}</span>
             </div>
             <label class="toggle">
-              <input type="checkbox" id="cfg-resizable"
-                ${cfg.resizable ? 'checked' : ''}
+              <input type="checkbox" id="cfg-clickthrough"
+                ${cfg.click_through ? 'checked' : ''}
                 ${!d.loaded ? 'disabled' : ''}>
               <span class="slider"></span>
             </label>
-          </div>
-
-          <div class="slider-row">
-            <div class="slider-label">
-              <span>${t('editor.zoom')}</span>
-              <span class="slider-value" id="zoom-val">${Math.round((cfg.zoom ?? 1) * 100)}%</span>
-            </div>
-            <span class="hint cfg-slider-hint">${t('editor.zoomHint')}</span>
-            <input type="range" class="range-slider" id="cfg-zoom"
-              min="50" max="200" step="5"
-              value="${Math.round((cfg.zoom ?? 1) * 100)}">
-          </div>
-
-          <div class="form-row">
-            <div>
-              <label>${t('editor.edgeSnap')}</label>
-              <span class="hint">${t('editor.edgeSnapHint')}</span>
-            </div>
-            <label class="toggle">
-              <input type="checkbox" id="cfg-edgesnap"
-                ${cfg.edge_snap ? 'checked' : ''}
-                ${!d.loaded ? 'disabled' : ''}>
-              <span class="slider"></span>
-            </label>
-          </div>
-
-          <div class="form-row">
-            <div>
-              <label>${t('editor.snapGap')}</label>
-              <span class="hint">${t('editor.snapGapHint')}</span>
-            </div>
-            <div class="num-inputs">
-              <label>px <input type="number" id="cfg-snapgap"
-                value="${cfg.snap_gap ?? 0}" min="0" max="200"
-                ${!d.loaded || !cfg.edge_snap ? 'disabled' : ''}></label>
-            </div>
           </div>
         </div>
 
@@ -397,6 +351,56 @@ export default class SkinEditor {
               <label>${t('editor.height')} <input type="number" id="cfg-height"
                 value="${cfg.height}" min="50" max="4000"
                 ${!d.loaded ? 'disabled' : ''}></label>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>${t('editor.resizable')}</label>
+              <span class="hint">${t('editor.resizableHint')}</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg-resizable"
+                ${cfg.resizable ? 'checked' : ''}
+                ${!d.loaded ? 'disabled' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-label">
+              <span>${t('editor.zoom')}</span>
+              <span class="slider-value" id="zoom-val">${Math.round((cfg.zoom ?? 1) * 100)}%</span>
+            </div>
+            <span class="hint cfg-slider-hint">${t('editor.zoomHint')}</span>
+            <input type="range" class="range-slider" id="cfg-zoom"
+              min="50" max="200" step="5"
+              value="${Math.round((cfg.zoom ?? 1) * 100)}"
+              ${!d.loaded ? 'disabled' : ''}>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>${t('editor.edgeSnap')}</label>
+              <span class="hint">${t('editor.edgeSnapHint')}</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg-edgesnap"
+                ${cfg.edge_snap ? 'checked' : ''}
+                ${!d.loaded ? 'disabled' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>${t('editor.snapGap')}</label>
+              <span class="hint">${t('editor.snapGapHint')}</span>
+            </div>
+            <div class="num-inputs">
+              <label>px <input type="number" id="cfg-snapgap"
+                value="${cfg.snap_gap ?? 0}" min="0" max="200"
+                ${!d.loaded || !cfg.edge_snap ? 'disabled' : ''}></label>
             </div>
           </div>
         </div>
@@ -711,7 +715,7 @@ export default class SkinEditor {
       });
     });
 
-    // 不透明度滑块
+    // 不透明度滑块：拖动中只更新显示，松手才保存；成功静默（值已可见），仅失败提示
     const opacitySlider = this.container.querySelector('#cfg-opacity');
     const opacityVal = this.container.querySelector('#opacity-val');
     opacitySlider?.addEventListener('input', () => {
@@ -720,64 +724,44 @@ export default class SkinEditor {
     opacitySlider?.addEventListener('change', () => {
       const val = parseInt(opacitySlider.value) / 100;
       API.setOpacity(this.skinId, val)
-        .then(() => this.showToast(t('editor.opacitySet', { value: opacitySlider.value }), 'success'))
         .catch(err => this.showToast(String(err), 'error'));
     });
 
-    // 「窗口置顶」与「贴在桌面」二选一，且必有一个开启：
-    // 打开一个会自动关闭另一个；关闭当前模式会切换到另一个，不存在两者都关的状态。
-    // 开关是乐观改 UI：API 失败必须重载回滚（同 saveCustomSetting），
-    // 否则面板会停在"两个都关"的非法态
-    this.bindToggle('cfg-ontop', (on) => {
-      const onDesktop = this.container.querySelector('#cfg-ondesktop');
-      if (on) {
-        API.setAlwaysOnTop(this.skinId, true)
-          .then(() => this.showToast(t('editor.switchedOnTop'), 'info'))
+    // 窗口放置双态（置顶/正常）：分段按钮二选一。成功就地把选中态迁到
+    // 被点按钮（整页 load 会重播面板入场动画，肉眼可见的闪；点当前档位
+    // 也由此变纯 no-op）；失败才整页 load 回滚（防停在非法态）。
+    // 成功静默：选中态迁移即是反馈
+    const bindPlacement = (id, placement) => {
+      const btn = this.container.querySelector(id);
+      if (!btn) return;
+      btn.onclick = () => {
+        API.setPlacement(this.skinId, placement)
+          .then(() => {
+            this.container.querySelectorAll('#cfg-place-top, #cfg-place-desktop')
+              .forEach(b => b.classList.toggle('active', b === btn));
+          })
           .catch(err => {
             this.showToast(String(err), 'error');
             this.load(this.skinId);
           });
-        if (onDesktop) onDesktop.checked = false;
-      } else {
-        // 关闭置顶 = 切换到贴在桌面
-        if (onDesktop) onDesktop.checked = true;
-        API.setOnDesktop(this.skinId, true)
-          .then(() => this.showToast(t('editor.switchedOnDesktop'), 'info'))
-          .catch(err => {
-            this.showToast(String(err), 'error');
-            this.load(this.skinId);
-          });
-        setTimeout(() => this.load(this.skinId), 500);
-      }
-    });
+      };
+    };
+    bindPlacement('#cfg-place-top', 'top');
+    bindPlacement('#cfg-place-desktop', 'desktop');
 
-    this.bindToggle('cfg-ondesktop', (on) => {
-      const onTop = this.container.querySelector('#cfg-ontop');
-      if (on) {
-        API.setOnDesktop(this.skinId, true)
-          .then(() => this.showToast(t('editor.switchedOnDesktop'), 'info'))
-          .catch(err => {
-            this.showToast(String(err), 'error');
-            this.load(this.skinId);
-          });
-        if (onTop) onTop.checked = false;
-        setTimeout(() => this.load(this.skinId), 500);
-      } else {
-        // 关闭贴桌面 = 切换到窗口置顶
-        if (onTop) onTop.checked = true;
-        API.setAlwaysOnTop(this.skinId, true)
-          .then(() => this.showToast(t('editor.switchedOnTop'), 'info'))
-          .catch(err => {
-            this.showToast(String(err), 'error');
-            this.load(this.skinId);
-          });
-      }
-    });
-
-    // 锁定位置
+    // 禁止拖动：开关态迁移即是反馈，成功静默
     this.bindToggle('cfg-locked', (on) => {
       API.setPositionLocked(this.skinId, on)
-        .then(() => this.showToast(on ? t('editor.posLocked') : t('editor.posUnlocked'), 'info'))
+        .catch(err => {
+          this.showToast(String(err), 'error');
+          this.load(this.skinId);
+        });
+    });
+
+    // 鼠标穿透：开启时保留提示（皮肤将失去交互，需知会用户），关闭静默
+    this.bindToggle('cfg-clickthrough', (on) => {
+      API.setClickThrough(this.skinId, on)
+        .then(() => { if (on) this.showToast(t('editor.clickThroughOn'), 'info'); })
         .catch(err => {
           this.showToast(String(err), 'error');
           this.load(this.skinId);
@@ -787,7 +771,6 @@ export default class SkinEditor {
     // 拖拽调整大小
     this.bindToggle('cfg-resizable', (on) => {
       API.setResizable(this.skinId, on)
-        .then(() => this.showToast(on ? t('editor.resizableOn') : t('editor.resizableOff'), 'info'))
         .catch(err => {
           this.showToast(String(err), 'error');
           this.load(this.skinId);
@@ -803,14 +786,12 @@ export default class SkinEditor {
     zoomSlider?.addEventListener('change', () => {
       const val = parseInt(zoomSlider.value) / 100;
       API.setZoom(this.skinId, val)
-        .then(() => this.showToast(t('editor.zoomSet', { value: zoomSlider.value }), 'success'))
         .catch(err => this.showToast(String(err), 'error'));
     });
 
     // 边缘吸附：开关切换时间距输入框随之启停
     this.bindToggle('cfg-edgesnap', (on) => {
       API.setEdgeSnap(this.skinId, on)
-        .then(() => this.showToast(on ? t('editor.edgeSnapOn') : t('editor.edgeSnapOff'), 'info'))
         .catch(err => {
           this.showToast(String(err), 'error');
           this.load(this.skinId);
@@ -827,7 +808,6 @@ export default class SkinEditor {
       const clamped = Math.max(0, Math.min(200, gap));
       snapGapInput.value = clamped;
       API.setSnapGap(this.skinId, clamped)
-        .then(() => this.showToast(t('editor.snapGapSaved'), 'success'))
         .catch(err => {
           this.showToast(String(err), 'error');
           this.load(this.skinId);
@@ -837,7 +817,6 @@ export default class SkinEditor {
     // 位置
     this.bindNumInput('cfg-posx', 'cfg-posy', (x, y) => {
       API.setPosition(this.skinId, x, y)
-        .then(() => this.showToast(t('editor.posSaved'), 'success'))
         .catch(err => {
           this.showToast(String(err), 'error');
           this.load(this.skinId);
@@ -847,7 +826,6 @@ export default class SkinEditor {
     // 大小
     this.bindNumInput('cfg-width', 'cfg-height', (w, h) => {
       API.setSize(this.skinId, w, h)
-        .then(() => this.showToast(t('editor.sizeSaved'), 'success'))
         .catch(err => {
           this.showToast(String(err), 'error');
           this.load(this.skinId);
@@ -855,21 +833,32 @@ export default class SkinEditor {
     });
 
     // 操作按钮 — also refresh the skin list so button states stay in sync
-    this.container.querySelector('#btn-load')?.addEventListener('click', async () => {
+    // 点击即禁用按钮防连点并发；成功后整页 load 重建按钮，仅失败需恢复
+    this.container.querySelector('#btn-load')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
       try {
         await API.loadSkin(this.skinId);
         this.showToast(t('common.skinLoaded'), 'success');
         await this.load(this.skinId);
         await window.__app?.skinList?.refresh();
-      } catch (err) { this.showToast(String(err), 'error'); }
+      } catch (err) {
+        btn.disabled = false;
+        this.showToast(String(err), 'error');
+      }
     });
-    this.container.querySelector('#btn-unload')?.addEventListener('click', async () => {
+    this.container.querySelector('#btn-unload')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
       try {
         await API.unloadSkin(this.skinId);
         this.showToast(t('common.skinUnloaded'), 'info');
         await this.load(this.skinId);
         await window.__app?.skinList?.refresh();
-      } catch (err) { this.showToast(String(err), 'error'); }
+      } catch (err) {
+        btn.disabled = false;
+        this.showToast(String(err), 'error');
+      }
     });
     this.container.querySelector('#btn-reload')?.addEventListener('click', async () => {
       try {
@@ -927,7 +916,14 @@ export default class SkinEditor {
       </div>`;
     document.body.appendChild(overlay);
 
-    const close = () => overlay.remove();
+    // Esc 关闭 + 初始焦点落在「取消」（危险操作，焦点不放确认键）；
+    // 关闭时摘除文档级监听，避免泄漏
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const close = () => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+    };
+    document.addEventListener('keydown', onKey);
 
     overlay.querySelector('.confirm-btn.cancel').onclick = close;
     overlay.querySelector('.confirm-btn.danger').onclick = async () => {
@@ -944,6 +940,7 @@ export default class SkinEditor {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) close();
     });
+    overlay.querySelector('.confirm-btn.cancel').focus();
   }
 
   bindToggle(id, onChange) {
@@ -952,10 +949,9 @@ export default class SkinEditor {
     });
   }
 
-  // 保存单个自定义设置；失败时重新 load 回滚控件显示
+  // 保存单个自定义设置；成功静默（控件态已是反馈），失败时重新 load 回滚控件显示
   saveCustomSetting(key, value) {
     return API.setSkinCustomSetting(this.skinId, key, value)
-      .then(() => this.showToast(t('editor.settingSaved'), 'success'))
       .catch(err => {
         this.showToast(String(err), 'error');
         this.load(this.skinId);
@@ -1240,7 +1236,7 @@ export default class SkinEditor {
 
   esc(str) {
     const div = document.createElement('div');
-    div.textContent = str;
+    div.textContent = String(str ?? '');
     return div.innerHTML;
   }
 

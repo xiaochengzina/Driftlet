@@ -79,11 +79,12 @@ export default class SkinList {
     this.container.querySelectorAll('.load-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (btn.dataset.action === 'load') {
-          this.loadSkin(btn.dataset.skinId);
-        } else {
-          this.unloadSkin(btn.dataset.skinId);
-        }
+        // 点击即禁用防连点并发；成功后 refresh 重建按钮，仅失败需恢复
+        btn.disabled = true;
+        const done = btn.dataset.action === 'load'
+          ? this.loadSkin(btn.dataset.skinId)
+          : this.unloadSkin(btn.dataset.skinId);
+        done.finally(() => { if (btn.isConnected) btn.disabled = false; });
       });
     });
 
@@ -159,9 +160,6 @@ export default class SkinList {
       await API.loadSkin(skinId);
       this.showToast(t('common.skinLoaded'), 'success');
       await this.refresh();
-      if (this.selectedId === skinId) {
-        this.container.querySelector(`[data-skin-id="${CSS.escape(skinId)}"]`)?.classList.add('selected');
-      }
       // 编辑器联动刷新走后端 skin-loaded 事件单一路径（app.js），
       // 不在此直接触发——否则与事件路径并发双调 editor.load
     } catch (err) {
@@ -196,7 +194,14 @@ export default class SkinList {
       </div>`;
     document.body.appendChild(overlay);
 
-    const close = () => overlay.remove();
+    // Esc 关闭 + 初始焦点落在「取消」（危险操作，焦点不放确认键）；
+    // 关闭时摘除文档级监听，避免泄漏
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const close = () => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+    };
+    document.addEventListener('keydown', onKey);
 
     overlay.querySelector('.confirm-btn.cancel').onclick = close;
     overlay.querySelector('.confirm-btn.danger').onclick = async () => {
@@ -206,6 +211,7 @@ export default class SkinList {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) close();
     });
+    overlay.querySelector('.confirm-btn.cancel').focus();
   }
 
   async deleteSkin(skinId) {
@@ -224,7 +230,7 @@ export default class SkinList {
 
   esc(str) {
     const div = document.createElement('div');
-    div.textContent = str;
+    div.textContent = String(str ?? '');
     return div.innerHTML;
   }
 

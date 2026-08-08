@@ -4,7 +4,7 @@
 //! 打包前按与 Driftlet 管理器一致的规则校验 skin.json：
 //! 用与安装端（src-tauri/src/skin/types.rs）相同的强类型 SkinManifest
 //! 完整反序列化（settings[].type 非法、window.width 非数字等一律拒绝），
-//! 再检查 id 合法、入口文件存在。
+//! 再检查 id 合法（含 Windows 保留设备名）、入口文件名合法且存在。
 //!
 //! 用法：pack-skin <皮肤文件夹> [输出目录]
 
@@ -18,6 +18,8 @@ use zip::write::SimpleFileOptions;
 const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024; // 压缩包 64 MB
 const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024; // 解压后合计 256 MB
 const MAX_FILES: usize = 5000;
+/// 对齐安装端 loader.rs：skin.json 体积上限，超限即视为异常
+const MAX_MANIFEST_BYTES: u64 = 1024 * 1024; // 1 MB
 
 // ---------------------------------------------------------------
 // 以下 serde 结构复制精简自安装端 src-tauri/src/skin/types.rs，
@@ -32,6 +34,19 @@ struct SkinManifest {
     #[serde(default)]
     id: Option<String>,
     name: String,
+    /// 英文皮肤名（bilingual 皮肤专用；留空时英文界面回退 name）
+    #[serde(default)]
+    name_en: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    /// 英文简介（bilingual 皮肤专用；留空回退 description）
+    #[serde(default)]
+    description_en: Option<String>,
+    /// 中英双语声明（作者侧开关）：false/缺省 = 单语皮肤，所有 *_en 字段一律忽略
+    #[serde(default)]
+    bilingual: bool,
     #[serde(default = "default_entry")]
     entry: String,
     #[serde(default)]
@@ -157,21 +172,45 @@ fn fail(msg: &str) -> ! {
     std::process::exit(1);
 }
 
-/// 与 Driftlet 管理器一致：小写字母/数字/中划线，字母或数字开头，≤64 字符
+/// 与 Driftlet 管理器一致：小写字母/数字/中划线，字母或数字开头，≤64 字符，
+/// 且不是 Windows 保留设备名（id 会作安装文件夹名）
 fn validate_skin_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && id.chars().next().map_or(false, |c| c.is_ascii_alphanumeric())
+        && !is_reserved_device_name(id)
+}
+
+/// 镜像安装端 loader.rs：Windows 保留设备名黑名单（大小写不敏感）——这些名字
+/// 不能作文件夹名，连「加扩展名」的形式（con.txt）同样被系统保留，故按基名判断
+fn is_reserved_device_name(id: &str) -> bool {
+    let base = id.split('.').next().unwrap_or(id).to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "con" | "prn" | "aux" | "nul"
+            | "com1" | "com2" | "com3" | "com4" | "com5" | "com6" | "com7" | "com8" | "com9"
+            | "lpt1" | "lpt2" | "lpt3" | "lpt4" | "lpt5" | "lpt6" | "lpt7" | "lpt8" | "lpt9"
+    )
+}
+
+/// 镜像安装端 loader.rs：entry 必须是皮肤文件夹内的单一文件名，
+/// 拒绝目录穿越（".."）、子目录分隔符与 ADS/盘符冒号
+fn is_valid_entry_name(entry: &str) -> bool {
+    !entry.is_empty()
+        && !entry.contains("..")
+        && !entry.contains('/')
+        && !entry.contains('\\')
+        && !entry.contains(':')
 }
 
 /// 递归收集要打包的文件（相对路径）；读取目录/条目出错记入 errs，不再静默跳过
 fn collect(dir: &Path, base: &Path, out: &mut Vec<PathBuf>, errs: &mut Vec<String>) {
     // settings.json* 是用户的设置值数据（应用运行时生成），不打进分发包；
-    // *.dskin 是旧打包产物，防止滚进新包
+    // *.dskin 是旧打包产物，防止滚进新包。比较大小写不敏感（全小写常量）
     const SKIP_FILES: [&str; 6] = [
-        ".DS_Store",
-        "Thumbs.db",
+        ".ds_store",
+        "thumbs.db",
         "desktop.ini",
         "settings.json",
         "settings.json.bak",
@@ -205,7 +244,13 @@ fn collect(dir: &Path, base: &Path, out: &mut Vec<PathBuf>, errs: &mut Vec<Strin
             collect(&p, base, out, errs);
         } else if p.is_file() {
             if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-                if SKIP_FILES.contains(&name) || name.ends_with(".dskin") {
+                let lower = name.to_ascii_lowercase();
+                if SKIP_FILES.contains(&lower.as_str()) || lower.ends_with(".dskin") {
+                    // 根目录的排除项属预期（运行时数据/旧产物），静默跳过；
+                    // 子目录里出现同名条目多半是误放，静默丢弃易误导，提示一下
+                    if dir != base {
+                        eprintln!("提示：跳过子目录中的排除条目 {}", p.display());
+                    }
                     continue;
                 }
             }
@@ -229,11 +274,21 @@ fn main() {
         fail(&format!("文件夹不存在：{}", skin_dir.display()));
     }
 
-    // 校验 skin.json（容忍 UTF-8 BOM）：与安装端同一套强类型 SkinManifest
-    // 完整反序列化，settings[].type 非法、window.width 非数字等在此拒绝，
-    // 错误信息自带 serde 行列号
-    let raw = fs::read_to_string(skin_dir.join("skin.json"))
-        .unwrap_or_else(|_| fail("找不到 skin.json —— 这不是一个皮肤文件夹"));
+    // 校验 skin.json（容忍 UTF-8 BOM）：先查体积上限（对齐安装端 loader.rs），
+    // 再用与安装端同一套强类型 SkinManifest 完整反序列化，
+    // settings[].type 非法、window.width 非数字等在此拒绝，错误信息自带 serde 行列号
+    let skin_json_path = skin_dir.join("skin.json");
+    let size = fs::metadata(&skin_json_path)
+        .unwrap_or_else(|_| fail("找不到 skin.json —— 这不是一个皮肤文件夹"))
+        .len();
+    if size > MAX_MANIFEST_BYTES {
+        fail(&format!(
+            "skin.json 体积超限：{} 字节（上限 {} 字节）",
+            size, MAX_MANIFEST_BYTES
+        ));
+    }
+    let raw = fs::read_to_string(&skin_json_path)
+        .unwrap_or_else(|e| fail(&format!("无法读取 skin.json：{}", e)));
     let manifest: SkinManifest = serde_json::from_str(raw.trim_start_matches('\u{feff}'))
         .unwrap_or_else(|e| fail(&format!("skin.json 校验失败：{}", e)));
     let name = &manifest.name;
@@ -241,7 +296,13 @@ fn main() {
         .id
         .as_deref()
         .filter(|s| validate_skin_id(s))
-        .unwrap_or_else(|| fail("skin.json 缺少合法的 id 字段（小写字母、数字、中划线，以字母或数字开头，如 \"my-skin\"）"));
+        .unwrap_or_else(|| fail("skin.json 缺少合法的 id 字段（小写字母、数字、中划线，以字母或数字开头，且非 Windows 保留设备名，如 \"my-skin\"）"));
+    if !is_valid_entry_name(&manifest.entry) {
+        fail(&format!(
+            "入口文件 '{}' 不是合法的文件名（不能包含 \"..\"、'/'、'\\'、':'）",
+            manifest.entry
+        ));
+    }
     if !skin_dir.join(&manifest.entry).exists() {
         fail(&format!("入口文件 '{}' 不存在", manifest.entry));
     }

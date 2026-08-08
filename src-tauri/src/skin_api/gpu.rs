@@ -1,9 +1,13 @@
 //! GPU information (Windows only).
 //!
-//! - Name / LUID / dedicated VRAM total: DXGI adapter enumeration
-//! - VRAM used: PDH `\GPU Adapter Memory(*)\Dedicated Usage` per adapter LUID —
-//!   AMD 驱动下 `IDXGIAdapter3::QueryVideoMemoryInfo` 恒返 0，DXGI 值仅作
-//!   PDH 未就绪时的回退
+//! - Name / LUID: DXGI adapter enumeration
+//! - Type (`gpu_type`): "integrated" = 统一内存适配器（核显，D3D12 UMA 查询
+//!   判定，与显存划分大小无关，结果按 LUID 缓存）；其余 = "discrete"
+//! - VRAM total/used: 独显 = 专用显存（DXGI `DedicatedVideoMemory` / PDH
+//!   `\GPU Adapter Memory(*)\Dedicated Usage` 按适配器 LUID 汇总——AMD 驱动下
+//!   `IDXGIAdapter3::QueryVideoMemoryInfo` 恒返 0，DXGI 值仅作 PDH 未就绪时的回退）；
+//!   核显 = 共享系统内存（`SharedSystemMemory` / PDH `Shared Usage`）——
+//!   「专用 + 共享」合计可能超出物理内存，不作口径
 //! - Utilization %: PDH `\GPU Engine(*)\Utilization Percentage`, instances
 //!   carry the adapter LUID in their name and are summed per adapter
 //! - IddCx 虚拟显示器（向日葵 OrayIddDriver 等）会把渲染 GPU 的名字、
@@ -20,15 +24,19 @@ use super::GpuInfo;
 struct AdapterInfo {
     name: String,
     luid: (u32, u32), // (HighPart as u32, LowPart)
+    unified: bool, // 统一内存架构（核显）：显存总量/占用按「专用 + 共享」计算
     vram_total: u64,
+    vram_shared_total: u64,
     vram_used: u64,
+    vram_shared_used: u64,
 }
 
 pub fn collect() -> Vec<GpuInfo> {
     let adapters = enum_adapters();
-    // 先采样（同时初始化两个 PDH 计数器），再取实例名集合
+    // 先采样（同时初始化三个 PDH 计数器），再取实例名集合
     let usage = usage_by_luid();
     let vram = vram_used_by_luid();
+    let shared = shared_used_by_luid();
     let present = pdh_adapter_luids();
 
     adapters
@@ -38,18 +46,29 @@ pub fn collect() -> Vec<GpuInfo> {
         .filter(|a| present.is_empty() || present.contains(&a.luid))
         .map(|a| {
             let usage = usage.get(&a.luid).copied().unwrap_or(0.0).min(100.0);
-            // 显存用量以 PDH 为准（AMD 的 DXGI 值恒为 0）；PDH 未采到
+            // 核显（统一内存）：专用段只是 BIOS 划分的一小块（甚至 0），占用
+            // 几乎全在共享系统内存；「专用 + 共享」合计可能超出物理内存，口径
+            // 不合理——总量与占用都按共享系统内存计。独显保持专用显存口径。
+            // 显存用量以 PDH 为准（AMD 的 DXGI 值恒为 0），PDH 未采到
             // （首调基线/计数器缺失）时回退 DXGI 值
-            let vram_used = vram.get(&a.luid).copied().unwrap_or(a.vram_used);
-            let vram_usage_pct = if a.vram_total > 0 {
-                ((vram_used as f64 / a.vram_total as f64) * 100.0).min(100.0) as f32
+            let (vram_total, vram_used) = if a.unified {
+                (
+                    a.vram_shared_total,
+                    shared.get(&a.luid).copied().unwrap_or(a.vram_shared_used),
+                )
+            } else {
+                (a.vram_total, vram.get(&a.luid).copied().unwrap_or(a.vram_used))
+            };
+            let vram_usage_pct = if vram_total > 0 {
+                ((vram_used as f64 / vram_total as f64) * 100.0).min(100.0) as f32
             } else {
                 0.0
             };
             GpuInfo {
                 name: a.name,
+                gpu_type: if a.unified { "integrated" } else { "discrete" }.to_string(),
                 usage,
-                vram_total: a.vram_total,
+                vram_total,
                 vram_used,
                 vram_usage_pct,
             }
@@ -93,6 +112,7 @@ fn enum_adapters() -> Vec<AdapterInfo> {
             let name = String::from_utf16_lossy(&desc.Description[..end]);
 
             let mut vram_used = 0u64;
+            let mut vram_shared_used = 0u64;
             if let Ok(a3) = adapter.cast::<IDXGIAdapter3>() {
                 let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
                 if a3
@@ -101,17 +121,73 @@ fn enum_adapters() -> Vec<AdapterInfo> {
                 {
                     vram_used = info.CurrentUsage;
                 }
+                let mut shared_info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+                if a3
+                    .QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &mut shared_info)
+                    .is_ok()
+                {
+                    vram_shared_used = shared_info.CurrentUsage;
+                }
             }
 
+            let luid = (desc.AdapterLuid.HighPart as u32, desc.AdapterLuid.LowPart);
             out.push(AdapterInfo {
                 name,
-                luid: (desc.AdapterLuid.HighPart as u32, desc.AdapterLuid.LowPart),
+                luid,
+                unified: is_unified_memory(&adapter, luid),
                 vram_total: desc.DedicatedVideoMemory as u64,
+                vram_shared_total: desc.SharedSystemMemory as u64,
                 vram_used,
+                vram_shared_used,
             });
         }
     }
     out
+}
+
+// ─── D3D12: 统一内存架构（UMA）判定 ───
+
+/// 核显/独显判定走 D3D12 UMA 架构查询——与显存划分大小无关（AMD APU 等可在
+/// BIOS 划出 1GB+ 专用段，按专用显存大小猜会把它们误判成独显）。建 D3D12
+/// 设备代价不低且架构属性不会变，结果按 LUID 缓存，每适配器只查一次。
+/// 查询失败（老卡不支持 D3D12 等）按独显处理，退回专用显存口径。
+fn is_unified_memory(
+    adapter: &windows::Win32::Graphics::Dxgi::IDXGIAdapter1,
+    luid: (u32, u32),
+) -> bool {
+    use windows::core::Interface;
+    use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
+    use windows::Win32::Graphics::Direct3D12::*;
+
+    static CACHE: Mutex<Option<HashMap<(u32, u32), bool>>> = Mutex::new(None);
+    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&v) = guard.as_ref().and_then(|c| c.get(&luid)) {
+        return v;
+    }
+    let unified = unsafe {
+        let mut device: Option<ID3D12Device> = None;
+        adapter
+            .cast::<windows::core::IUnknown>()
+            .and_then(|iunk| {
+                D3D12CreateDevice(&iunk, D3D_FEATURE_LEVEL_11_0, &mut device)?;
+                Ok(())
+            })
+            .ok()
+            .and_then(|_| device)
+            .and_then(|dev| {
+                let mut arch = D3D12_FEATURE_DATA_ARCHITECTURE::default();
+                dev.CheckFeatureSupport(
+                    D3D12_FEATURE_ARCHITECTURE,
+                    &mut arch as *mut _ as *mut _,
+                    std::mem::size_of::<D3D12_FEATURE_DATA_ARCHITECTURE>() as u32,
+                )
+                .ok()?;
+                Some(arch.UMA.as_bool() || arch.CacheCoherentUMA.as_bool())
+            })
+            .unwrap_or(false)
+    };
+    guard.get_or_insert_with(HashMap::new).insert(luid, unified);
+    unified
 }
 
 // ─── PDH: per-engine utilization, grouped by adapter LUID ───
@@ -120,7 +196,7 @@ static GPU_PDH: Mutex<Option<super::pdh::PdhMultiCounter>> = Mutex::new(None);
 
 fn usage_by_luid() -> HashMap<(u32, u32), f32> {
     let mut map: HashMap<(u32, u32), f32> = HashMap::new();
-    let mut guard = GPU_PDH.lock().unwrap();
+    let mut guard = GPU_PDH.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         // Stays None on PDH failure → retried on the next call.
         *guard = super::pdh::PdhMultiCounter::new("\\GPU Engine(*)\\Utilization Percentage");
@@ -153,9 +229,31 @@ static GPU_VRAM_PDH: Mutex<Option<super::pdh::PdhMultiCounter>> = Mutex::new(Non
 /// 每适配器已用显存（字节）；实例名同样携带 LUID，按适配器汇总
 fn vram_used_by_luid() -> HashMap<(u32, u32), u64> {
     let mut map: HashMap<(u32, u32), u64> = HashMap::new();
-    let mut guard = GPU_VRAM_PDH.lock().unwrap();
+    let mut guard = GPU_VRAM_PDH.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         *guard = super::pdh::PdhMultiCounter::new("\\GPU Adapter Memory(*)\\Dedicated Usage");
+    }
+    let Some(counter) = guard.as_mut() else {
+        return map;
+    };
+    for (name, value) in counter.sample() {
+        if let Some(luid) = luid_from_instance(&name) {
+            *map.entry(luid).or_insert(0) += value.max(0.0) as u64;
+        }
+    }
+    map
+}
+
+// ─── PDH: 共享显存用量（Shared Usage）───
+
+static GPU_SHARED_PDH: Mutex<Option<super::pdh::PdhMultiCounter>> = Mutex::new(None);
+
+/// 每适配器已用共享显存（字节）；核显的实际占用几乎全部计在这个计数器里
+fn shared_used_by_luid() -> HashMap<(u32, u32), u64> {
+    let mut map: HashMap<(u32, u32), u64> = HashMap::new();
+    let mut guard = GPU_SHARED_PDH.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        *guard = super::pdh::PdhMultiCounter::new("\\GPU Adapter Memory(*)\\Shared Usage");
     }
     let Some(counter) = guard.as_mut() else {
         return map;
@@ -176,7 +274,7 @@ fn vram_used_by_luid() -> HashMap<(u32, u32), u64> {
 fn pdh_adapter_luids() -> HashSet<(u32, u32)> {
     let mut set = HashSet::new();
     // 两个静态计数器已在上面的 usage_by_luid / vram_used_by_luid 中初始化
-    let mut engine = GPU_PDH.lock().unwrap();
+    let mut engine = GPU_PDH.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(counter) = engine.as_mut() {
         for name in counter.instance_names() {
             if let Some(luid) = luid_from_instance(&name) {
@@ -185,7 +283,7 @@ fn pdh_adapter_luids() -> HashSet<(u32, u32)> {
         }
     }
     drop(engine);
-    let mut vram = GPU_VRAM_PDH.lock().unwrap();
+    let mut vram = GPU_VRAM_PDH.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(counter) = vram.as_mut() {
         for name in counter.instance_names() {
             if let Some(luid) = luid_from_instance(&name) {
@@ -249,10 +347,12 @@ mod tests {
                     .unwrap_or(d.Description.len());
                 let name = String::from_utf16_lossy(&d.Description[..end]);
                 let has_vmem = adapter.cast::<IDXGIAdapter3>().is_ok();
+                let luid = (d.AdapterLuid.HighPart as u32, d.AdapterLuid.LowPart);
+                let uma = is_unified_memory(&adapter, luid);
                 println!(
                     "#{} {:?}\n  vid={:#06x} did={:#06x} subsys={:#010x} rev={:#04x} flags={}\n  \
                      dedicated_vram={} dedicated_sysmem={} shared_sysmem={}\n  \
-                     luid={:#010x}_{:#010x} idxgiadapter3={}",
+                     luid={:#010x}_{:#010x} idxgiadapter3={} uma={}",
                     i,
                     name,
                     d.VendorId,
@@ -266,6 +366,7 @@ mod tests {
                     d.AdapterLuid.HighPart,
                     d.AdapterLuid.LowPart,
                     has_vmem,
+                    uma,
                 );
             }
         }

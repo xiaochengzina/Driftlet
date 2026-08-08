@@ -1,8 +1,9 @@
 //! Sandboxed file access for skins (the `files` permission).
 //!
 //! Every path a skin touches resolves inside its own install directory:
-//! absolute paths and `..` components are rejected up front, then the final
-//! path is canonicalized and must still sit under the canonicalized skin
+//! absolute paths and `..` components are rejected up front, then the path
+//! (for a not-yet-existing write target: its deepest existing ancestor) is
+//! canonicalized and must still sit under the canonicalized skin
 //! directory — which also defeats symlink escapes.  App-managed files
 //! (skin.json / settings.json*) stay readable but can never be written or
 //! deleted by the skin.
@@ -38,8 +39,12 @@ fn is_protected(path: &Path) -> bool {
 }
 
 /// Resolve `rel` inside `base` ("" / "." = the skin directory itself).
-/// For writes the target may not exist yet: its parent directories are
-/// created first so canonicalization still works.
+/// For writes the target may not exist yet: nothing is created here — the
+/// deepest EXISTING ancestor is canonicalized and containment-checked (a
+/// symlinked component escapes at that point), and write_file creates the
+/// missing parent directories only after the check passes.  Creating first
+/// and checking later would let a sandboxed symlink plant empty directories
+/// outside the skin folder.
 pub fn resolve(base: &Path, rel: &str, for_write: bool, lang: &str) -> Result<PathBuf, String> {
     let canon_base = base
         .canonicalize()
@@ -60,6 +65,17 @@ pub fn resolve(base: &Path, rel: &str, for_write: bool, lang: &str) -> Result<Pa
             Component::Normal(s) if s.to_str().map(|s| s.contains(':')).unwrap_or(true) => {
                 return Err(trf(lang, Key::InvalidPath, &[rel]));
             }
+            // Windows 文件 API 会剥掉分量尾部的点与空格（"settings.json."
+            // 落盘成 "settings.json"）——尾点/尾空格让受保护名单的
+            // file_name 匹配失效（目标尚不存在、走下方结构路径分支时），
+            // 一律拒绝；Linux 下同名拒绝无害（跨平台行为一致）
+            Component::Normal(s)
+                if s.to_str()
+                    .map(|s| s.ends_with('.') || s.ends_with(' '))
+                    .unwrap_or(true) =>
+            {
+                return Err(trf(lang, Key::InvalidPath, &[rel]));
+            }
             Component::Normal(_) => {}
             // Prefix (C:), RootDir (\), ParentDir (..) — all escapes
             _ => return Err(trf(lang, Key::InvalidPath, &[rel])),
@@ -67,24 +83,29 @@ pub fn resolve(base: &Path, rel: &str, for_write: bool, lang: &str) -> Result<Pa
     }
     let joined = base.join(p);
 
-    // canonicalize needs the path to exist.  For a write target that does
-    // not exist yet, canonicalize the (created) parent and re-attach the
-    // file name — the escape check below still applies to the result.
+    // canonicalize needs the path to exist.  A write target may not exist
+    // yet: walk UP to the deepest existing ancestor, canonicalize THAT and
+    // apply the containment check to it — a symlinked component inside the
+    // sandbox escapes at this point, BEFORE anything is created on disk.
+    // The returned path then stays the un-canonicalized join (structurally
+    // under base: rel was already stripped of prefix/root/`..`), and
+    // write_file creates the missing parents.
     let canon = match joined.canonicalize() {
         Ok(c) => c,
         Err(_) if for_write => {
-            let parent = joined
-                .parent()
-                .ok_or_else(|| trf(lang, Key::InvalidPath, &[rel]))?;
-            std::fs::create_dir_all(parent)
-                .map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
-            let name = joined
-                .file_name()
-                .ok_or_else(|| trf(lang, Key::InvalidPath, &[rel]))?;
-            parent
-                .canonicalize()
-                .map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?
-                .join(name)
+            let mut ancestor = joined.parent();
+            let canon_ancestor = loop {
+                let a = ancestor.ok_or_else(|| trf(lang, Key::InvalidPath, &[rel]))?;
+                match a.canonicalize() {
+                    Ok(c) => break c,
+                    Err(_) => ancestor = a.parent(),
+                }
+            };
+            // base 本身已存在且已 canonicalize，上溯必然到此为止
+            if canon_ancestor != canon_base && !canon_ancestor.starts_with(&canon_base) {
+                return Err(trf(lang, Key::InvalidPath, &[rel]));
+            }
+            return Ok(joined);
         }
         Err(_) => return Err(trf(lang, Key::InvalidPath, &[rel])),
     };
@@ -98,7 +119,20 @@ pub fn resolve(base: &Path, rel: &str, for_write: bool, lang: &str) -> Result<Pa
 fn resolve_protected(base: &Path, rel: &str, for_write: bool, lang: &str) -> Result<PathBuf, String> {
     let p = resolve(base, rel, for_write, lang)?;
     if is_protected(&p) {
-        return Err(trf(lang, Key::ProtectedFile, &[rel]));
+        // 受保护文件只认皮肤根目录直下（skin.json、settings.json*）；子目录
+        // 里的同名文件是皮肤自己的数据，放行。父目录统一 canonicalize 再比
+        // ——p 对已有文件是 canon 路径、对新文件是 base.join 的结构路径
+        let canon_base = base
+            .canonicalize()
+            .map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
+        let under_root = p
+            .parent()
+            .and_then(|par| par.canonicalize().ok())
+            .map(|c| c == canon_base)
+            .unwrap_or(false);
+        if under_root {
+            return Err(trf(lang, Key::ProtectedFile, &[rel]));
+        }
     }
     Ok(p)
 }
@@ -106,7 +140,11 @@ fn resolve_protected(base: &Path, rel: &str, for_write: bool, lang: &str) -> Res
 pub fn read_file(base: &Path, rel: &str, binary: bool, lang: &str) -> Result<String, String> {
     let p = resolve(base, rel, false, lang)?;
     let meta = std::fs::metadata(&p).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
-    if !meta.is_file() || meta.len() > MAX_READ_BYTES {
+    // 非普通文件（目录等）与超大文件分开报错：前者是路径不对，后者才是超限
+    if !meta.is_file() {
+        return Err(trf(lang, Key::InvalidPath, &[rel]));
+    }
+    if meta.len() > MAX_READ_BYTES {
         return Err(tr(lang, Key::FileTooLarge).to_string());
     }
     let bytes = std::fs::read(&p).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
@@ -121,7 +159,7 @@ pub fn write_file(base: &Path, rel: &str, data: &str, binary: bool, lang: &str) 
     let bytes = if binary {
         base64::engine::general_purpose::STANDARD
             .decode(data)
-            .map_err(|_| trf(lang, Key::InvalidPath, &["<base64>"]))?
+            .map_err(|_| tr(lang, Key::InvalidBase64).to_string())?
     } else {
         data.as_bytes().to_vec()
     };
@@ -129,7 +167,17 @@ pub fn write_file(base: &Path, rel: &str, data: &str, binary: bool, lang: &str) 
         return Err(tr(lang, Key::FileTooLarge).to_string());
     }
     let p = resolve_protected(base, rel, true, lang)?;
-    std::fs::write(&p, bytes).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))
+    // resolve 只校验不建目录（先建后查会顺着沙箱内的符号链接把空目录建到
+    // 沙箱外）；包含性校验通过后，缺失的父目录在这里建。
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
+    }
+    std::fs::write(&p, bytes).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
+    // 登记自写：hotreload 不把皮肤自己的保存当成外部改动而触发热重载
+    // （hotreload 模块仅 debug 构建存在，release 需同步 cfg 掉）
+    #[cfg(debug_assertions)]
+    crate::hotreload::note_self_write(&p);
+    Ok(())
 }
 
 pub fn list_dir(base: &Path, rel: &str, lang: &str) -> Result<Vec<DirEntry>, String> {
@@ -137,11 +185,15 @@ pub fn list_dir(base: &Path, rel: &str, lang: &str) -> Result<Vec<DirEntry>, Str
     let mut out = Vec::new();
     let rd = std::fs::read_dir(&p).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
     for entry in rd.flatten() {
-        let meta = entry.metadata().ok();
+        // metadata 拿不到的项（并发删除/权限异常）跳过——编造 is_dir/size
+        // 会把目录呈现成 0 字节文件
+        let Some(meta) = entry.metadata().ok() else {
+            continue;
+        };
         out.push(DirEntry {
             name: entry.file_name().to_string_lossy().to_string(),
-            is_dir: meta.as_ref().map(|m| m.is_dir()).unwrap_or(false),
-            size: meta.map(|m| m.len()).unwrap_or(0),
+            is_dir: meta.is_dir(),
+            size: meta.len(),
         });
     }
     out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
@@ -153,7 +205,12 @@ pub fn delete_file(base: &Path, rel: &str, lang: &str) -> Result<(), String> {
     if !p.is_file() {
         return Err(trf(lang, Key::InvalidPath, &[rel]));
     }
-    std::fs::remove_file(&p).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))
+    std::fs::remove_file(&p).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
+    // 登记自写：hotreload 不把皮肤自己的删除当成外部改动而触发热重载
+    // （hotreload 模块仅 debug 构建存在，release 需同步 cfg 掉）
+    #[cfg(debug_assertions)]
+    crate::hotreload::note_self_write(&p);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -207,8 +264,22 @@ mod tests {
         assert!(write_file(&base, "settings.json", "x", false, "zh-CN").is_err());
         assert!(write_file(&base, "settings.json.tmp", "x", false, "zh-CN").is_err());
         assert!(delete_file(&base, "skin.json", "zh-CN").is_err());
+        // 子目录里的同名文件是皮肤自己的数据，放行
+        write_file(&base, "data/skin.json", "x", false, "zh-CN").unwrap();
         // ...but reading is fine
         assert_eq!(read_file(&base, "skin.json", false, "zh-CN").unwrap(), "{}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rejects_trailing_dot_and_space_components() {
+        let base = temp_base("trail");
+        std::fs::write(base.join("skin.json"), "{}").unwrap();
+        // Windows 文件 API 会剥掉分量尾部的点/空格：不拒的话 "skin.json."
+        // 落盘成 skin.json，受保护名单的 file_name 匹配被绕过
+        assert!(resolve(&base, "skin.json.", true, "zh-CN").is_err());
+        assert!(resolve(&base, "sub/skin.json.", true, "zh-CN").is_err());
+        assert!(resolve(&base, "sub /skin.json", true, "zh-CN").is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 

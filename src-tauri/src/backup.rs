@@ -36,6 +36,17 @@ pub fn export_backup(app: &AppHandle, dest: &Path) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
 
+    // 与导入/安装互斥：导入 Phase 2/3 的 rename+copy 窗口期 skins/ 缺失或
+    // 半拷贝，此刻并发导出会产出不完整备份。install_lock 是 tokio Mutex
+    // （guard 为 Send，见 AppState 注释），但本函数跑在异步上下文里，
+    // blocking_lock / runtime block_on 都会 panic —— 借一个临时线程把
+    // guard 取回来持有到导出结束。
+    let _install_guard = std::thread::scope(|s| {
+        s.spawn(|| tauri::async_runtime::block_on(state.install_lock.lock()))
+            .join()
+            .expect("install_lock helper thread panicked")
+    });
+
     let file = fs::File::create(dest)
         .map_err(|e| trf(&lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
     let mut zip = zip::ZipWriter::new(file);
@@ -118,8 +129,18 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
     // rename below would fail.
     let state = app.state::<AppState>();
     let _install_guard = state.install_lock.lock().await;
+    // 逐个卸载；中途失败则导入整体中止 —— 数据目录尚未被触碰，但已卸载
+    // 的皮肤不会自己回来：把已卸载的 id 写进错误信息，用户重新加载即可恢复
+    let mut unloaded: Vec<String> = Vec::new();
     for id in state.registry.loaded_ids() {
-        crate::commands::unload_skin_impl(app.clone(), id).await?;
+        if let Err(e) = crate::commands::unload_skin_impl(app.clone(), id.clone()).await {
+            if unloaded.is_empty() {
+                return Err(e);
+            }
+            let ids = unloaded.join(", ");
+            return Err(format!("{} {}", e, trf(&lang, Key::ImportPartialUnloaded, &[&ids])));
+        }
+        unloaded.push(id);
     }
 
     // Phase 3: staged replace with rollback.
@@ -287,8 +308,12 @@ async fn rebuild_runtime(app: &AppHandle) {
     }
     let language = cfg.language.clone();
     let autostart = cfg.autostart;
+    // 替换内存配置前先取出要同步的运行时镜像值（autostart 同款模式）：
+    // hot_reload_enabled 原子量声明为 config.hot_reload 的镜像，双写
+    let hot_reload = cfg.hot_reload;
     let to_load = cfg.loaded_skins.clone();
     *state.config.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
+    state.hot_reload_enabled.store(hot_reload, std::sync::atomic::Ordering::Relaxed);
     *state.language.lock().unwrap_or_else(|e| e.into_inner()) = language.clone();
     crate::tray::rebuild_tray_menu(app, &language);
 
