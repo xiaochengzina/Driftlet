@@ -225,7 +225,7 @@ fn type_fallback(def: &crate::skin::types::SkinSettingDef) -> serde_json::Value 
     use serde_json::Value;
     match def.kind {
         SkinSettingKind::Boolean => Value::Bool(false),
-        SkinSettingKind::Number | SkinSettingKind::Slider => Value::from(0),
+        SkinSettingKind::Number | SkinSettingKind::Slider | SkinSettingKind::Stepper => Value::from(0),
         SkinSettingKind::Palette => Value::from("#ffffff"),
         SkinSettingKind::Text
         | SkinSettingKind::LongText
@@ -254,7 +254,7 @@ fn type_fallback(def: &crate::skin::types::SkinSettingDef) -> serde_json::Value 
 fn setting_value_matches(kind: SkinSettingKind, v: &serde_json::Value) -> bool {
     match kind {
         SkinSettingKind::Boolean => v.is_boolean(),
-        SkinSettingKind::Number | SkinSettingKind::Slider => v.is_number(),
+        SkinSettingKind::Number | SkinSettingKind::Slider | SkinSettingKind::Stepper => v.is_number(),
         SkinSettingKind::Text
         | SkinSettingKind::LongText
         | SkinSettingKind::Time

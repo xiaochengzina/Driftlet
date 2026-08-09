@@ -149,7 +149,6 @@ pub struct MonitorInfo {
 
 // ─── Permission gate ───
 
-pub const PERM_FILES: &str = "files";
 pub const PERM_REGISTRY: &str = "registry";
 pub const PERM_SHELL: &str = "shell";
 /// State-changing system controls: volume (set_volume / set_mute), media
@@ -728,7 +727,9 @@ pub fn get_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
     }
 }
 
-// ─── Skin-local files (permission: files) ───
+// ─── Skin-local files (no permission needed — fs.rs sandboxes every
+//     operation to the skin's own directory; caller_skin only establishes
+//     WHICH skin is calling and fails fast for uninstalled skins) ───
 
 #[tauri::command]
 pub async fn skin_read_file(
@@ -739,7 +740,7 @@ pub async fn skin_read_file(
 ) -> Result<String, String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let (_id, dir) = require_perm(&state, &window, PERM_FILES)?;
+    let dir = caller_skin(&state, &window)?.directory;
     fs::read_file(&dir, &path, binary.unwrap_or(false), &lang)
 }
 
@@ -753,7 +754,7 @@ pub fn skin_write_file(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let (_id, dir) = require_perm(&state, &window, PERM_FILES)?;
+    let dir = caller_skin(&state, &window)?.directory;
     fs::write_file(&dir, &path, &data, binary.unwrap_or(false), &lang)
 }
 
@@ -765,7 +766,7 @@ pub fn skin_list_dir(
 ) -> Result<Vec<fs::DirEntry>, String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let (_id, dir) = require_perm(&state, &window, PERM_FILES)?;
+    let dir = caller_skin(&state, &window)?.directory;
     fs::list_dir(&dir, path.as_deref().unwrap_or("."), &lang)
 }
 
@@ -777,7 +778,7 @@ pub fn skin_delete_file(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let (_id, dir) = require_perm(&state, &window, PERM_FILES)?;
+    let dir = caller_skin(&state, &window)?.directory;
     fs::delete_file(&dir, &path, &lang)
 }
 

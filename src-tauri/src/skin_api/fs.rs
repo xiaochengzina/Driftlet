@@ -1,4 +1,5 @@
-//! Sandboxed file access for skins (the `files` permission).
+//! Sandboxed file access for skins (no permission declaration needed —
+//! the sandbox below is the whole safety story).
 //!
 //! Every path a skin touches resolves inside its own install directory:
 //! absolute paths and `..` components are rejected up front, then the path

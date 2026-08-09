@@ -802,6 +802,16 @@ pub fn create_skin_window(
     let label = skin_window_label(&skin.id);
     let entry = &skin.manifest.entry;
 
+    // 防御性清理：上次关闭若因窗口在 close() 入队后、CloseRequested 处理前
+    // 被外部销毁，INTENTIONAL_CLOSES 会残留本 label 的登记；不清掉的话
+    // 新窗的第一次用户 Alt+F4 会被误判为程序化关闭而真关窗。正常重载路径
+    // （destroy_skin_window 等 label 释放后才重建）走到这里时登记早已被
+    // 消费，remove 是 no-op。
+    INTENTIONAL_CLOSES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&label);
+
     // 1. Build the skin:// URL. The custom protocol handler reads the file
     //    from the skins directory, injects the Tauri bridge, and serves it.
     //    Relative resources (images, css, js) inside the skin folder just work.
@@ -912,13 +922,15 @@ pub fn create_skin_window(
     #[cfg(target_os = "windows")]
     force_clean_skin_window(&window);
 
-    // Disable WebView2's default browser context menu — right-click shows
-    // our own native menu instead (see track_skin_popup_menu).  WebView2
+    // WebView2 hardening: disable the default browser context menu
+    // (right-click shows our own native menu instead — see
+    // track_skin_popup_menu) and the browser accelerator keys (F5 refresh
+    // family — a skin page must not be reloadable by keystroke).  WebView2
     // initializes asynchronously and is usually NOT ready here, so this
     // retries briefly in the background; the 5s maintenance timer in
-    // lib.rs re-applies it afterwards (also covers WebView2 restarts).
+    // lib.rs re-applies both afterwards (also covers WebView2 restarts).
     #[cfg(target_os = "windows")]
-    spawn_context_menu_disable_retry(app, &label);
+    spawn_webview_hardening_retry(app, &label);
 
     // 5. Listen for move events
     // WindowEvent::Moved reports physical (screen) pixels, but the rest of
@@ -988,6 +1000,25 @@ pub fn create_skin_window(
                         }));
                     }
                 }
+                // Alt+F4 / 系统关闭请求：皮肤窗不实现「关闭」语义——窗口生命
+                // 周期归管理器（加载/刷新/卸载全由管理器负责），按键关闭
+                // 降级为隐藏，由全局快捷键 / 托盘勾选项唤回。系统的强制
+                // 关闭不可违背，但 WM_CLOSE 只是「请求」，应用层有权把它
+                // 解释为隐藏。程序化关闭（卸载/重载/退出，全部经
+                // close_skin_window_nowait 登记 label）照常放行。
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    let intentional = INTENTIONAL_CLOSES
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&label_for_event);
+                    if !intentional {
+                        api.prevent_close();
+                        if let Some(w) = app_handle.get_webview_window(&label_for_event) {
+                            let _ = w.hide();
+                        }
+                        crate::hotkey::sync_tray_toggle_item(&app_handle);
+                    }
+                }
                 _ => {}
             }
         });
@@ -1012,6 +1043,16 @@ pub fn create_skin_window(
 pub fn skin_window_label(skin_id: &str) -> String {
     format!("skin-{}", skin_id)
 }
+
+/// Labels whose in-flight close() is PROGRAMMATIC (unload / reload / exit).
+/// Alt+F4 delivers the same WM_CLOSE as close() does and CloseRequested
+/// carries no reason — this set is the discriminator: close_skin_window_nowait
+/// registers the label right before calling close(), the window's
+/// CloseRequested handler consumes it; a user keystroke finds no entry and
+/// is downgraded to hide.
+static INTENTIONAL_CLOSES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
 pub fn destroy_skin_window(app: &AppHandle, label: &str) -> Result<(), String> {
     close_skin_window_nowait(app, label)?;
@@ -1080,7 +1121,20 @@ pub fn close_skin_window_nowait(app: &AppHandle, label: &str) -> Result<(), Stri
                 .destroy()
                 .map_err(|e| format!("Failed to destroy window: {}", e))?;
         } else {
-            window.close().map_err(|e| format!("Failed to close window: {}", e))?;
+            // 登记程序化关闭：窗口的 CloseRequested 处理据此放行本次关闭；
+            // 未登记的用户关闭（Alt+F4）会被拦截降级为隐藏。close() 失败
+            // 则撤销登记，残留条目会错误放行同一 label 的下一次用户关闭。
+            INTENTIONAL_CLOSES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(label.to_string());
+            if let Err(e) = window.close() {
+                INTENTIONAL_CLOSES
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(label);
+                return Err(format!("Failed to close window: {}", e));
+            }
         }
     }
     Ok(())
@@ -1235,29 +1289,63 @@ pub fn disable_default_context_menu(
     applied
 }
 
-/// Retry disabling the default context menu after window creation: WebView2
-/// finishes initializing asynchronously, so the first attempts usually
-/// fail.  ~6s of retries covers normal startup; afterwards the 5s
-/// frameless-maintenance timer keeps re-applying it.
+/// Disable WebView2's browser accelerator keys (F5 / Ctrl+R / Ctrl+F5
+/// refresh, Ctrl+P print, Alt+Home, F12 devtools …).  Neither a skin page
+/// nor the manager UI may be reloadable by keystroke — window lifecycle is
+/// owned by the manager alone.  Editing keys (Ctrl+C/V/X/Z/A) are DOM-level
+/// and keep working.  Same applied-flag contract as
+/// disable_default_context_menu.
 #[cfg(target_os = "windows")]
-fn spawn_context_menu_disable_retry(app: &AppHandle, label: &str) {
+pub fn disable_browser_accelerator_keys(
+    window: &tauri::WebviewWindow,
+) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    let applied = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = applied.clone();
+    let _ = window.with_webview(move |webview| unsafe {
+        use windows::core::Interface;
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+        let ok = webview
+            .controller()
+            .CoreWebView2()
+            .and_then(|core| core.Settings())
+            .and_then(|settings| settings.cast::<ICoreWebView2Settings3>())
+            .and_then(|s3| s3.SetAreBrowserAcceleratorKeysEnabled(false));
+        flag.store(ok.is_ok(), std::sync::atomic::Ordering::SeqCst);
+    });
+    applied
+}
+
+/// Retry applying webview hardening after window creation (no default
+/// context menu, no browser accelerator keys): WebView2 finishes
+/// initializing asynchronously, so the first attempts usually fail.  ~6s of
+/// retries covers normal startup; for skin windows the 5s
+/// frameless-maintenance timer in lib.rs keeps re-applying both afterwards.
+#[cfg(target_os = "windows")]
+pub fn spawn_webview_hardening_retry(app: &AppHandle, label: &str) {
     let handle = app.clone();
     let label = label.to_string();
     std::thread::spawn(move || {
-        let mut last: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
-        for _ in 0..20 {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            if last
-                .as_ref()
+        let mut menu: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
+        let mut accel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
+        let done = |f: &Option<std::sync::Arc<std::sync::atomic::AtomicBool>>| {
+            f.as_ref()
                 .map(|f| f.load(std::sync::atomic::Ordering::SeqCst))
                 .unwrap_or(false)
-            {
-                break; // applied by the previous attempt
+        };
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if done(&menu) && done(&accel) {
+                break; // both applied by the previous attempts
             }
             let Some(window) = handle.get_webview_window(&label) else {
                 break; // window destroyed (unloaded/reloaded) — give up
             };
-            last = Some(disable_default_context_menu(&window));
+            if !done(&menu) {
+                menu = Some(disable_default_context_menu(&window));
+            }
+            if !done(&accel) {
+                accel = Some(disable_browser_accelerator_keys(&window));
+            }
         }
     });
 }

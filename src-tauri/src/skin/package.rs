@@ -32,7 +32,7 @@ pub struct PackageInfo {
     pub description_en: Option<String>,
     /// skin.json 声明的中英双语开关：决定前端是否启用 *_en 文案
     pub bilingual: bool,
-    /// skin.json 声明的敏感能力（"files" / "registry" / "shell" / "system" /
+    /// skin.json 声明的敏感能力（"registry" / "shell" / "system" /
     /// "clipboard" / "mic"，对应 skin_api 的 PERM_* 常量），
     /// 安装向导展示给用户确认
     pub permissions: Vec<String>,
@@ -601,12 +601,12 @@ mod tests {
         let dir = unique_dir("perms");
         let pkg = write_package(
             &dir,
-            r#"{"id":"my-skin","name":"My Skin","permissions":["files","shell"]}"#,
+            r#"{"id":"my-skin","name":"My Skin","permissions":["registry","shell"]}"#,
             false,
         );
         let skins = unique_dir("skins");
         let info = inspect_package(&pkg, &skins, "zh-CN").unwrap();
-        assert_eq!(info.permissions, vec!["files".to_string(), "shell".to_string()]);
+        assert_eq!(info.permissions, vec!["registry".to_string(), "shell".to_string()]);
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&skins);
     }

@@ -76,6 +76,7 @@ struct SkinSettingOption {
 enum SkinSettingKind {
     Boolean,
     Number,
+    Stepper,
     Text,
     LongText,
     Time,

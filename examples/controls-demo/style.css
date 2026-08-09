@@ -101,6 +101,14 @@ body {
   transition: width 0.2s ease;
 }
 
+/* 小秒表（stepper 驱动）：等宽数字防计数抖动 */
+.ticker {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── 值区（填充 + 内部滚动） ── */
 
 .panel {

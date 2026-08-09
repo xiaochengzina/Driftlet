@@ -2,6 +2,21 @@
 
 本文件记录 Driftlet 的所有重要变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.5] - 2026-08-09
+
+### 新增
+
+- **安装包完结页「开机自动启动」勾选框**（NSIS 安装引导，与其它软件同款）：MUI2 完结页原生仅两个勾选项槽位（「运行 Driftlet」与被借用为「创建桌面快捷方式」的 SHOWREADME），第三个经页面 SHOW 回调手工创建（`FinishPageShow`，坐标沿用 MUI2 Finish.nsh 勾选项间距公式 TEXT_BOTTOM 85→RUN 90→README 110→本框 130）；LEAVE 回调按勾选态写/删注册表，口径完全镜像 `auto-launch::enable()/disable()`——勾选写 `HKCU\...\Run\driftlet` + `StartupApproved\Run` 的 enabled 二进制（任务管理器「启动」页与应用 `is_enabled()` 同读，设置面板开关看到的即此处所选），不勾删 Run 值（幂等）。初值读注册表现状（重装且已开则默认勾选，全新安装默认不勾），Back→Next 恢复用户选择；更新/被动/静默安装跳过不动注册表。标签中英双语（模板内 `LangString autostart`），为 installer.nsi 继「删除应用数据复选框移除」后的第二处自定义（关键机制双版同步，含 cli 升级重打模板警告更新）。
+
+- **权限声明新增「中危」分级**：安装引导页权限由「普通 + 高危（红）」两态改为两档分级标注——高危（红色徽标）`shell` / `system`，中危（黄色徽标）`registry` / `clipboard` / `mic`；相对旧版：`mic` 高危→中危，`system` 无标注→高危，`registry` / `clipboard` 无标注→中危。分级仅是引导页展示层，后端 `require_perm` 仍为「声明/未声明」二元校验。新增 `--warning` / `--warning-soft` 主题变量（浅/深色）与 `wizard.permMediumRisk` 文案键（中英）。
+- **皮肤窗口 Alt+F4 = 隐藏而非关闭**：Alt+F4 是系统级窗口消息（WM_CLOSE），JS 层与加速键开关都管不到，tao 转为 `CloseRequested`——皮肤窗建窗的 `on_window_event` 新增分支：未登记的关闭请求 `prevent_close` + `hide()` + `hotkey::sync_tray_toggle_item` 同步托盘勾选项；唤回复用既有全局快捷键（默认 Ctrl+Shift+Alt+D）与托盘勾选项。程序化关闭（卸载/重载/退出，全汇聚 `close_skin_window_nowait`）在 `close()` 前把 label 登记进 `INTENTIONAL_CLOSES` 静态集合，事件处理消费放行，`close()` 失败撤销登记，`create_skin_window` 建窗时再防御性清理同 label 残留登记（极端场景：`close()` 入队后窗口被外部销毁、`CloseRequested` 未触发导致登记残留，不清则新窗首次用户 Alt+F4 被误放行）——vendored tauri-runtime-wry 中 `close()` 与用户 Alt+F4 同走 `on_close_requested`，`CloseRequested` 不带关闭原因，登记集合是唯一判别；`hwnd_dead` 分支走 `destroy()` 不触发 `CloseRequested`，无需登记。管理器窗口 Alt+F4 由既有「关闭=隐藏到托盘」覆盖，行为不变。
+- **浏览器加速键统一禁用**（管理器 + 所有皮肤窗口）：F5 / Ctrl+R / Ctrl+F5 刷新、Ctrl+P 打印、Alt+Home、F12 devtools 等全部失效（Ctrl+C/V 等编辑键为 DOM 层快捷键不受影响）——页面不可经按键刷新/导航，窗口生命周期完全归管理器。实现 = `factory::disable_browser_accelerator_keys`（`ICoreWebView2Settings3::SetAreBrowserAcceleratorKeysEnabled(false)`）；原 `spawn_context_menu_disable_retry` 更名 `spawn_webview_hardening_retry`，右键菜单禁用与加速键禁用一起在 WebView2 异步初始化期间重试约 6 秒；此后皮肤窗与管理器窗均由 5 秒维护定时器持续自愈重设。
+- **第 20 种设置控件 `stepper`（数字步进器）**：−/＋ 按钮按 `step` 增减数值，`min` / `max` 可选夹取（缺省无界，`step` 缺省 1），到界自动禁用对应按钮；小数位跟随 `step` 防浮点尾巴，点击即保存。全链路：`SkinSettingKind::Stepper`（pack-skin 镜像枚举同步），值校验/钳制并入 `validate_custom_setting` 与 `effective_settings` 的 number 臂；配置面板渲染为 `form-row` 右侧连体小组件（`.cfg-stepper`，沿用 segments 视觉语言，按压反馈进统一 scale 清单），新增 `editor.stepDecrease` / `editor.stepIncrease` 文案键（中英）。controls-demo 示例（含演示页新增的步进器驱动小秒表——改值即时重排间隔）与双版开发指南 §4.2、README 双版控件计数（19→20）同步。
+
+### 移除
+
+- **`files` 权限取消**：皮肤目录内文件读写（`skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file`）不再需要声明——fs 沙箱本就把一切操作限制在皮肤自身安装目录（绝对路径与 `..` 拒绝、canonicalize 包含性校验、防符号链接逃逸、`skin.json`/`settings.json*` 只读保护），沙箱即边界。后端拆 `PERM_FILES` 常量与 4 处 `require_perm` 闸，fs 命令改走 `caller_skin`（仅确认调用者身份、未安装皮肤快速失败）；旧皮肤残留的 `"files"` 声明无害（未知名忽略规则不变），安装引导页静默略过。文档（中英开发指南 §2.3/安全模型/示例清单、关键机制双版、README 双版、路线图）与 toolbox 示例权限同步。
+
 ## [1.0.4] - 2026-08-08
 
 ### 新增

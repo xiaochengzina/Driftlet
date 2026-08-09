@@ -284,6 +284,13 @@ pub fn run() {
                 }
             }
 
+            // WebView2 hardening on the manager too: no browser context menu,
+            // no F5/Ctrl+R refresh keys (the manager UI must not be
+            // reloadable by keystroke).  Same async-init retry as skins;
+            // the manager has no maintenance-timer pass, this retry is it.
+            #[cfg(target_os = "windows")]
+            factory::spawn_webview_hardening_retry(app.handle(), "main");
+
             // Double-click install: a package was passed on the command
             // line, so show the manager window right away — the frontend
             // will open the install wizard as soon as it loads.
@@ -348,21 +355,27 @@ pub fn run() {
                             break;
                         }
                         let windows = state.registry.all_hwnds();
-                        if windows.is_empty() {
-                            continue;
-                        }
                         let h2 = h.clone();
                         let _ = h.run_on_main_thread(move || {
+                            // 管理器窗同样自愈：它只有建窗后约 6 秒的创建
+                            // 重试（见上面 setup），WebView2 初始化慢过该
+                            // 窗口期时 F5 等加速键仍可刷新管理器。
+                            if let Some(window) = h2.get_webview_window("main") {
+                                factory::disable_default_context_menu(&window);
+                                factory::disable_browser_accelerator_keys(&window);
+                            }
                             for (skin_id, hwnd) in &windows {
                                 factory::ensure_frameless_subclass(*hwnd);
                                 factory::force_clean_skin_window_by_hwnd(*hwnd);
-                                // Keep WebView2's default context menu
-                                // disabled (self-healing; the creation-time
-                                // retry in factory only covers startup).
+                                // Keep WebView2's default context menu and
+                                // browser accelerator keys disabled
+                                // (self-healing; the creation-time retry in
+                                // factory only covers startup).
                                 if let Some(window) = h2.get_webview_window(
                                     &factory::skin_window_label(skin_id),
                                 ) {
                                     factory::disable_default_context_menu(&window);
+                                    factory::disable_browser_accelerator_keys(&window);
                                 }
                             }
                         });

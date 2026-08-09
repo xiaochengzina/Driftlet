@@ -44,7 +44,7 @@ Optional files:
 - The manager creates a WebView2 window (transparent, frameless) for each loaded skin; the page is loaded from the skin folder via the `skin://` custom protocol.
 - **Before** the page loads, the manager injects the bridge script `window.__DESK_PP__` into the HTML (current setting values, drag takeover, right-click menu takeover, command channel) — the bridge is already ready when skin scripts run; no waiting needed.
 - All of a skin's "system capabilities" (system info, file read/write, notifications, etc.) are obtained by calling backend commands through `__DESK_PP__.invoke`; sensitive capabilities require permission declarations in `skin.json` (§2.3).
-- The window lifecycle (load, refresh, unload, position, size, opacity, always on top / pin to desktop) is entirely the manager's job; a skin only cares about its page — it never creates, moves, or closes its own window.
+- The window lifecycle (load, refresh, unload, position, size, opacity, always on top / pin to desktop) is entirely the manager's job; a skin only cares about its page — it never creates, moves, or closes its own window. An Alt+F4 close request is intercepted and downgraded to hiding the window — bring it back with the global hotkey (default Ctrl+Shift+Alt+D) or the tray checkbox; programmatic closes (unload / reload / quit) are unaffected. The manager and all skin windows also uniformly disable WebView2 browser accelerator keys: F5 / Ctrl+R / Ctrl+F5 refresh, Ctrl+P print, Alt+Home, F12 and the like are all dead (editing keys like Ctrl+C/V are unaffected) — pages cannot be refreshed or navigated by keystroke.
 
 ---
 
@@ -92,7 +92,7 @@ The `skin.json` file itself must not exceed **1 MB** (larger files are refused a
 | `description_en` | No | English description (same selection rules as `name_en`) |
 | `bilingual` | No | Chinese/English bilingual declaration, default `false`; when `true`, the various `*_en` English strings take effect, see §4.5 |
 | `window` | No | Window defaults, see §2.2 |
-| `permissions` | No | Sensitive capability declarations (`files` / `registry` / `shell` / `system` / `clipboard` / `mic`), see §2.3 |
+| `permissions` | No | Sensitive capability declarations (`registry` / `shell` / `system` / `clipboard` / `mic`), see §2.3 |
 | `settings` | No | Custom settings declarations, see Chapter 4 |
 
 A skin's unique identifier (skin id) = the **`id` field** of `skin.json`:
@@ -120,23 +120,24 @@ Except for `transparent`, which is fixed by the author, all of the above are **i
 Before a skin can call "sensitive capability" backend commands (§5.3), it must declare the corresponding permission at the top level of `skin.json`, otherwise the call is rejected:
 
 ```json
-"permissions": ["files", "shell"]
+"permissions": ["registry", "shell"]
 ```
 
-| Permission | Commands unlocked |
-|------|-----------|
-| `files` | `skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file` (limited to the skin's own folder) |
-| `registry` | `read_registry_value` (read-only) |
-| `shell` | `run_command` (normal privileges, hidden window) |
-| `system` | `set_volume` / `set_mute` / `media_control` / `open_external` / `show_notification` (change system state, open external links/files, send system notifications) |
-| `clipboard` | `read_clipboard_text` / `write_clipboard_text` (reading may expose sensitive content the user just copied) |
-| `mic` | `get_mic_spectrum` (microphone input — unlike system loopback, this is real audio capture and privacy-sensitive) |
+| Permission | Risk | Commands unlocked |
+|------|------|-----------|
+| `registry` | Medium risk | `read_registry_value` (read-only) |
+| `shell` | High risk | `run_command` (normal privileges, hidden window) |
+| `system` | High risk | `set_volume` / `set_mute` / `media_control` / `open_external` / `show_notification` (change system state: adjust volume, control media playback, open external links/files, send system notifications) |
+| `clipboard` | Medium risk | `read_clipboard_text` / `write_clipboard_text` (reading may expose sensitive content the user just copied) |
+| `mic` | Medium risk | `get_mic_spectrum` (microphone input — unlike system loopback, this is real audio capture and privacy-sensitive) |
+
+"Risk" is the two-tier grading shown on the install wizard (see below) — display-only; backend enforcement remains a binary "declared / undeclared" check regardless of tier.
 
 Rules:
 
 - **Declare only the permissions you actually use**; unknown names are ignored.
-- Read-only system info commands (§5.2) and settings read/write commands (§5.4) need no declaration.
-- **Permission declarations are visible to users**: when installing/updating a skin, the install wizard lists every declared permission one by one, and `shell` and `mic` are flagged as "High risk". Declaring permissions you don't use lowers users' willingness to install.
+- Read-only system info commands (§5.2) and settings read/write commands (§5.4) need no declaration; neither does file read/write inside the skin folder (`skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file`) — the fs sandbox already confines every operation to the skin's own install folder (absolute paths and `..` rejected, canonicalize containment check, symlink-escape protection, `skin.json`/`settings.json*` read-only protection). The old `files` permission has been removed entirely; a leftover `"files"` declaration in an old skin is treated as an unknown name and ignored — harmless.
+- **Permission declarations are visible to users**: when installing/updating a skin, the install wizard lists every declared permission one by one, flagged in two risk tiers — `shell` and `system` as "High risk" (red warning badge), `registry`, `clipboard`, and `mic` as "Medium risk" (yellow warning badge); the removed `files` declaration is silently skipped and not shown. Declaring permissions you don't use lowers users' willingness to install.
 - From the user's perspective: a skin declaring `shell` is equivalent to being able to run local programs — state honestly on the release page which permissions the skin uses and what for.
 
 ---
@@ -219,7 +220,7 @@ Declare a `settings` array in `skin.json` and the manager's "Skin Settings" tab 
 | `group_en` | No | English group name (bilingual skins only) |
 | `default` | No | Default value; if omitted, a per-type fallback applies (false / 0 / "" / first option) |
 
-### 4.2 Control Types (19 Total)
+### 4.2 Control Types (20 Total)
 
 | type | Control | Value format | Type-specific fields / notes |
 |------|------|--------|------------------|
@@ -227,6 +228,7 @@ Declare a `settings` array in `skin.json` and the manager's "Skin Settings" tab 
 | `longtext` | Long text input | `"string"` | Multiline, ≤4000 characters |
 | `number` | Number input | `number` | `min` / `max` / `step` |
 | `slider` | Slider | `number` | `min` / `max` / `step`, defaults 0/100/1 |
+| `stepper` | Number stepper | `number` | `min` / `max` / `step`, unbounded/1 by default; −/+ buttons step the value, the button is disabled at its bound |
 | `boolean` | Toggle switch | `true / false` | |
 | `select` | Dropdown | `"a"` | Requires `options` |
 | `radio` | Mutually-exclusive switch group | `"a"` | Requires `options`; only one per group |
@@ -572,9 +574,11 @@ Note that rect/work_area are **physical pixels**, differing from the logical pix
 
 ### 5.3 Sensitive Capabilities (Require permissions in skin.json)
 
-See §2.3 for how to declare. Undeclared calls reject with an error like `Skin 'my-skin' has not declared the 'files' permission`.
+See §2.3 for how to declare. Undeclared calls reject with an error like `Skin 'my-skin' has not declared the 'shell' permission`.
 
-#### File Read/Write (Permission `files`) — Limited to the Skin's Own Folder
+#### File Read/Write (No Permission Needed) — Limited to the Skin's Own Folder
+
+These four commands used to require the `files` permission; the sandbox already confines their operations to the skin's own folder (see the limits below), so the declaration has been dropped.
 
 ```js
 // write text (subdirectories are created automatically)
@@ -723,8 +727,8 @@ Driftlet's design premise: **a skin is third-party, network-capable local code**
 | Boundary | Description |
 |------|------|
 | Manager command isolation | Any manager command called from a skin window is rejected by the backend (§5.5); a skin cannot install/uninstall/tamper with other skins or the global config |
-| Permission declarations | Sensitive capabilities (§5.3) must be declared in skin.json and are **shown to the user one by one at install time** (`shell`/`mic` flagged high risk); undeclared means rejected |
-| File sandbox | Even with the `files` permission, only the skin's own folder is readable/writable (`..`, absolute paths, colon path segments, and symlink escapes rejected; 32MB/16MB read/write caps); `skin.json` and the user's `settings.json` are read-only to every skin |
+| Permission declarations | Sensitive capabilities (§5.3) must be declared in skin.json and are **shown to the user one by one at install time** (flagged in two risk tiers: `shell`/`system` high risk, `registry`/`clipboard`/`mic` medium risk); undeclared means rejected |
+| File sandbox | File read/write is confined to the skin's own folder (`..`, absolute paths, colon path segments, and symlink escapes rejected; 32MB/16MB read/write caps); `skin.json` and the user's `settings.json` are read-only to every skin — the sandbox itself is the boundary, so file read/write needs no permission declaration |
 | Settings isolation | `settings.json` is never served over `skin://` (including 8.3 short names, NTFS streams, and other variants); a skin's setting values are unreachable by other skins |
 | Password protection | `password`-type setting values are never injected into any page (always empty strings in `__DESK_PP__.settings`); only the owning skin window can read them via `skin_get_setting` |
 | Package install hardening | `.dskin` extraction guards against path traversal (zip-slip), caps the total by actual extracted bytes (anti zip-bomb), limits file count, and rolls back on staging failure |
@@ -742,7 +746,7 @@ The platform can't see inside skin pages; the following are on you:
 - **Prevent XSS**: assign dynamic content (user input, task text, network responses) via `textContent`, or escape it before putting it into `innerHTML` — skin setting values and task lists are all user-editable; splicing them straight into HTML is an injection. The example skin `controls-demo` renders everything via `textContent` and demonstrates this correctly.
 - **Only load scripts and resources you trust**: skin pages have no CSP protection — one hijacked CDN script gets your full page capabilities (including the command channel of declared permissions). Bundle resources locally where possible.
 - **Minimize permissions**: declare only what you actually use — the install page shows users the declaration list; over-declaring directly hurts install willingness and user safety.
-- **Declare purposes honestly**: explain what each permission is for on the release page; `shell` and `mic` are flagged high risk.
+- **Declare purposes honestly**: explain what each permission is for on the release page; `shell` and `system` are flagged high risk, `registry`, `clipboard`, and `mic` medium risk.
 
 ---
 
@@ -811,7 +815,7 @@ Source lives in `tools/pack-skin/` (Rust); rebuild with `cargo build --release`.
 
 ### 8.3 Install/Update Behavior on the User Side
 
-- Both entry points (the manager's "+ Add Skin", double-clicking a `.dskin`) share the same install wizard: it first validates whether it's a legal skin package (can `skin.json` be found and parsed, does `id` exist, does the entry file exist), clearly stating the reason if invalid; the confirmation page shows the skin's name, version, author, description, and **all permission declarations** (`shell`/`mic` flagged high risk).
+- Both entry points (the manager's "+ Add Skin", double-clicking a `.dskin`) share the same install wizard: it first validates whether it's a legal skin package (can `skin.json` be found and parsed, does `id` exist, does the entry file exist), clearly stating the reason if invalid; the confirmation page shows the skin's name, version, author, description, and **all permission declarations** (flagged in two risk tiers: `shell`/`system` high risk, `registry`/`clipboard`/`mic` medium risk).
 - When the same `id` is already installed, version numbers decide: higher version → "Update", same version → "Reinstall" (overwrite), lower version → "Downgrade" — all labeled on the confirmation page.
 - **Update/reinstall/downgrade all keep the user's settings data**: window config is stored per `id` in the global config.json, decoupled from skin files; user values from the "Skin Settings" tab live in `settings.json` in the skin folder — taken out before install and written back after replacement (user values win over a same-named file in the package). New setting items use defaults; data of removed setting items lapses automatically.
 - `settings.json` (including `.bak` / `.tmp`) is **user data and should never enter a distribution package** — `pack-skin.exe` excludes it automatically; don't include it in manual packaging either (even if it slips in, it gets overwritten by the user's existing values at install time).
@@ -829,7 +833,7 @@ Go through these one by one before packaging:
 - [ ] No opaque background covering the desktop under transparency
 - [ ] Drag areas use `.drag-region`; no `-webkit-app-region: drag`
 - [ ] Verified in the manager by shrinking the window to half and doubling it: content adapts fully — no clipping, no window-level scrollbars (§3.3)
-- [ ] If `settings` is declared: `key`s all unique, types correct (one of the 19), `default`s match their types
+- [ ] If `settings` is declared: `key`s all unique, types correct (one of the 20), `default`s match their types
 - [ ] If `"bilingual": true` is declared: `group_en` is set for every control in a group (avoids split groups in the English UI), and every field that needs bilingual has its `*_en` (§4.5)
 - [ ] Setting reads have fallbacks (`?.` + `??`), and `desk-setting-changed` is listened to for live application
 - [ ] `password`-type values are read via `skin_get_setting`, not relying on values in `__DESK_PP__.settings` (always empty strings)
@@ -847,10 +851,10 @@ The repo ships four example skins. `controls-demo` is the reference implementati
 
 | Skin | What it demonstrates |
 |------|----------|
-| `examples/controls-demo` | All 19 setting control types + groups + descriptions + Chinese/English bilingual (§4.5), HTML/CSS/JS split with relative-path references, light nautical-chart UI, the fill + internal scroll paradigm, the schema read via `fetch('skin.json')` on a relative path with control labels/groups/options rendered per the bridge language, `desk-language-changed` driving the UI language to follow the manager instantly (§4.5), setting values live-applied in the demo area (accent color / progress bar / status dot / font / day-night tint / panel density), `password`-type values read via `skin_get_setting`, and rendering entirely with DOM APIs / `textContent` |
+| `examples/controls-demo` | All 20 setting control types + groups + descriptions + Chinese/English bilingual (§4.5), HTML/CSS/JS split with relative-path references, light nautical-chart UI, the fill + internal scroll paradigm, the schema read via `fetch('skin.json')` on a relative path with control labels/groups/options rendered per the bridge language, `desk-language-changed` driving the UI language to follow the manager instantly (§4.5), setting values live-applied in the demo area (accent color / progress bar / status dot / font / day-night tint / panel density / stepper-driven ticker interval), `password`-type values read via `skin_get_setting`, and rendering entirely with DOM APIs / `textContent` |
 | `examples/sys-monitor` | The full §5.2 read-only system-info set: CPU (total bar + per-thread mini bars) / GPU / memory / disks (incl. per-volume space) / network (rates + local IPs) / OS / top-5 processes (sortable by CPU or memory) / battery / idle time / foreground window / monitors; rate readings poll every 1s (first call is a zero baseline), static info reads once at startup, polling pauses while the page is hidden. **Zero permission declarations** |
 | `examples/media-hub` | Volume read/set/mute, SMTC media info (cover / progress / status) and playback control (play_pause/next/previous), dual-source spectrum from system loopback and microphone (live canvas bars + peak line, paused while hidden, device auto-released ~30s after polling stops), toast notifications; permissions `system` + `mic` |
-| `examples/toolbox` | Clipboard read/write, skin-directory file write/read/list/delete, read-only registry (preset + custom keys), command execution (preset `ver`/`ipconfig` + custom, showing code/stdout/stderr), opening links (including a rejected `.exe` target demo), `skin_get_setting` / `skin_set_setting` (the only read channel for `password` values, writing settings back, syncing manager-side edits via `desk-setting-changed`); permissions `files` / `registry` / `shell` / `clipboard` / `system` |
+| `examples/toolbox` | Clipboard read/write, skin-directory file write/read/list/delete, read-only registry (preset + custom keys), command execution (preset `ver`/`ipconfig` + custom, showing code/stdout/stderr), opening links (including a rejected `.exe` target demo), `skin_get_setting` / `skin_set_setting` (the only read channel for `password` values, writing settings back, syncing manager-side edits via `desk-setting-changed`); permissions `registry` / `shell` / `clipboard` / `system` |
 
 The four skins `controls-demo` / `sys-monitor` / `media-hub` / `toolbox` also follow: bilingual UI that follows the manager language, dynamic content rendered exclusively via `textContent` / DOM APIs, no crashes when the bridge is missing (plain-browser preview), and rejected-command error text displayed inline in the corresponding card.
 

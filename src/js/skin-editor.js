@@ -497,6 +497,24 @@ export default class SkinEditor {
               ${def.min != null ? `min="${def.min}"` : ''} ${def.max != null ? `max="${def.max}"` : ''}
               ${def.step != null ? `step="${def.step}"` : ''}></div>`;
           break;
+        case 'stepper': {
+          // 数字步进器：−/＋ 按 step 增减；min/max 缺省 = 无界（与 number 的
+          // 可选边界一致，不像 slider 有 0/100 兜底），到界即禁用对应按钮
+          const num = Number(value ?? def.min ?? 0);
+          const step = def.step ?? 1;
+          const atMin = def.min != null && num <= def.min;
+          const atMax = def.max != null && num >= def.max;
+          row = `<div class="form-row">${labelCell}
+            <div class="cfg-stepper" data-key="${key}"
+              data-min="${def.min ?? ''}" data-max="${def.max ?? ''}" data-step="${step}">
+              <button class="cfg-step-btn" data-dir="-1" ${atMin ? 'disabled' : ''}
+                title="${t('editor.stepDecrease')}">−</button>
+              <span class="cfg-step-val">${num}</span>
+              <button class="cfg-step-btn" data-dir="1" ${atMax ? 'disabled' : ''}
+                title="${t('editor.stepIncrease')}">+</button>
+            </div></div>`;
+          break;
+        }
         case 'longtext':
           row = `<div class="form-row form-row-block">${labelCell}
             <textarea class="cfg-custom cfg-textarea" data-key="${key}" data-type="longtext"
@@ -1005,6 +1023,35 @@ export default class SkinEditor {
         const value = parseFloat(el.value);
         if (Number.isNaN(value)) return;
         this.saveCustomSetting(el.dataset.key, value);
+      });
+    });
+
+    // 数字步进器：−/＋ 按 step 增减并夹取 min/max，点击即保存（控件态即时
+    // 迁移；失败由 saveCustomSetting 整页 load 回滚）。小数位跟随 step，
+    // 防 0.1+0.2 的浮点尾巴。
+    this.container.querySelectorAll('.cfg-stepper').forEach(group => {
+      const valEl = group.querySelector('.cfg-step-val');
+      const decBtn = group.querySelector('[data-dir="-1"]');
+      const incBtn = group.querySelector('[data-dir="1"]');
+      const min = group.dataset.min === '' ? null : parseFloat(group.dataset.min);
+      const max = group.dataset.max === '' ? null : parseFloat(group.dataset.max);
+      const step = parseFloat(group.dataset.step) || 1;
+      const decimals = (group.dataset.step.split('.')[1] || '').length;
+      const sync = (n) => {
+        valEl.textContent = String(n);
+        decBtn.disabled = min !== null && n <= min;
+        incBtn.disabled = max !== null && n >= max;
+      };
+      group.querySelectorAll('.cfg-step-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          let n = (parseFloat(valEl.textContent) || 0) + step * Number(btn.dataset.dir);
+          if (min !== null) n = Math.max(min, n);
+          if (max !== null) n = Math.min(max, n);
+          n = parseFloat(n.toFixed(decimals));
+          if (String(n) === valEl.textContent) return; // 已在边界
+          sync(n);
+          this.saveCustomSetting(group.dataset.key, n);
+        });
       });
     });
 

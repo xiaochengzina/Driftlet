@@ -17,7 +17,7 @@
     "resizable": false,
     "opacity": 1.0
   },
-  "permissions": ["files", "registry", "shell", "clipboard", "system"],
+  "permissions": ["registry", "shell", "clipboard", "system"],
   "settings": [
     { "key": "note", "type": "longtext", "label": "备注", "label_en": "Note", "group": "数据", "group_en": "Data",
       "description": "皮肤内的文本框可经 skin_set_setting 写回；也可在本页（管理器设置页）直接编辑", "description_en": "Editable here, or written back from the skin via skin_set_setting", "default": "" },

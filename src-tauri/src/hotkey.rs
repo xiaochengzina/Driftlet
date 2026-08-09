@@ -63,8 +63,15 @@ pub fn toggle_all_skins(app: &AppHandle) {
             }
         }
     }
-    // Keep the tray check item in sync with reality. Clone the handle out
-    // of the guard so the MutexGuard drops before we call back into tauri.
+    // Keep the tray check item in sync with reality.
+    sync_tray_toggle_item(app);
+}
+
+/// Keep the tray "all skins hidden" check item in sync with reality.
+/// Clone the handle out of the guard so the MutexGuard drops before we
+/// call back into tauri.
+pub fn sync_tray_toggle_item(app: &AppHandle) {
+    let state = app.state::<AppState>();
     let item = state.toggle_item.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(item) = item {
         let _ = item.set_checked(all_skins_hidden(app));

@@ -4,8 +4,8 @@
   "name_en": "Controls Demo",
   "version": "1.0.0",
   "author": "Driftlet",
-  "description": "演示全部 19 种设置控件；皮肤界面语言跟随管理器自动切换",
-  "description_en": "Demo of all 19 settings controls; the skin UI language follows the manager automatically",
+  "description": "演示全部 20 种设置控件；皮肤界面语言跟随管理器自动切换",
+  "description_en": "Demo of all 20 settings controls; the skin UI language follows the manager automatically",
   "bilingual": true,
   "entry": "index.html",
   "window": {
@@ -51,6 +51,7 @@
     { "key": "theme_color", "type": "palette", "label": "调色板", "label_en": "Palette", "group": "外观", "group_en": "Appearance", "description": "主题色，应用到标题栏与进度条", "description_en": "Theme color, applied to the title bar and progress bar", "default": "#0e75c3" },
     { "key": "level", "type": "slider", "label": "滑动条", "label_en": "Slider", "group": "外观", "group_en": "Appearance", "description": "0 到 100，驱动应用区的进度条", "description_en": "0 to 100, drives the progress bar in the applied area", "default": 60, "min": 0, "max": 100, "step": 1 },
     { "key": "refresh_ms", "type": "number", "label": "数字输入", "label_en": "Number", "group": "外观", "group_en": "Appearance", "description": "带 min/max/step 的数字框", "description_en": "Numeric input with min/max/step", "default": 1000, "min": 100, "max": 10000, "step": 100 },
+    { "key": "refresh_sec", "type": "stepper", "label": "数字步进", "label_en": "Stepper", "group": "外观", "group_en": "Appearance", "description": "−/＋ 按 step 增减；驱动标题栏秒表的跳动间隔（秒）", "description_en": "−/+ buttons step the value; drives the app bar ticker's interval (seconds)", "default": 5, "min": 1, "max": 60, "step": 1 },
     { "key": "font_family", "type": "font", "label": "字体选择", "label_en": "Font", "group": "外观", "group_en": "Appearance", "description": "从系统已安装的字体中选择，应用到皮肤文字", "description_en": "Pick from installed system fonts, applied to the skin text", "default": "" },
 
     { "key": "tasks", "type": "tasklist", "label": "任务列表", "label_en": "Task List", "group": "任务", "group_en": "Tasks", "description": "回车或失焦保存，空白项自动忽略", "description_en": "Saved on Enter or blur; blank items are ignored",

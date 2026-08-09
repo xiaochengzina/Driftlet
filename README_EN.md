@@ -11,8 +11,8 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Install, uninstall, load, and reload skins
 - Install/update skins from `.dskin` skin packages (zip format); updates preserve user settings data
 - Double-click a `.dskin` file to bring up the install wizard directly (the installer registers the file association)
-- Skin permission model: sensitive capabilities must be declared in `permissions` in `skin.json` (6 kinds: file / registry / Shell / system control / clipboard / microphone); the install wizard lists them one by one and flags high-risk items (see "Security Model")
-- Custom skin settings: declare config items in `skin.json` (19 control types + groups + descriptions); the config panel is generated automatically
+- Skin permission model: sensitive capabilities must be declared in `permissions` in `skin.json` (5 kinds: registry / Shell / system control / clipboard / microphone); the install wizard lists them one by one and flags them with a two-tier high/medium risk grading (see "Security Model")
+- Custom skin settings: declare config items in `skin.json` (20 control types + groups + descriptions); the config panel is generated automatically
 - Adjust a skin's opacity, position, size, and zoom (the "Window" tab can enable resize-by-dragging: shows a frame hint, drag edges/corners to resize directly; zoom scales the whole window and its content from 50%–200%)
 - Always on top / pin to desktop (mutually exclusive, pin to desktop by default), disable dragging
 - Click-through (per-skin toggle on the "Window" tab, off by default): clicks and scrolls pass through to the window or desktop below — combined with pin-to-desktop the skin becomes a pure display widget
@@ -20,7 +20,8 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Tray icon management; closing the main window hides it to the tray
 - Autostart, dark/light theme switching
 - Right-click a skin window to open the skin menu (open config / refresh / unload)
-- A global hotkey hides/shows all loaded skins with one keystroke (default Ctrl+Shift+Alt+D, changeable or disabled in Settings), with a synced checked item in the tray menu
+- A global hotkey hides/shows all loaded skins with one keystroke (default Ctrl+Shift+Alt+D, changeable or disabled in Settings), with a synced checked item in the tray menu; Alt+F4 on a skin window only hides it — call it back via the hotkey or the tray
+- Browser refresh/navigation shortcuts like F5 are blocked in both the manager and skin windows — pages cannot be refreshed by keystroke; the window lifecycle belongs entirely to the manager
 - Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing)
 - Startup update check (on by default, can be turned off in Settings): prompts when a new GitHub release is available, with a one-click jump to the download page or an option to stop reminding
 
@@ -235,7 +236,7 @@ document.addEventListener('desk-setting-changed', (e) => {
 });
 ```
 
-Reference example: `examples/controls-demo` (demo of all 19 control types; the UI language follows the manager).
+Reference example: `examples/controls-demo` (demo of all 20 control types; the UI language follows the manager).
 
 ### Installing Skins
 
@@ -257,7 +258,7 @@ See `docs/skin-development-guide.md` §8 for details.
 
 A third-party skin is **networked local code** (a full Chromium web page + backend command calls) — treat it with that trust model. Driftlet's lines of defense:
 
-- **Permission declaration**: 6 kinds of sensitive capabilities — file, registry, Shell, system control (volume / media / open external / notifications), clipboard, microphone — must be declared in `permissions` in `skin.json` before they can be called, and the backend enforces per-command checks; the install wizard lists each declaration, flagging `shell` / `mic` as high risk.
+- **Permission declaration**: 5 kinds of sensitive capabilities — registry, Shell, system control (volume / media / open external / notifications), clipboard, microphone — must be declared in `permissions` in `skin.json` before they can be called, and the backend enforces per-command checks; the install wizard lists each declaration with a two-tier grading (high risk `shell` / `system` in red, medium risk `registry` / `clipboard` / `mic` in yellow).
 - **Manager commands are callable only from the manager window**: all management commands (load / unload / settings, etc.) verify the caller window's identity; calls from skin windows are always rejected (except three harmless commands: dragging, frame resizing, and the right-click menu).
 - **Zero grants for skin windows**: skin windows have empty capabilities — no Tauri core/plugin permissions at all; they can only reach backend commands through the injected bridge `__DESK_PP__.invoke`.
 - **File sandbox**: a skin's file reads/writes are confined to its own folder (absolute paths and `..` escapes rejected); `skin.json` / `settings.json` are write- and delete-protected.

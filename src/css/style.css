@@ -43,6 +43,9 @@
   --danger-btn-hover: #a93425;
   /* danger 按钮/徽标上的文字与图标色 */
   --danger-ink: #fff;
+  /* 中危警示黄（权限分级等），白底对比度 ≥ 4.5:1 */
+  --warning: #a16207;
+  --warning-soft: rgba(161, 98, 7, 0.1);
   --success: #0e7a4f;
   --success-soft: rgba(14, 122, 79, 0.1);
   /* 状态徽标描边（.status-badge.loaded 等信号灯 hairline） */
@@ -107,6 +110,9 @@
   --danger-soft: rgba(224, 104, 94, 0.12);
   --danger-btn: #c8443b;
   --danger-btn-hover: #dc5a4e;
+  /* 中危警示黄（权限分级等） */
+  --warning: #e0b04f;
+  --warning-soft: rgba(224, 176, 79, 0.12);
   --success: #46c48d;
   --success-soft: rgba(70, 196, 141, 0.12);
   --success-ring: rgba(70, 196, 141, 0.35);
@@ -1187,6 +1193,50 @@ body.hover-ok .cfg-segment:not(:disabled):hover {
   font-weight: 600;
 }
 
+/* 数字步进器（−/值/＋ 连体小组件，挂在 form-row 右侧） */
+.cfg-stepper {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-input);
+}
+
+.cfg-step-btn {
+  width: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1;
+  padding: 6px 0;
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), transform 0.12s var(--ease-out);
+}
+
+body.hover-ok .cfg-step-btn:not(:disabled):hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.cfg-step-btn:disabled {
+  opacity: var(--disabled-opacity);
+}
+
+.cfg-step-val {
+  min-width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
 /* 调色板 */
 .cfg-palette {
   display: flex;
@@ -1766,6 +1816,7 @@ body.hover-ok .settings-close:hover {
 .theme-btn:not(:disabled):active,
 .confirm-btn:not(:disabled):active,
 .cfg-chip:not(:disabled):active,
+.cfg-step-btn:not(:disabled):active,
 .settings-close:not(:disabled):active {
   transform: scale(0.97);
 }
@@ -1907,7 +1958,7 @@ body.hover-ok .settings-close:hover {
   margin-top: 10px;
 }
 
-/* 权限声明列表：已知权限带名称与说明；shell / mic 高危用警告色标出 */
+/* 权限声明列表：已知权限带名称与说明；高危（红）/ 中危（黄）分级标出 */
 .wizard-perms {
   margin: 0 0 14px;
   text-align: left;
@@ -1949,6 +2000,14 @@ body.hover-ok .settings-close:hover {
   color: var(--danger);
 }
 
+.wizard-perm.medium {
+  background: var(--warning-soft);
+}
+
+.wizard-perm.medium .wizard-perm-icon {
+  color: var(--warning);
+}
+
 .wizard-perm-text {
   display: flex;
   flex-direction: column;
@@ -1966,6 +2025,10 @@ body.hover-ok .settings-close:hover {
   color: var(--danger);
 }
 
+.wizard-perm.medium .wizard-perm-label {
+  color: var(--warning);
+}
+
 .wizard-perm-risk {
   font-style: normal;
   font-size: 10px;
@@ -1973,8 +2036,16 @@ body.hover-ok .settings-close:hover {
   margin-left: 6px;
   padding: 0 5px;
   border-radius: 4px;
+}
+
+.wizard-perm.danger .wizard-perm-risk {
   border: 1px solid var(--danger);
   color: var(--danger);
+}
+
+.wizard-perm.medium .wizard-perm-risk {
+  border: 1px solid var(--warning);
+  color: var(--warning);
 }
 
 .wizard-perm-desc {

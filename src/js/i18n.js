@@ -185,6 +185,8 @@ const MESSAGES = {
     'editor.timeSwapped': '起止时间已自动调换',
     'editor.showPassword': '显示',
     'editor.hidePassword': '隐藏',
+    'editor.stepDecrease': '减小',
+    'editor.stepIncrease': '增大',
 
     // ── 安装引导页（install-wizard.js） ──
     'wizard.title': '安装皮肤包',
@@ -205,8 +207,7 @@ const MESSAGES = {
     'wizard.permissions': '权限声明',
     'wizard.permNone': '该皮肤未声明额外权限',
     'wizard.permHighRisk': '高危',
-    'wizard.permFiles': '文件读写',
-    'wizard.permFilesDesc': '读写皮肤自身目录内的文件',
+    'wizard.permMediumRisk': '中危',
     'wizard.permRegistry': '注册表读取',
     'wizard.permRegistryDesc': '只读访问 Windows 注册表',
     'wizard.permShell': '执行命令',
@@ -391,6 +392,8 @@ const MESSAGES = {
     'editor.timeSwapped': 'Start and end times were swapped automatically',
     'editor.showPassword': 'Show',
     'editor.hidePassword': 'Hide',
+    'editor.stepDecrease': 'Decrease',
+    'editor.stepIncrease': 'Increase',
 
     // ── Install wizard (install-wizard.js) ──
     'wizard.title': 'Install Skin Package',
@@ -411,8 +414,7 @@ const MESSAGES = {
     'wizard.permissions': 'Permissions',
     'wizard.permNone': 'This skin declares no extra permissions',
     'wizard.permHighRisk': 'High risk',
-    'wizard.permFiles': 'File access',
-    'wizard.permFilesDesc': "Read and write files inside the skin's own folder",
+    'wizard.permMediumRisk': 'Medium risk',
     'wizard.permRegistry': 'Registry read',
     'wizard.permRegistryDesc': 'Read-only access to the Windows Registry',
     'wizard.permShell': 'Run commands',

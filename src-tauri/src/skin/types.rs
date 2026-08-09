@@ -31,10 +31,11 @@ pub struct SkinManifest {
     pub entry: String,
     #[serde(default)]
     pub window: WindowDefaults,
-    /// 敏感能力声明（"files" / "registry" / "shell" / "system" / "clipboard"
-    /// / "mic"，对应 skin_api 的 PERM_* 常量）。皮肤调用对应的后端命令前
+    /// 敏感能力声明（"registry" / "shell" / "system" / "clipboard" / "mic"，
+    /// 对应 skin_api 的 PERM_* 常量）。皮肤调用对应的后端命令前
     /// 必须在此声明，否则后端拒绝并返回 PermissionDenied。
-    /// 未知名一律忽略；只读系统信息命令不需要声明。
+    /// 未知名一律忽略；只读系统信息命令、皮肤自身目录内的文件读写
+    /// （沙箱隔离）不需要声明。
     #[serde(default)]
     pub permissions: Vec<String>,
     /// Declarative custom settings; the manager renders one control per entry
@@ -60,6 +61,8 @@ pub enum SkinSettingKind {
     Boolean,
     /// 数字输入（min/max/step）
     Number,
+    /// 数字步进器（−/＋ 按钮按 step 增减，min/max 可选夹取）
+    Stepper,
     /// 短文本
     Text,
     /// 长文本（多行）
@@ -121,12 +124,12 @@ pub struct SkinSettingDef {
     pub group_en: Option<String>,
     #[serde(default)]
     pub default: Option<serde_json::Value>,
-    /// Number settings only: inclusive bounds applied on save.
+    /// Number / stepper settings only: inclusive bounds applied on save.
     #[serde(default)]
     pub min: Option<f64>,
     #[serde(default)]
     pub max: Option<f64>,
-    /// Number / slider settings only: step between values (default 1).
+    /// Number / slider / stepper settings only: step between values (default 1).
     #[serde(default)]
     pub step: Option<f64>,
     /// Select / multiselect / radio / palette settings only.

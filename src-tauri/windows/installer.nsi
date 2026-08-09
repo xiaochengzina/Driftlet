@@ -413,11 +413,66 @@ Var AppStartMenuFolder
 ; Show run app after installation.
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
+; Driftlet customization: a third finish-page checkbox, "launch at login".
+; MUI2 has only two stock checkbox slots (RUN / SHOWREADME, both taken
+; above), so this one is hand-created in the page's SHOW callback at
+; 120u/130u — 20u below SHOWREADME, the same spacing MUI2's Finish.nsh
+; uses between stock checkboxes (TEXT_BOTTOM 85 → RUN 90 → README 110 →
+; ours 130). The LEAVE callback mirrors auto-launch's registry behavior so
+; the in-app settings toggle observes exactly the state chosen here.
+Var AutostartCheckbox
+Var AutostartCheckboxState
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishPageShow
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE FinishPageLeave
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_FINISH
 
 Function RunMainBinary
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
+FunctionEnd
+
+; First entry reflects the CURRENT registry (a reinstall with autostart
+; already on shows the box checked; fresh installs default unchecked,
+; matching the app's autostart default). Re-entries (Back → Next) restore
+; the user's own choice instead.
+Function FinishPageShow
+  ${If} $AutostartCheckboxState == ""
+    ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "driftlet"
+    ${If} $R0 == ""
+      StrCpy $AutostartCheckboxState ${BST_UNCHECKED}
+    ${Else}
+      StrCpy $AutostartCheckboxState ${BST_CHECKED}
+    ${EndIf}
+  ${EndIf}
+  ${NSD_CreateCheckbox} 120u 130u 195u 10u "$(autostart)"
+  Pop $AutostartCheckbox
+  SetCtlColors $AutostartCheckbox "${MUI_TEXTCOLOR}" "${MUI_BGCOLOR}"
+  SendMessage $AutostartCheckbox ${BM_SETCHECK} $AutostartCheckboxState 0
+  ; Same checkbox-text fix MUI applies in high-contrast mode (bug #443)
+  !ifndef MUI_FORCECLASSICCONTROLS
+  ${If} ${IsHighContrastModeActive}
+  !endif
+    System::Call 'UXTHEME::SetWindowTheme(p$AutostartCheckbox,w" ",w" ")'
+  !ifndef MUI_FORCECLASSICCONTROLS
+  ${EndIf}
+  !endif
+FunctionEnd
+
+; Apply on leave. Checked mirrors auto-launch::enable(): the Run value plus
+; the StartupApproved "enabled" binary that Task Manager's Startup tab and
+; the app's is_enabled() both read. Unchecked mirrors disable(): delete the
+; Run value (idempotent). The value name "driftlet" is
+; tauri-plugin-autostart's default app name (package_info().name = the
+; crate name); registry value names are case-insensitive, so the stock
+; uninstaller's "Driftlet" deletion covers it too.
+Function FinishPageLeave
+  ${NSD_GetState} $AutostartCheckbox $AutostartCheckboxState
+  ${If} $AutostartCheckboxState = ${BST_CHECKED}
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "driftlet" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\""
+    WriteRegBin HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "driftlet" "020000000000000000000000"
+  ${Else}
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "driftlet"
+  ${EndIf}
 FunctionEnd
 
 ; Uninstaller Pages
@@ -442,6 +497,11 @@ FunctionEnd
 {{#each language_files}}
   !include "{{this}}"
 {{/each}}
+
+; Driftlet customization: finish-page autostart checkbox label (used by
+; FinishPageShow above). Keep in sync with the settings panel wording.
+LangString autostart ${LANG_ENGLISH} "Launch Driftlet at login"
+LangString autostart ${LANG_SIMPCHINESE} "开机自动启动 Driftlet"
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode

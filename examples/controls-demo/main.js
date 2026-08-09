@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * controls-demo —— 全部 19 种设置控件演示。
+ * controls-demo —— 全部 20 种设置控件演示。
  *
  * 演示四件事：
  * 1. 读取自身 skin.json（相对路径 fetch），按当前语言渲染控件标签/分组/选项；
@@ -19,6 +19,7 @@
 const I18N = {
   'zh-CN': {
     subtitle: (n) => `演示全部 ${n} 种设置控件 · 界面语言跟随管理器`,
+    ticker: (n, sec) => `数字步进驱动：每 ${sec} 秒跳一次 · 已跳 ${n} 次`,
     fallbackName: '控件演示',
     on: '开',
     off: '关',
@@ -30,6 +31,7 @@ const I18N = {
   },
   en: {
     subtitle: (n) => `Demo of all ${n} settings controls · UI language follows the manager`,
+    ticker: (n, sec) => `Driven by the stepper: ticks every ${sec}s · ${n} ticks so far`,
     fallbackName: 'Controls Demo',
     on: 'On',
     off: 'Off',
@@ -45,6 +47,9 @@ let lang = 'zh-CN';          // 当前皮肤界面语言
 let schema = null;           // fetch 来的 skin.json
 let settings = {};           // __DESK_PP__.settings（password 键恒为空串）
 let secretCache = '';        // password 值（skin_get_setting 单独读取）
+let tickCount = 0;           // 小秒表已跳次数（stepper 演示）
+let tickSec = 5;             // 小秒表当前间隔（秒）
+let tickTimer = null;        // 小秒表定时器句柄
 
 function t(key, ...args) {
   const entry = (I18N[lang] && I18N[lang][key]) ?? I18N['zh-CN'][key];
@@ -97,7 +102,7 @@ function applySettings() {
   // 标题 = title 设置值；空值回退皮肤名（按当前语言）
   document.getElementById('skin-title').textContent =
     s.title || pickLang(schema?.name, schema?.name_en) || t('fallbackName');
-  document.getElementById('subtitle').textContent = t('subtitle', defs.length || 19);
+  document.getElementById('subtitle').textContent = t('subtitle', defs.length || 20);
   if (titleDef) document.getElementById('skin-title').title = pickLang(titleDef.description, titleDef.description_en);
 
   // 主题色（palette）：校验格式后应用，防非法值进 style
@@ -124,6 +129,26 @@ function applySettings() {
 
   // 下拉选择（select）→ 面板密度
   document.body.dataset.layout = s.layout === 'compact' ? 'compact' : 'comfy';
+
+  // 小秒表文本随语言/设置刷新（间隔本身的重排在 restartTicker）
+  renderTicker();
+}
+
+/* 数字步进（stepper）→ 小秒表：按 refresh_sec 的间隔跳动；值在管理器里
+   一改，desk-setting-changed 处理会调本函数即时重排定时器（无需重载） */
+function restartTicker() {
+  tickSec = Math.max(1, Number(settings.refresh_sec) || 5);
+  if (tickTimer) clearInterval(tickTimer);
+  tickTimer = setInterval(() => {
+    tickCount += 1;
+    renderTicker();
+  }, tickSec * 1000);
+  renderTicker();
+}
+
+function renderTicker() {
+  const el = document.getElementById('ticker');
+  if (el) el.textContent = t('ticker', tickCount, tickSec);
 }
 
 /* ── 值区：按分组渲染全部控件当前值 ───────────────────────── */
@@ -255,6 +280,7 @@ document.addEventListener('desk-setting-changed', (e) => {
   settings[key] = value;                 // 桥也会同步，双保险
   if (key === 'api_secret') secretCache = value || '';
   renderAll();
+  if (key === 'refresh_sec') restartTicker(); // 步进器改值即时重排小秒表
 });
 
 // 管理器切换语言后实时推送（本演示的核心：皮肤界面语言跟随管理器）
@@ -271,4 +297,5 @@ document.addEventListener('desk-language-changed', (e) => {
   schema = await fetchSchema();
   await loadSecret();
   renderAll();
+  restartTicker(); // 小秒表起走（stepper 演示）
 })();

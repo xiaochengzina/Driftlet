@@ -632,7 +632,7 @@ pub(crate) fn validate_custom_setting(
         SkinSettingKind::Boolean => value.as_bool()
             .map(Value::Bool)
             .ok_or_else(|| trf(lang, Key::SettingNeedsBool, &[def.key.as_str()])),
-        SkinSettingKind::Number | SkinSettingKind::Slider => {
+        SkinSettingKind::Number | SkinSettingKind::Slider | SkinSettingKind::Stepper => {
             let mut n = value.as_f64()
                 .ok_or_else(|| trf(lang, Key::SettingNeedsNumber, &[def.key.as_str()]))?;
             if let Some(min) = def.min { n = n.max(min); }

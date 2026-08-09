@@ -141,32 +141,36 @@ export default class InstallWizard {
   }
 
   // 权限声明列表（skin.json "permissions"，后端 PackageInfo.permissions 透传）。
-  // 已知权限给名称 + 一句说明；shell / mic 高危，用警告色与警告图标标出；
-  // 未知权限原样显示 id（后端会忽略未知名，但展示出来让用户知情）
+  // 已知权限给名称 + 一句说明，并按风险分级：shell / system 高危（红）、
+  // registry / clipboard / mic 中危（黄），均用警告图标与分级徽标标出；
+  // 未知权限原样显示 id（后端会忽略未知名，但展示出来让用户知情）；
+  // 旧版皮肤可能仍声明 "files"——皮肤目录内文件读写已免声明，静默略过。
   _renderPermissions(permissions) {
     const KNOWN = {
-      files: { label: t('wizard.permFiles'), desc: t('wizard.permFilesDesc') },
-      registry: { label: t('wizard.permRegistry'), desc: t('wizard.permRegistryDesc') },
-      shell: { label: t('wizard.permShell'), desc: t('wizard.permShellDesc'), highRisk: true },
-      system: { label: t('wizard.permSystem'), desc: t('wizard.permSystemDesc') },
-      clipboard: { label: t('wizard.permClipboard'), desc: t('wizard.permClipboardDesc') },
-      mic: { label: t('wizard.permMic'), desc: t('wizard.permMicDesc'), highRisk: true },
+      registry: { label: t('wizard.permRegistry'), desc: t('wizard.permRegistryDesc'), risk: 'medium' },
+      shell: { label: t('wizard.permShell'), desc: t('wizard.permShellDesc'), risk: 'high' },
+      system: { label: t('wizard.permSystem'), desc: t('wizard.permSystemDesc'), risk: 'high' },
+      clipboard: { label: t('wizard.permClipboard'), desc: t('wizard.permClipboardDesc'), risk: 'medium' },
+      mic: { label: t('wizard.permMic'), desc: t('wizard.permMicDesc'), risk: 'medium' },
     };
     const shieldIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
     const warnIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
 
-    const list = Array.isArray(permissions) ? permissions : [];
+    const list = (Array.isArray(permissions) ? permissions : []).filter(p => p !== 'files');
     if (list.length === 0) {
       return `<div class="wizard-perms"><div class="wizard-perm-none">${t('wizard.permNone')}</div></div>`;
     }
     const rows = list.map(p => {
       // hasOwn 防 "__proto__"/"constructor" 这类 id 查到原型链上的假条目
       const known = Object.hasOwn(KNOWN, p) ? KNOWN[p] : null;
-      const highRisk = !!known?.highRisk;
-      return `<div class="wizard-perm${highRisk ? ' danger' : ''}">
-        <span class="wizard-perm-icon">${highRisk ? warnIcon : shieldIcon}</span>
+      const risk = known?.risk; // 'high' | 'medium' | undefined
+      const cls = risk === 'high' ? ' danger' : risk === 'medium' ? ' medium' : '';
+      const badge = risk === 'high' ? t('wizard.permHighRisk')
+        : risk === 'medium' ? t('wizard.permMediumRisk') : null;
+      return `<div class="wizard-perm${cls}">
+        <span class="wizard-perm-icon">${risk ? warnIcon : shieldIcon}</span>
         <span class="wizard-perm-text">
-          <span class="wizard-perm-label">${known ? known.label : this.esc(p)}${highRisk ? `<em class="wizard-perm-risk">${t('wizard.permHighRisk')}</em>` : ''}</span>
+          <span class="wizard-perm-label">${known ? known.label : this.esc(p)}${badge ? `<em class="wizard-perm-risk">${badge}</em>` : ''}</span>
           ${known ? `<span class="wizard-perm-desc">${known.desc}</span>` : ''}
         </span>
       </div>`;
