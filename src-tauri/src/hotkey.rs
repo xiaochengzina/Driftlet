@@ -161,7 +161,11 @@ pub fn apply_hotkey(app: &AppHandle, combo: &str) -> Result<(), String> {
     };
 
     if let Some(old) = old {
-        let _ = app.global_shortcut().unregister(old);
+        // 注销失败不阻断换绑，但必须留痕：否则旧注册泄漏（REGISTERED_COMBO
+        // 只记新键，旧组合要到重启才释放）
+        if let Err(e) = app.global_shortcut().unregister(old) {
+            log::warn!("failed to unregister previous hotkey: {}", e);
+        }
     }
     if let Some(new) = new {
         if let Err(e) = app.global_shortcut().register(new) {

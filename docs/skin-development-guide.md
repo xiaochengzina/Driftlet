@@ -13,7 +13,7 @@
 2. [skin.json Reference](#2-skinjson-reference)
 3. [Page Development Conventions](#3-page-development-conventions)
 4. [Custom Settings (settings)](#4-custom-settings-settings)
-5. [Bridge API (window.__DESK_PP__)](#5-bridge-api-window__desk_pp__)
+5. [Bridge API (window.driftlet)](#5-bridge-api-windowdriftlet)
 6. [Security Model](#6-security-model)
 7. [Development Workflow and Debugging](#7-development-workflow-and-debugging)
 8. [Packaging and Distribution (.dskin)](#8-packaging-and-distribution-dskin)
@@ -44,7 +44,69 @@ Optional files:
 - The manager creates a WebView2 window (transparent, frameless) for each loaded skin; the page is loaded from the skin folder via the `skin://` custom protocol.
 - **Before** the page loads, the manager injects the bridge script `window.__DESK_PP__` into the HTML (current setting values, drag takeover, right-click menu takeover, command channel) — the bridge is already ready when skin scripts run; no waiting needed.
 - All of a skin's "system capabilities" (system info, file read/write, notifications, etc.) are obtained by calling backend commands through `__DESK_PP__.invoke`; sensitive capabilities require permission declarations in `skin.json` (§2.3).
-- The window lifecycle (load, refresh, unload, position, size, opacity, always on top / pin to desktop) is entirely the manager's job; a skin only cares about its page — it never creates, moves, or closes its own window. An Alt+F4 close request is intercepted and downgraded to hiding the window — bring it back with the global hotkey (default Ctrl+Shift+Alt+D) or the tray checkbox; programmatic closes (unload / reload / quit) are unaffected. The manager and all skin windows also uniformly disable WebView2 browser accelerator keys: F5 / Ctrl+R / Ctrl+F5 refresh, Ctrl+P print, Alt+Home, F12 and the like are all dead (editing keys like Ctrl+C/V are unaffected) — pages cannot be refreshed or navigated by keystroke.
+- The window lifecycle (load, refresh, unload, position, size, opacity, always on top / pin to desktop) is entirely the manager's job; a skin only cares about its page — it never creates, moves, or closes its own window.
+- An Alt+F4 close request is intercepted and downgraded to hiding the window — bring it back with the global hotkey (default Ctrl+Shift+Alt+D) or the tray checkbox; programmatic closes (unload / reload / quit) are unaffected.
+- The manager and all skin windows uniformly disable WebView2 browser accelerator keys: F5 / Ctrl+R / Ctrl+F5 refresh, Ctrl+P print, Alt+Home, F12 and the like are all dead (editing keys like Ctrl+C/V are unaffected) — pages cannot be refreshed or navigated by keystroke. The single exception is Developer mode: with Settings → Advanced → Developer mode on, F12 / Ctrl+Shift+I inside a skin window opens DevTools (§7.1).
+
+### 1.3 Five-Minute Quickstart
+
+A complete, runnable minimal skin — two files, copy and go:
+
+`hello/skin.json`:
+
+```json
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "window": { "width": 260, "height": 120, "on_desktop": true },
+  "settings": [
+    { "key": "text", "type": "text", "label": "Text", "default": "Hello, Driftlet!" }
+  ]
+}
+```
+
+`hello/index.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { background: transparent; overflow: hidden; }
+    .card {
+      width: 100%; height: 100%; box-sizing: border-box;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(20, 24, 32, 0.85); color: #fff;
+      border-radius: 12px; font: 14px/1.4 sans-serif; user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="card drag-region" id="msg"></div>
+  <script>
+    'use strict';
+    const msg = document.getElementById('msg');
+    function render() {
+      // The bridge is injected before the page loads; ?. guards the
+      // bridge-less case (opening the page in a plain browser)
+      msg.textContent = (window.driftlet?.settings || {}).text || 'Hello, Driftlet!';
+    }
+    render();
+    // Apply setting changes from the manager live (no reload needed)
+    document.addEventListener('desk-setting-changed', render);
+  </script>
+</body>
+</html>
+```
+
+Copy the `hello` folder into `<install dir>\skins\`, click "Refresh" in the manager, then "Load" — the skin appears on your desktop: drag the card to move it; change "Text" on the manager's "Skin Settings" page and the card updates instantly.
+
+Next steps: more control types → chapter 4; system capabilities → chapter 5 (see the command cheat sheet at the top of the chapter).
+
+> **Entry name**: the examples here use the recommended entry `window.driftlet`; `window.__DESK_PP__` found in older skins is the same object under its legacy name, kept forever — no changes needed. An optional wrapper `examples/driftlet.js` (named functions like `Driftlet.getCpuInfo()`) plus `examples/driftlet.d.ts` (editor autocomplete) can be copied into your skin folder.
 
 ---
 
@@ -88,6 +150,7 @@ The `skin.json` file itself must not exceed **1 MB** (larger files are refused a
 | `entry` | No | Entry HTML file name, default `index.html`; must be a **plain file name** — `..`, `/`, `\`, `:` are not allowed |
 | `author` | No | Author, shown on the card and the config panel |
 | `version` | No | Version number, e.g. `"1.0.0"`; update packages use it to decide upgrade/downgrade — strongly recommended to always set it |
+| `min_host_version` | No | Minimum host version, e.g. `"1.0.6"`; if the host is older, the install wizard warns that "some features may not work" (installation is NOT blocked). Runtime feature detection: see `hostVersion` in §5.1 |
 | `description` | No | One-line description |
 | `description_en` | No | English description (same selection rules as `name_en`) |
 | `bilingual` | No | Chinese/English bilingual declaration, default `false`; when `true`, the various `*_en` English strings take effect, see §4.5 |
@@ -109,7 +172,7 @@ A skin's unique identifier (skin id) = the **`id` field** of `skin.json`:
 | `transparent` | boolean | true | Transparent window background (skin development generally keeps this true) |
 | `always_on_top` | boolean | false | Initially always on top. Mutually exclusive with `on_desktop` |
 | `on_desktop` | boolean | true | Initially pinned to the desktop layer (still visible when Win+D shows the desktop). Mutually exclusive with `always_on_top` |
-| `resizable` | boolean | false | Whether the window edges/corners can initially be dragged to resize (minimum 60×40; an animated yellow-and-black striped border hint is shown while enabled). Users can toggle it anytime on the manager's "Window" tab; before enabling it, the skin should have a responsive layout per §3.3, otherwise content gets clipped as the window shrinks; the outer 6px edges are the resize hot zone and no longer trigger `.drag-region` dragging |
+| `resizable` | boolean | false | Whether the window edges/corners can initially be dragged to resize (minimum 60×40). While enabled, an animated yellow-and-black striped border hint is shown, and the outer 6px edges are the resize hot zone, taking precedence over `.drag-region` dragging. Users can toggle it anytime on the manager's "Window" tab; before enabling it, the skin should have a responsive layout per §3.3, otherwise content gets clipped as the window shrinks |
 | `zoom` | number | 1.0 | Default zoom (0.5 – 2.0): actual window = `width × zoom` × `height × zoom`; content is scaled by the same factor via WebView2 ZoomFactor — **lay the skin out at its base size and the platform handles the overall scaling, no adaptation needed**. Users can adjust it anytime on the manager's "Window" tab |
 | `opacity` | number | 1.0 | Initial opacity, 0.1 – 1.0 |
 
@@ -137,7 +200,7 @@ Rules:
 
 - **Declare only the permissions you actually use**; unknown names are ignored.
 - Read-only system info commands (§5.2) and settings read/write commands (§5.4) need no declaration; neither does file read/write inside the skin folder (`skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file`) — the fs sandbox already confines every operation to the skin's own install folder (absolute paths and `..` rejected, canonicalize containment check, symlink-escape protection, `skin.json`/`settings.json*` read-only protection). The old `files` permission has been removed entirely; a leftover `"files"` declaration in an old skin is treated as an unknown name and ignored — harmless.
-- **Permission declarations are visible to users**: when installing/updating a skin, the install wizard lists every declared permission one by one, flagged in two risk tiers — `shell` and `system` as "High risk" (red warning badge), `registry`, `clipboard`, and `mic` as "Medium risk" (yellow warning badge); the removed `files` declaration is silently skipped and not shown. Declaring permissions you don't use lowers users' willingness to install.
+- **Permission declarations are visible to users**: when installing/updating a skin, the install wizard lists every declared permission one by one, flagged in two risk tiers — `shell` and `system` as "High risk" (red warning badge), `registry`, `clipboard`, and `mic` as "Medium risk" (yellow warning badge); the removed `files` declaration is silently skipped and not shown. The wizard also always shows a fixed line listing the capabilities that need no declaration (read-only system info, file I/O within the skin's own folder), so even a zero-declaration skin sets the right expectation. Declaring permissions you don't use lowers users' willingness to install.
 - From the user's perspective: a skin declaring `shell` is equivalent to being able to run local programs — state honestly on the release page which permissions the skin uses and what for.
 
 ---
@@ -146,7 +209,8 @@ Rules:
 
 ### 3.1 Required Rules
 
-- **Keep all assets inside the skin folder** and reference them with relative paths (`<img src="bg.png">`). Skins are loaded via the `skin://` custom protocol and cannot access paths outside the folder; references may also be written in the absolute form `http://skin.localhost/<skin id>/<path>` — on Windows, WebView2 does not support subresource loading over non-standard protocols, so at runtime `skin://localhost/...` is rewritten into that form (writing `skin://` references for subresources directly fails with `ERR_UNKNOWN_URL_SCHEME`). **Always prefer relative paths** — the absolute form hardcodes the skin id into your code, and renaming the folder means 404.
+- **Keep all assets inside the skin folder** and reference them with relative paths (`<img src="bg.png">`). Skins are loaded via the `skin://` custom protocol and cannot access paths outside the folder.
+- Never write `skin://` asset references directly — on Windows, WebView2 does not support subresource loading over non-standard protocols and fails with `ERR_UNKNOWN_URL_SCHEME` (at runtime `skin://localhost/...` is rewritten into the `http://skin.localhost/...` form). The absolute form of a reference is `http://skin.localhost/<skin id>/<path>`, but it hardcodes the skin id into your code and renaming the folder means 404 — **always prefer relative paths**.
 - For transparency, set `body { background: transparent }` and paint the background on your own container.
 - **The layout must adapt to the window size**: no element may exceed the window's visible area — when the window shrinks, content must scale/reflow with it; neither overflow clipping nor window-level scrollbars are allowed. See §3.3 for how.
 - **Do not use `-webkit-app-region: drag`**. Use the `.drag-region` class for draggable areas instead (see §3.2).
@@ -350,9 +414,30 @@ Not listening is harmless — the bridge bakes the new language on the next relo
 
 ---
 
-## 5. Bridge API (window.__DESK_PP__)
+## 5. Bridge API (window.driftlet)
 
-Injected by the app before the page loads; ready to use when skin scripts run.
+Injected by the app before the page loads; ready to use when skin scripts run. The recommended entry is `window.driftlet`; `window.__DESK_PP__` is the same object under its legacy name, kept forever — older skins need no changes.
+
+**Command cheat sheet** (full contracts in §5.2–§5.4; the optional wrapper `examples/driftlet.js` turns commands into named functions like `Driftlet.getCpuInfo()`, with `driftlet.d.ts` for editor autocomplete):
+
+| Command | Permission | Purpose |
+|------|------|------|
+| `get_cpu_info` / `get_gpu_info` / `get_memory_info` | — | CPU / GPU / memory |
+| `get_disks_info` / `get_disk_space` | — | Disk list / space of a volume |
+| `get_network_info` | — | Adapter rates and local IPs |
+| `get_audio_spectrum` | — | System loopback spectrum |
+| `get_os_info` / `get_processes` | — | OS info / process list |
+| `get_volume` / `get_media_info` | — | Volume read / now playing |
+| `get_battery_info` / `get_idle_time` | — | Battery / input idle time |
+| `get_foreground_window_info` / `get_monitors` | — | Foreground window / monitors |
+| `skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file` | — | Skin-folder file I/O (sandboxed) |
+| `skin_get_setting` / `skin_set_setting` | — | Read / write your own declared settings |
+| `skin_log` | — | Send an explicit host-log message (console output is forwarded automatically, §5.4) |
+| `read_registry_value` | `registry` | Registry read-only |
+| `run_command` | `shell` | Run a command (normal privileges, hidden window) |
+| `set_volume` / `set_mute` / `media_control` / `open_external` / `show_notification` | `system` | Set volume / mute / media transport / open external target / toast notification |
+| `read_clipboard_text` / `write_clipboard_text` | `clipboard` | Clipboard read / write |
+| `get_mic_spectrum` | `mic` | Microphone spectrum |
 
 ### 5.1 Bridge Members
 
@@ -361,6 +446,7 @@ Injected by the app before the page loads; ready to use when skin scripts run.
 | `settings` | object | Currently effective setting values (key → value); `password`-type keys are always empty strings, see §4.3 |
 | `invoke(cmd, args?)` | function | Calls a backend command; returns a Promise (rejects on failure with a readable error message) |
 | `language` | string | The manager UI language (`"zh-CN"` / `"en"`); updated in real time when the manager switches language, with a `desk-language-changed` event dispatched (`e.detail.language`) — usage in §4.5 |
+| `hostVersion` | string | Host version (e.g. `"1.0.6"`); for feature detection — when you rely on commands/controls introduced in a newer version, compare numeric segments and degrade gracefully |
 | `positionLocked` | boolean | Position lock state (used internally by the bridge; read-only reference) |
 | `resizable` | boolean | Border resize switch state (used internally by the bridge; read-only reference) |
 | `setOpacity(v)` / `setResizable(on)` | function | Used internally by the bridge; skins must not call them directly |
@@ -663,7 +749,7 @@ await window.__DESK_PP__.invoke('open_external', { target: 'D:\\docs\\report.pdf
 
 Allowed targets: `http(s)://`, `mailto:`, local absolute paths (files or folders). Explicitly rejected:
 
-- **Executables** (`.exe` `.bat` `.cmd` `.ps1` `.vbs` `.vbe` `.js` `.jse` `.wsf` `.wsh` `.msi` `.msp` `.msc` `.scr` `.com` `.pif` `.cpl` `.lnk` `.hta` `.reg` `.dll` `.jar` `.url`) — to run programs, use `run_command` with the `shell` permission, so users get a correct expectation of capabilities;
+- **Executables / types the system resolves as code or remote references** (`.exe` `.bat` `.cmd` `.ps1` `.vbs` `.vbe` `.js` `.jse` `.wsf` `.wsh` `.msi` `.msp` `.msc` `.scr` `.com` `.pif` `.cpl` `.lnk` `.hta` `.reg` `.dll` `.jar` `.url` `.search-ms` `.library-ms` `.application` `.appref-ms` `.diagcab` `.website`) — to run programs, use `run_command` with the `shell` permission, so users get a correct expectation of capabilities; the last six (Explorer search/library files, ClickOnce, diagnostic packages, etc.) can indirectly point at remote shares — same NTLM-leak surface as UNC paths, so they are rejected too;
 - **UNC paths** (`\\host\share` form; accessing one triggers an SMB connection);
 - relative paths and schemes like `file:` / `javascript:`;
 - nonexistent targets and open failures return the same error, indistinguishable.
@@ -708,13 +794,41 @@ const value = await window.__DESK_PP__.invoke('skin_get_setting', { key: 'api_ke
 
 Writes the value of a custom setting item into `settings.json` in its own folder, sharing the same data with the manager's "Skin Settings" tab. Usage and contract: see §4.4.
 
+#### Console Output — Forwarded to the Host Log Automatically (Zero Integration)
+
+F12 DevTools is disabled by the platform in skin windows, so the injected bridge automatically forwards the page's console output to the host log — no code needed:
+
+- `console.log/info/debug` are recorded as info, `console.warn` as warning, `console.error` as error;
+- uncaught script exceptions (with file and line), unhandled Promise rejections, resource load failures (img/script/link), and CSP violations also land in the log as errors;
+- view them in **Manager → Settings → Advanced → Logs → Open Log Window** — the source filter narrows down to a single skin;
+- forwarding has built-in flood protection (consecutive duplicates collapse into `(xN)`, batched reporting every 250 ms, overflow dropped with a notice) — still, avoid logging from hot paths (e.g. a `requestAnimationFrame` callback);
+- automatic forwarding needs no permission declaration and no integration — existing skins benefit as-is.
+
+#### `skin_log` — Send a Message to the Host Log Window Explicitly
+
+```js
+await window.__DESK_PP__.invoke('skin_log', { level: 'warn', message: 'API response empty, using cached data' });
+```
+
+- The explicit channel beyond automatic console forwarding: for business events that aren't errors but are worth recording ("fell back to cached data");
+- `level` only accepts `'warn'` / `'error'`; anything else (or omitted) is recorded as info (operation event);
+- the message goes into the host's in-memory ring buffer (cap 1000 entries, each message truncated to 1000 chars), visible in the log window; the source label automatically carries your skin id (`skin:<id>`) — no need to add one, and it cannot be forged;
+- while the log window is closed, messages stay in the backend only — zero frontend overhead;
+- no permission declaration needed (messages never leave the local log buffer); the backend only identifies the caller via its window identity.
+
 ### 5.5 Call Boundary (Commands Skins Can't Reach)
 
 `__DESK_PP__.invoke` is technically a straight pass-through, but **the backend gates every command by the calling window's identity**:
 
-- Manager-only commands (install/uninstall/load skins, modify window config, modify global settings, autostart, preview capture, etc. — about 40) **can only be called from the manager window** — skin calls are rejected: `This command can only be called from the manager window`. Don't try to call them, and don't try to forge an identity (identity comes from the window itself and cannot be forged).
+- Manager-only commands (install/uninstall/load skins, modify window config, modify global settings, autostart, preview capture, etc.) **can only be called from the manager window** — skin calls are rejected: `This command can only be called from the manager window`. Don't try to call them, and don't try to forge an identity (identity comes from the window itself and cannot be forged).
 - Bridge-internal commands `start_skin_drag` / `start_skin_resize` / `show_skin_context_menu` are used by the injected script on drag/resize press and right-click; skins must not call them directly.
 - The complete list of commands actually available to skins = everything listed in §5.2–§5.4 of this document. This chapter will be updated in sync when future versions add capabilities.
+
+### 5.6 Error-Handling Conventions
+
+- When a command fails, the rejection value is a **human-readable message** (its language follows the manager UI) — fine for displaying in place or logging, but never branch your program logic on the message text.
+- "No data" is expressed through return values, not errors: queries return `null` or a flag (`get_media_info` resolves `null` with no playback session, `get_battery_info` uses `has_battery`, `get_foreground_window_info` is `null` in rare cases); only actions reject on failure (`media_control` with no session, `set_volume` failures, and so on).
+- To branch on host capabilities, read `__DESK_PP__.hostVersion` and compare numeric version segments — don't call-then-catch to probe whether a feature exists.
 
 ---
 
@@ -760,7 +874,7 @@ The platform can't see inside skin pages; the following are on you:
 
 During development you can also test the full double-click install chain with a command-line argument: `npm run tauri dev -- -- "D:\path\x.dskin"`.
 
-Additionally, debug builds (`npm run tauri dev`) support skin hot reload: off by default; once enabled on the Settings page, a watcher recursively watches the whole skins directory, and a loaded skin reloads automatically after its file changes settle behind a 300 ms debounce — no manual right-click reload needed.
+Additionally, Settings → Advanced → Developer mode (off by default) bundles two development aids: in debug builds (`npm run tauri dev`), a watcher recursively watches the whole skins directory and a loaded skin reloads automatically after its file changes settle behind a 300 ms debounce — no manual right-click reload needed; in any build, pressing F12 or Ctrl+Shift+I inside a skin window opens DevTools.
 
 ### 7.2 Debugging in a Plain Browser
 
@@ -769,6 +883,7 @@ A skin is essentially a web page — layout, styles, and most logic can be debug
 - Without the bridge, `window.__DESK_PP__` is `undefined` — use optional chaining `?.` with defaults for all access (§5), and the page renders fine in a bridge-less environment;
 - to mock setting values, assign `window.__DESK_PP__ = { settings: { ... } }` manually in the browser console;
 - parts depending on backend commands (system info, file read/write) can only be tested for real inside the manager.
+- with the `examples/driftlet.js` wrapper, a missing bridge makes every command reject a clear `Error` — catch it and the page renders fine offline.
 
 ### 7.3 Troubleshooting
 
@@ -782,6 +897,7 @@ A skin is essentially a web page — layout, styles, and most logic can be debug
 | Command errors "can only be called from the manager window" | You called a manager-only command — see §5.5; switch to the skin commands listed in this document |
 | Window position/size not as expected | Trust the "Position & Size" section of the config panel (logical pixels); check whether any element has a fixed size exceeding the window |
 | File read/write errors "invalid path" | Paths must be relative to the skin folder; no `..`, drive letters, or colons |
+| Want to see a skin's output while it runs in the manager | Open Manager → Settings → Advanced → Logs and filter by your skin — console output and errors land in the log automatically (§5.4); use `skin_log` for explicit business events |
 
 ---
 
@@ -802,6 +918,7 @@ Pre-pack validation uses **exactly the same rules** as the install side (strongl
 
 - Structural errors (e.g. `window.width` written as a string, a nonexistent setting item `type`) are rejected outright with line/column positions;
 - a missing `version` prints a warning (not blocking, but update detection degrades — recommended to add it);
+- a malformed `min_host_version` (must be a numeric-segment version like `"1.0.5"`) is rejected outright;
 - auto-excluded: `settings.json*` (user data), `.git` / `.svn` / `node_modules` directories, existing `*.dskin` artifacts, `.DS_Store` / `Thumbs.db` / `desktop.ini`;
 - over-limit is rejected outright: 64 MB archive / 256 MB extracted / 5000 files.
 
@@ -840,6 +957,7 @@ Go through these one by one before packaging:
 - [ ] Dynamic content is rendered via `textContent` or escaped; no user-editable values spliced raw into `innerHTML` (§6.3)
 - [ ] If sensitive APIs are used: `permissions` declares only what's actually used (§2.3), and the declaration list shown in the install wizard is one you can stand behind
 - [ ] Bridge-less scenarios (opened in a plain browser) don't throw (`?.` defense, §7.2)
+- [ ] If you rely on commands/controls introduced in a newer version: declared `min_host_version` (install-time warning), or degrade at runtime via `__DESK_PP__.hostVersion`
 - [ ] A `preview.png` is provided, or a preview was captured in the manager
 - [ ] Packed with `pack-skin.exe` into a `.dskin`, and actually installed/updated once in the manager to verify (including the permission declaration display)
 
@@ -847,7 +965,7 @@ Go through these one by one before packaging:
 
 ## 10. Example Skins
 
-The repo ships four example skins. `controls-demo` is the reference implementation of the settings system and page conventions; `sys-monitor` / `media-hub` / `toolbox` together cover all 31 backend commands callable by skins (§5.2–§5.4) and are the reference for API usage. Strongly recommended to read their code before starting:
+The repo ships four example skins. `controls-demo` is the reference implementation of the settings system and page conventions; `sys-monitor` / `media-hub` / `toolbox` together cover all backend commands callable by skins (§5.2–§5.4) and are the reference for API usage. Strongly recommended to read their code before starting:
 
 | Skin | What it demonstrates |
 |------|----------|

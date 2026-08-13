@@ -6,15 +6,8 @@
  * 检查或安装失败都进入失败态，给出后端返回的原因。
  */
 import API from './api.js';
-import { t, getLang } from './i18n.js';
-
-// 双语皮肤：英文界面优先显示 *_en 文案，留空回退默认（与 skin-list.js 同规则）
-function dispName(info) {
-  return (getLang() === 'en' && info.bilingual && info.name_en) || info.name;
-}
-function dispDesc(info) {
-  return (getLang() === 'en' && info.bilingual && info.description_en) || info.description;
-}
+import { t } from './i18n.js';
+import { esc, dispName, dispDesc } from './dom.js';
 
 export default class InstallWizard {
   /**
@@ -88,7 +81,7 @@ export default class InstallWizard {
 
   // ── 状态 2：确认 ──
   _renderConfirm(info, packagePath) {
-    const versionText = (v) => v ? `v${this.esc(v)}` : t('common.noVersion');
+    const versionText = (v) => v ? `v${esc(v)}` : t('common.noVersion');
     let heading, statusLine, action, danger = false;
     switch (info.status) {
       case 'update':
@@ -118,14 +111,16 @@ export default class InstallWizard {
     this.body.innerHTML = `
       <div class="wizard-card">
         <div class="wizard-pkg-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg></div>
-        <h2 class="wizard-name">${this.esc(dispName(info))}</h2>
+        <h2 class="wizard-name">${esc(dispName(info))}</h2>
         <div class="wizard-meta">
-          <span>${this.esc(info.id)}</span>
-          ${info.version ? `<span>v${this.esc(info.version)}</span>` : ''}
-          ${info.author ? `<span>${this.esc(info.author)}</span>` : ''}
+          <span>${esc(info.id)}</span>
+          ${info.version ? `<span>v${esc(info.version)}</span>` : ''}
+          ${info.author ? `<span>${esc(info.author)}</span>` : ''}
         </div>
-        ${dispDesc(info) ? `<p class="wizard-desc">${this.esc(dispDesc(info))}</p>` : ''}
+        ${dispDesc(info) ? `<p class="wizard-desc">${esc(dispDesc(info))}</p>` : ''}
         ${this._renderPermissions(info.permissions)}
+        <p class="wizard-note wizard-freecaps">${t('wizard.freeCapabilities')}</p>
+        ${info.requires_host_version ? `<p class="wizard-note warn">${t('wizard.hostTooOld', { version: esc(info.requires_host_version) })}</p>` : ''}
         <div class="wizard-statusline ${danger ? 'danger' : ''}">
           <strong>${heading}</strong> · ${statusLine}
         </div>
@@ -170,7 +165,7 @@ export default class InstallWizard {
       return `<div class="wizard-perm${cls}">
         <span class="wizard-perm-icon">${risk ? warnIcon : shieldIcon}</span>
         <span class="wizard-perm-text">
-          <span class="wizard-perm-label">${known ? known.label : this.esc(p)}${badge ? `<em class="wizard-perm-risk">${badge}</em>` : ''}</span>
+          <span class="wizard-perm-label">${known ? known.label : esc(p)}${badge ? `<em class="wizard-perm-risk">${badge}</em>` : ''}</span>
           ${known ? `<span class="wizard-perm-desc">${known.desc}</span>` : ''}
         </span>
       </div>`;
@@ -211,7 +206,7 @@ export default class InstallWizard {
           <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12.5 9.5 18 20 6.5"/></svg>
         </div>
         <h2 class="wizard-name">${t('wizard.done')}</h2>
-        <p class="wizard-desc">${t('wizard.doneDesc', { name: this.esc(dispName(info)) })}</p>
+        <p class="wizard-desc">${t('wizard.doneDesc', { name: esc(dispName(info)) })}</p>
         <div class="wizard-actions">
           <button class="confirm-btn cancel" data-act="done">${t('common.done')}</button>
           <button class="confirm-btn primary" data-act="load">${t('wizard.loadNow')}</button>
@@ -246,8 +241,8 @@ export default class InstallWizard {
         <div class="wizard-result-icon error">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
         </div>
-        <h2 class="wizard-name">${this.esc(title)}</h2>
-        <p class="wizard-error-text">${this.esc(String(err))}</p>
+        <h2 class="wizard-name">${esc(title)}</h2>
+        <p class="wizard-error-text">${esc(String(err))}</p>
         <div class="wizard-actions">
           <button class="confirm-btn primary" data-act="close">${t('common.close')}</button>
         </div>
@@ -260,14 +255,8 @@ export default class InstallWizard {
     this.body.innerHTML = `
       <div class="wizard-status">
         <div class="wizard-spinner"></div>
-        <p>${this.esc(text)}</p>
-        ${sub ? `<p class="wizard-status-sub">${this.esc(sub)}</p>` : ''}
+        <p>${esc(text)}</p>
+        ${sub ? `<p class="wizard-status-sub">${esc(sub)}</p>` : ''}
       </div>`;
-  }
-
-  esc(str) {
-    const div = document.createElement('div');
-    div.textContent = String(str ?? '');
-    return div.innerHTML;
   }
 }

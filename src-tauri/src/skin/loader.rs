@@ -118,6 +118,10 @@ pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
     Ok(manifest)
 }
 
+// 注意：以下校验函数（is_valid_entry_name / validate_skin_id /
+// is_reserved_device_name）在 tools/pack-skin/src/main.rs 有手工镜像——
+// 改动必须同步并重建 pack-skin.exe。
+
 /// entry 字段校验：纯文件名，不含路径分隔符、".." 与冒号
 pub(crate) fn is_valid_entry_name(entry: &str) -> bool {
     !entry.is_empty()
@@ -292,8 +296,6 @@ pub fn build_skin_info_list(skins: &[Skin], loaded_ids: &[String]) -> Vec<SkinIn
             description_en: skin.manifest.description_en.clone(),
             bilingual: skin.manifest.bilingual,
             loaded,
-            has_error: false,
-            error_msg: None,
             preview,
         }
     }).collect()

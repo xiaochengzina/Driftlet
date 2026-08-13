@@ -32,23 +32,13 @@ const MAX_FILES: usize = 5000;
 
 // ─── Export ─────────────────────────────────────────────────────────────
 
-pub fn export_backup(app: &AppHandle, dest: &Path) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let lang = state.lang();
-
-    // 与导入/安装互斥：导入 Phase 2/3 的 rename+copy 窗口期 skins/ 缺失或
-    // 半拷贝，此刻并发导出会产出不完整备份。install_lock 是 tokio Mutex
-    // （guard 为 Send，见 AppState 注释），但本函数跑在异步上下文里，
-    // blocking_lock / runtime block_on 都会 panic —— 借一个临时线程把
-    // guard 取回来持有到导出结束。
-    let _install_guard = std::thread::scope(|s| {
-        s.spawn(|| tauri::async_runtime::block_on(state.install_lock.lock()))
-            .join()
-            .expect("install_lock helper thread panicked")
-    });
-
+/// 导出 config/ + skins/ 为一个 zip。调用方必须已持有
+/// `AppState.install_lock`（guard 由异步命令获取并持有到本函数返回）——
+/// 导入 Phase 2/3 的 rename+copy 窗口期 skins/ 缺失或半拷贝，此刻并发
+/// 导出会产出不完整备份。
+pub fn export_backup(config_dir: &Path, skins_dir: &Path, dest: &Path, lang: &str) -> Result<(), String> {
     let file = fs::File::create(dest)
-        .map_err(|e| trf(&lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
+        .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
     let mut zip = zip::ZipWriter::new(file);
     let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
@@ -61,13 +51,13 @@ pub fn export_backup(app: &AppHandle, dest: &Path) -> Result<(), String> {
             .map(|d| d.as_secs())
             .unwrap_or(0),
     });
-    let fail = |e: zip::result::ZipError| trf(&lang, Key::ExportBackupFailed, &[&e.to_string()]);
+    let fail = |e: zip::result::ZipError| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]);
     zip.start_file(MANIFEST_NAME, opts).map_err(fail)?;
     zip.write_all(manifest.to_string().as_bytes())
-        .map_err(|e| trf(&lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
+        .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
 
-    add_dir(&mut zip, &state.config_dir, "config", opts, &lang)?;
-    add_dir(&mut zip, &state.skins_dir, "skins", opts, &lang)?;
+    add_dir(&mut zip, config_dir, "config", opts, lang)?;
+    add_dir(&mut zip, skins_dir, "skins", opts, lang)?;
     zip.finish().map_err(fail)?;
     Ok(())
 }
@@ -120,9 +110,16 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
 
     // Phase 1: extract to a temp dir under the package extractor's guards,
     // then validate — the live data dirs are untouched until everything
-    // about the payload checks out.
-    let extracted = extract_backup(package_path, &lang)?;
-    validate_backup(extracted.path(), &lang)?;
+    // about the payload checks out.（重 IO 挪 spawn_blocking，不占 async worker）
+    let pkg = package_path.to_path_buf();
+    let lang1 = lang.clone();
+    let extracted = tauri::async_runtime::spawn_blocking(move || {
+        let extracted = extract_backup(&pkg, &lang1)?;
+        validate_backup(extracted.path(), &lang1)?;
+        Ok::<_, String>(extracted)
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))??;
 
     // Phase 2: serialize with package installs, then unload every skin —
     // a loaded skin's folder is locked by WebView2 on Windows and the
@@ -143,8 +140,26 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
         unloaded.push(id);
     }
 
-    // Phase 3: staged replace with rollback.
-    replace_data_dirs(&state.config_dir, &state.skins_dir, extracted.path(), &lang)?;
+    // Phase 3: staged replace with rollback（持 settings_lock 与设置写入
+    // 互斥；重 IO 挪 spawn_blocking）。失败时数据已回滚，但皮肤已全部
+    // 卸载——与 Phase 2 同款提示，告知用户重新加载即可恢复。
+    let app2 = app.clone();
+    let extracted_path = extracted.path().to_path_buf();
+    let lang2 = lang.clone();
+    let phase3 = tauri::async_runtime::spawn_blocking(move || {
+        let state2 = app2.state::<AppState>();
+        let _settings_guard = state2.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+        replace_data_dirs(&state2.config_dir, &state2.skins_dir, &extracted_path, &lang2)
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?;
+    if let Err(e) = phase3 {
+        if unloaded.is_empty() {
+            return Err(e);
+        }
+        let ids = unloaded.join(", ");
+        return Err(format!("{} {}", e, trf(&lang, Key::ImportPartialUnloaded, &[&ids])));
+    }
 
     // Phase 4: rebuild runtime state from the imported files.  Individual
     // steps only log — the data itself is already safely in place.

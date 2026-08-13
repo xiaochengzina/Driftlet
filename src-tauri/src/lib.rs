@@ -1,3 +1,4 @@
+mod app_log;
 mod commands;
 mod backup;
 mod desktop;
@@ -63,6 +64,9 @@ pub struct AppState {
     /// has two writers: the manager (`set_skin_custom_setting`) and the skin
     /// itself (`skin_api::skin_set_setting`).  std Mutex is fine — both
     /// commands are sync fns, the guard never crosses an .await.
+    /// 目录替换方（install_package / 备份导入 Phase 3）也持这把锁——与设置
+    /// 写入互斥，防写进刚被替换掉的旧目录。锁序约定：install_lock →
+    /// settings_lock（无反向路径，settings 命令从不取 install_lock）。
     pub settings_lock: Mutex<()>,
     /// Current UI language ("zh-CN" | "en"), mirrored from config.language.
     /// Read by every command that produces user-facing strings; updated by
@@ -93,7 +97,7 @@ impl AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::init();
+    app_log::init_logger();
 
     tauri::Builder::default()
         // Must stay the first plugin: a second instance launched by
@@ -123,6 +127,9 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        // 只记「用了快捷键」本身：托盘菜单 toggle 走 toggle_all_skins
+                        // 同函数但不该被记成快捷键，所以挂点放 handler 里。
+                        log::info!("Global hotkey triggered");
                         hotkey::toggle_all_skins(app);
                     }
                 })
@@ -130,6 +137,9 @@ pub fn run() {
         )
         .register_uri_scheme_protocol("skin", skin::protocol::handle_skin_request)
         .setup(|app| {
+            // 日志模块持有 AppHandle：push 时向日志窗口（若开着）定向 emit。
+            app_log::set_app_handle(app.handle().clone());
+
             // Unpackaged-app toast prerequisite #1: give the process an
             // AppUserModelID (skin_api::notify relies on it — its shortcut
             // carries the same ID).
@@ -160,8 +170,7 @@ pub fn run() {
             // One-time migration of a config left by older versions in %APPDATA%.
             migrate_legacy_config(&app_data_dir, &config_dir, &skins_dir);
 
-            // Copy example skins if the skins directory is empty
-            // This helps new users see the example clock
+            // 同步开发期示例皮肤（release 构建在函数内直接返回）
             copy_example_skins(&skins_dir);
 
             // Scan skins
@@ -281,13 +290,15 @@ pub fn run() {
             {
                 if let Ok(hwnd) = manager.hwnd() {
                     round_window_corners(hwnd.0 as isize);
+                    // 任务栏按钮/悬停预览/Alt+Tab 图标（见 apply_window_icon 注释）
+                    apply_window_icon(hwnd.0 as isize);
                 }
             }
 
             // WebView2 hardening on the manager too: no browser context menu,
             // no F5/Ctrl+R refresh keys (the manager UI must not be
             // reloadable by keystroke).  Same async-init retry as skins;
-            // the manager has no maintenance-timer pass, this retry is it.
+            // afterwards the 5s maintenance timer keeps re-applying both.
             #[cfg(target_os = "windows")]
             factory::spawn_webview_hardening_retry(app.handle(), "main");
 
@@ -310,10 +321,12 @@ pub fn run() {
                     } else if !state.tray_ok.load(std::sync::atomic::Ordering::SeqCst) {
                         // 托盘没建起来：隐藏到托盘会彻底失去 UI 入口 ——
                         // 关窗直接走退出流程
+                        log::info!("Manager window closed (no tray, exiting)");
                         state.exiting.store(true, std::sync::atomic::Ordering::SeqCst);
                         h.exit(0);
                     } else {
                         api.prevent_close();
+                        log::info!("Manager window hidden to tray");
                         let _ = h.get_webview_window("main").map(|w| w.hide());
                     }
                 }
@@ -332,6 +345,9 @@ pub fn run() {
 
             // Register the configured global hotkey (failures only log).
             hotkey::register_from_config(app.handle());
+
+            // 启动序列走完（状态、自载皮肤、管理器窗、托盘、热键全就绪）。
+            log::info!("Manager started");
 
             // Periodic frameless maintenance timer (Windows only).
             //
@@ -434,6 +450,10 @@ pub fn run() {
             commands::take_pending_package_install,
             commands::export_config,
             commands::import_config,
+            commands::open_log_window,
+            commands::get_app_log,
+            commands::clear_app_log,
+            commands::open_skin_devtools,
             skin_api::get_cpu_info,
             skin_api::get_gpu_info,
             skin_api::get_memory_info,
@@ -465,6 +485,8 @@ pub fn run() {
             skin_api::get_idle_time,
             skin_api::get_foreground_window_info,
             skin_api::get_monitors,
+            skin_api::skin_log,
+            skin_api::skin_console_log,
         ])
         .run({
             // NOTE(driftlet): never let Tauri hand windows a runtime icon.
@@ -473,14 +495,15 @@ pub fn run() {
             // passes a 1-byte-per-pixel buffer where CreateIcon expects a 1bpp
             // monochrome AND mask — the exact bug we patched in the vendored
             // tray-icon (garbage-mask HICON renders as striped garbage in
-            // mask-aware consumers like Task Manager). With no window icon
-            // set, Windows falls back to the exe-embedded icons/icon.ico,
-            // which is a proper multi-size .ico.
+            // mask-aware consumers like Task Manager). Window icons are instead
+            // set explicitly by apply_window_icon() from the multi-size .ico —
+            // the exe-resource fallback does NOT cover the taskbar button /
+            // hover preview / Alt+Tab (observed generic default icon there).
             let mut context = tauri::generate_context!();
             context.set_default_window_icon(None);
             context
         })
-        .expect("Error while running Driftlet");
+        .unwrap_or_else(|e| fatal_startup_error(&format!("Error while running Driftlet: {}", e)));
 }
 
 /// Find the first .dskin package path in command-line arguments.
@@ -626,10 +649,14 @@ fn migrate_legacy_config(
 }
 
 /// Sync example skins into the skins directory (development only).
-/// 示例皮肤只随仓库分发（`examples/`，以独立 .dskin 另行发布），安装包不
-/// 打包——生产环境没有示例源，本函数直接打日志返回。
+/// 示例皮肤只随仓库分发（`examples/`，以独立 .dskin 另行发布），安装包不打包。
 /// Skins that don't exist yet are copied; existing skins are updated if the source is newer.
 fn copy_example_skins(skins_dir: &PathBuf) {
+    // release 构建直接返回：示例源是相对 CWD 的仓库 examples/ 路径，生产环境
+    // CWD 不可控（快捷方式启动常落在 System32），撞上同名目录会被静默误装
+    if !cfg!(debug_assertions) {
+        return;
+    }
     // 开发期的示例皮肤源（仓库 examples/ 目录）
     let example_sources: Vec<PathBuf> = vec![
         // Development: check ../examples (when running from src-tauri/)
@@ -709,7 +736,7 @@ fn file_modified(path: &std::path::Path) -> std::time::SystemTime {
 }
 
 #[cfg(target_os = "windows")]
-fn round_window_corners(hwnd_val: isize) {
+pub(crate) fn round_window_corners(hwnd_val: isize) {
     use windows::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute,
         DWMWA_WINDOW_CORNER_PREFERENCE, DWM_WINDOW_CORNER_PREFERENCE,
@@ -725,6 +752,98 @@ fn round_window_corners(hwnd_val: isize) {
             DWMWA_WINDOW_CORNER_PREFERENCE,
             &corner_pref as *const _ as *const std::ffi::c_void,
             std::mem::size_of_val(&corner_pref) as u32,
+        );
+    }
+}
+
+/// 给窗口补任务栏按钮 / 悬停预览 / Alt+Tab 图标（ICON_SMALL + ICON_BIG）。
+///
+/// 不能走 tauri 的 `default_window_icon`/`set_icon`：那条路把 icon.ico 解码成
+/// RGBA 再经 tao `RgbaIcon::into_windows_icon` 重建 HICON，而 tao 的 AND mask
+/// 缓冲是 1 字节/像素、`CreateIcon` 期望 1bpp 单色掩码（vendored tray-icon 里
+/// 修的就是同一个 bug）——产物在任务管理器等 mask 敏感消费者手里渲染成花屏。
+/// 这里对打包进二进制的多尺寸 icon.ico 直接 `CreateIconFromResourceEx`，由系统
+/// 按目标尺寸挑目录内最佳条目，掩码与尺寸都正确；两枚 HICON 进程级缓存复用
+/// （日志窗反复开关不重复建、不泄漏）。
+#[cfg(target_os = "windows")]
+pub(crate) fn apply_window_icon(hwnd_val: isize) {
+    use std::sync::OnceLock;
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateIconFromResourceEx, SendMessageW, HICON, ICON_BIG, ICON_SMALL, LR_DEFAULTCOLOR,
+        SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, WM_SETICON,
+    };
+
+    /// 打包进二进制的多尺寸 .ico（与 exe 资源图标同一份文件）
+    const ICO: &[u8] = include_bytes!("../icons/icon.ico");
+    // (small, big) 两枚 HICON 的句柄值，建一次全进程复用
+    static ICONS: OnceLock<Option<(usize, usize)>> = OnceLock::new();
+
+    /// 从 .ico 目录里挑最贴合 (cx, cy) 的条目建 HICON。
+    /// 目录自己解析：LookupIconIdFromDirectoryEx 的返回值是「资源 ID」语义——
+    /// 喂文件版目录时读到的是 dwImageOffset 的低 16 位，不能当条目索引用
+    /// （实测返回 102 = 首条目文件偏移，索引化直接越界）。挑选规则：图标
+    /// 为正方形只比高度，够大（h >= cy）里取最小，都偏小取最大——缩小清晰、
+    /// 放大糊。
+    fn load_entry(cx: i32, cy: i32) -> Option<HICON> {
+        let count = u16::from_le_bytes(ICO.get(4..6)?.try_into().ok()?) as usize;
+        let mut best: Option<(usize, i32)> = None;
+        for i in 0..count {
+            let base = 6usize.checked_add(i.checked_mul(16)?)?;
+            let raw_h = *ICO.get(base + 1)?; // ICONDIRENTRY.bHeight，0 表示 256
+            let h = if raw_h == 0 { 256 } else { raw_h as i32 };
+            let take = match best {
+                None => true,
+                Some((_, bh)) => match (h >= cy, bh >= cy) {
+                    (true, true) => h < bh,
+                    (true, false) => true,
+                    (false, true) => false,
+                    (false, false) => h > bh,
+                },
+            };
+            if take {
+                best = Some((i, h));
+            }
+        }
+        let (i, _) = best?;
+        let base = 6 + i * 16;
+        // ICONDIRENTRY：dwBytesInRes 在 +8、dwImageOffset 在 +12
+        let size = u32::from_le_bytes(ICO.get(base + 8..base + 12)?.try_into().ok()?) as usize;
+        let offset = u32::from_le_bytes(ICO.get(base + 12..base + 16)?.try_into().ok()?) as usize;
+        let image = ICO.get(offset..offset.checked_add(size)?)?;
+        unsafe { CreateIconFromResourceEx(image, true, 0x00030000, cx, cy, LR_DEFAULTCOLOR).ok() }
+    }
+
+    let icons = ICONS.get_or_init(|| {
+        let dpi = unsafe { GetDpiForWindow(HWND(hwnd_val as *mut _)) };
+        let small = load_entry(
+            unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) },
+            unsafe { GetSystemMetricsForDpi(SM_CYSMICON, dpi) },
+        );
+        let big = load_entry(
+            unsafe { GetSystemMetricsForDpi(SM_CXICON, dpi) },
+            unsafe { GetSystemMetricsForDpi(SM_CYICON, dpi) },
+        );
+        small.zip(big).map(|(s, b)| (s.0 as usize, b.0 as usize))
+    });
+    let Some(&(small, big)) = icons.as_ref() else {
+        log::warn!("apply_window_icon: failed to create HICONs from icon.ico");
+        return;
+    };
+    unsafe {
+        let hwnd = HWND(hwnd_val as *mut _);
+        SendMessageW(
+            hwnd,
+            WM_SETICON,
+            Some(WPARAM(ICON_SMALL as usize)),
+            Some(LPARAM(small as isize)),
+        );
+        SendMessageW(
+            hwnd,
+            WM_SETICON,
+            Some(WPARAM(ICON_BIG as usize)),
+            Some(LPARAM(big as isize)),
         );
     }
 }

@@ -13,6 +13,7 @@ import API from './api.js';
 import showToast from './toast.js';
 import { listen } from '@tauri-apps/api/event';
 import { t, getLang } from './i18n.js';
+import { esc, escAttr, dispName, confirmDialog } from './dom.js';
 
 // 调色板缺省预设色（skin.json 未声明 options 时）
 // 12 个：与取色器、吸管同一行放下
@@ -23,12 +24,6 @@ const DEFAULT_PALETTE = [
 ];
 // 任务列表内部上限 —— 刻意不向用户提示，到达后只是不再显示「添加」按钮
 const MAX_TASKS = 500;
-
-// 双语皮肤（skin.json 声明 bilingual）：英文界面优先显示 name_en，
-// 字段留空回退 name。与 skin-list.js 的 dispName 同一选取规则
-function dispName(detail) {
-  return (getLang() === 'en' && detail?.bilingual && detail?.name_en) || detail?.name;
-}
 
 // 解析 #rrggbb / #rrggbbaa → { rgb: '#rrggbb', alpha: 0-100 }
 function parseHexColor(v) {
@@ -90,7 +85,7 @@ export default class SkinEditor {
     } catch (err) {
       if (gen !== this._gen) return;
       this.detail = null; // 失败不落旧数据：render() 会走 clear()
-      this.container.innerHTML = `<div class="panel-empty">${t('common.loadFailed')}${this.esc(String(err))}</div>`;
+      this.container.innerHTML = `<div class="panel-empty">${t('common.loadFailed')}${esc(String(err))}</div>`;
       return;
     }
     if (gen !== this._gen) return;
@@ -260,8 +255,8 @@ export default class SkinEditor {
       <div class="config-panel" ${animate ? '' : 'style="animation:none"'}>
         <div class="cfg-header">
           <div class="cfg-header-main">
-            <h2>${this.esc(dispName(d))}</h2>
-            <div class="subtitle">${[d.author ? t('editor.byAuthor') + this.esc(d.author) : '', d.version ? `v${this.esc(d.version)}` : ''].filter(Boolean).join(' · ')}</div>
+            <h2>${esc(dispName(d))}</h2>
+            <div class="subtitle">${[d.author ? t('editor.byAuthor') + esc(d.author) : '', d.version ? `v${esc(d.version)}` : ''].filter(Boolean).join(' · ')}</div>
           </div>
           <span class="status-badge ${d.loaded ? 'loaded' : 'unloaded'}"><span class="status-dot"></span>${d.loaded ? t('common.running') : t('common.unloaded')}</span>
         </div>
@@ -460,7 +455,7 @@ export default class SkinEditor {
 
     return groups.map(g => {
       const rows = g.defs.map(def => this.renderSettingRow(def, values, en)).join('');
-      const title = g.name ? `<h3>${this.esc(g.name)}</h3>` : '';
+      const title = g.name ? `<h3>${esc(g.name)}</h3>` : '';
       return `<div class="config-section">${title}${rows}</div>`;
     }).join('');
   }
@@ -469,15 +464,15 @@ export default class SkinEditor {
   // 皮肤未加载时整页控件由 render() 外层 fieldset[disabled] 统一禁用，
   // 与「窗口」页一致——未加载时仅「操作」分区保持可交互。
   renderSettingRow(def, values, en) {
-      const key = this.escAttr(def.key);
+      const key = escAttr(def.key);
       // 双语选取：en = 英文界面且皮肤声明 bilingual；*_en 留空回退默认文案
       const labelText = (en && def.label_en) ? def.label_en : (def.label || def.key);
       const descText = (en && def.description_en) ? def.description_en : def.description;
       const optText = (o) => (en && o.label_en) ? o.label_en : (o.label || o.value);
       const optTitle = (o) => (en && o.label_en) ? o.label_en : o.label;
-      const label = this.esc(labelText);
+      const label = esc(labelText);
       // 描述文字：skin.json 可选 "description"，与内置配置项的 hint 同款
-      const hint = descText ? `<span class="hint">${this.esc(descText)}</span>` : '';
+      const hint = descText ? `<span class="hint">${esc(descText)}</span>` : '';
       const labelCell = `<div><label>${label}</label>${hint}</div>`;
       const value = values[def.key];
       let row = '';
@@ -518,31 +513,31 @@ export default class SkinEditor {
         case 'longtext':
           row = `<div class="form-row form-row-block">${labelCell}
             <textarea class="cfg-custom cfg-textarea" data-key="${key}" data-type="longtext"
-              rows="4">${this.esc(String(value ?? ''))}</textarea></div>`;
+              rows="4">${esc(String(value ?? ''))}</textarea></div>`;
           break;
         case 'time':
           row = `<div class="form-row">${labelCell}
             <input type="time" step="1" class="cfg-custom cfg-input" data-key="${key}" data-type="time"
-              value="${this.escAttr(String(value || ''))}"></div>`;
+              value="${escAttr(String(value || ''))}"></div>`;
           break;
         case 'date':
           row = `<div class="form-row">${labelCell}
             <input type="date" class="cfg-custom cfg-input" data-key="${key}" data-type="date"
-              value="${this.escAttr(String(value || ''))}"></div>`;
+              value="${escAttr(String(value || ''))}"></div>`;
           break;
         case 'datetime': {
           // 存储 "YYYY-MM-DD HH:MM:SS" ↔ 输入框 "YYYY-MM-DDTHH:MM:SS"
           const v = String(value || '').replace(' ', 'T');
           row = `<div class="form-row">${labelCell}
             <input type="datetime-local" step="1" class="cfg-custom cfg-input" data-key="${key}" data-type="datetime"
-              value="${this.escAttr(v)}"></div>`;
+              value="${escAttr(v)}"></div>`;
           break;
         }
         case 'password':
           row = `<div class="form-row">${labelCell}
             <div class="cfg-password">
               <input type="password" class="cfg-custom cfg-input" data-key="${key}" data-type="password"
-                value="${this.escAttr(String(value ?? ''))}" autocomplete="off">
+                value="${escAttr(String(value ?? ''))}" autocomplete="off">
               <button type="button" class="cfg-pw-toggle" tabindex="-1"
                 data-title-show="${t('editor.showPassword')}" data-title-hide="${t('editor.hidePassword')}"
                 title="${t('editor.showPassword')}">
@@ -554,7 +549,7 @@ export default class SkinEditor {
           row = `<div class="form-row">${labelCell}
             <select class="cfg-custom cfg-select" data-key="${key}" data-type="select">
               ${(def.options || []).map(o =>
-                `<option value="${this.escAttr(o.value)}" ${o.value === value ? 'selected' : ''}>${this.esc(optText(o))}</option>`
+                `<option value="${escAttr(o.value)}" ${o.value === value ? 'selected' : ''}>${esc(optText(o))}</option>`
               ).join('')}
             </select></div>`;
           break;
@@ -565,7 +560,7 @@ export default class SkinEditor {
           const num = Number(value ?? min);
           row = `<div class="slider-row">
             <div class="slider-label"><span>${label}</span><span class="slider-value">${num}</span></div>
-            ${hint ? `<span class="hint cfg-slider-hint">${this.esc(descText)}</span>` : ''}
+            ${hint ? `<span class="hint cfg-slider-hint">${esc(descText)}</span>` : ''}
             <input type="range" class="range-slider cfg-custom-slider" data-key="${key}"
               min="${min}" max="${max}" step="${step}" value="${num}">
           </div>`;
@@ -577,7 +572,7 @@ export default class SkinEditor {
             <div class="cfg-chips" data-key="${key}">
               ${(def.options || []).map(o =>
                 `<button class="cfg-chip ${selected.includes(o.value) ? 'active' : ''}"
-                  data-value="${this.escAttr(o.value)}">${this.esc(optText(o))}</button>`
+                  data-value="${escAttr(o.value)}">${esc(optText(o))}</button>`
               ).join('')}
             </div></div>`;
           break;
@@ -587,7 +582,7 @@ export default class SkinEditor {
             <div class="cfg-segments" data-key="${key}">
               ${(def.options || []).map(o =>
                 `<button class="cfg-segment ${o.value === value ? 'active' : ''}"
-                  data-value="${this.escAttr(o.value)}">${this.esc(optText(o))}</button>`
+                  data-value="${escAttr(o.value)}">${esc(optText(o))}</button>`
               ).join('')}
             </div></div>`;
           break;
@@ -602,14 +597,14 @@ export default class SkinEditor {
               <div class="cfg-palette-colors">
                 ${swatches.map(o =>
                   `<button class="cfg-swatch ${parseHexColor(o.value).rgb.toLowerCase() === rgb.toLowerCase() ? 'active' : ''}"
-                    data-value="${this.escAttr(o.value)}" style="background:${this.escAttr(o.value)}"
-                    ${optTitle(o) ? `title="${this.escAttr(optTitle(o))}"` : ''}></button>`
+                    data-value="${escAttr(o.value)}" style="background:${escAttr(o.value)}"
+                    ${optTitle(o) ? `title="${escAttr(optTitle(o))}"` : ''}></button>`
                 ).join('')}
-                <input type="color" class="cfg-color cfg-palette-custom" value="${this.escAttr(rgb)}">
+                <input type="color" class="cfg-color cfg-palette-custom" value="${escAttr(rgb)}">
               </div>
               <div class="cfg-alpha-row">
                 <input type="range" class="range-slider cfg-alpha" min="0" max="100" step="1"
-                  value="${alpha}" style="background:linear-gradient(90deg, transparent, ${this.escAttr(rgb)})">
+                  value="${alpha}" style="background:linear-gradient(90deg, transparent, ${escAttr(rgb)})">
                 <span class="cfg-alpha-val">${alpha}%</span>
               </div>
             </div></div>`;
@@ -618,7 +613,7 @@ export default class SkinEditor {
         case 'timerange': {
           const range = (value && typeof value === 'object') ? value : {};
           // 存储 "YYYY-MM-DD HH:MM:SS" ↔ 输入框 "YYYY-MM-DDTHH:MM:SS"
-          const toInput = (s) => this.escAttr(String(s || '').replace(' ', 'T'));
+          const toInput = (s) => escAttr(String(s || '').replace(' ', 'T'));
           row = `<div class="form-row form-row-block">${labelCell}
             <div class="cfg-timerange" data-key="${key}">
               <input type="datetime-local" step="1" class="cfg-input cfg-tr-start" value="${toInput(range.start)}">
@@ -671,7 +666,7 @@ export default class SkinEditor {
             <select class="cfg-custom cfg-select" data-key="${key}" data-type="font">
               <option value="" ${current ? '' : 'selected'}>${t('editor.systemDefault')}</option>
               ${options.map(f =>
-                `<option value="${this.escAttr(f)}" ${f === current ? 'selected' : ''}>${this.esc(f)}</option>`
+                `<option value="${escAttr(f)}" ${f === current ? 'selected' : ''}>${esc(f)}</option>`
               ).join('')}
             </select></div>`;
           break;
@@ -690,14 +685,14 @@ export default class SkinEditor {
         default: // text
           row = `<div class="form-row">${labelCell}
             <input type="text" class="cfg-custom cfg-input" data-key="${key}" data-type="text"
-              value="${this.escAttr(String(value ?? ''))}"></div>`;
+              value="${escAttr(String(value ?? ''))}"></div>`;
       }
       return row;
   }
 
   renderTaskRow(text) {
     return `<div class="task-row">
-      <input type="text" class="cfg-input task-input" value="${this.escAttr(text)}">
+      <input type="text" class="cfg-input task-input" value="${escAttr(text)}">
       <button class="task-del" title="${t('common.delete')}">×</button>
     </div>`;
   }
@@ -705,7 +700,7 @@ export default class SkinEditor {
   renderTodoRow(text, done) {
     return `<div class="task-row todo-row${done ? ' done' : ''}">
       <input type="checkbox" class="todo-check" ${done ? 'checked' : ''}>
-      <input type="text" class="cfg-input task-input" value="${this.escAttr(text)}">
+      <input type="text" class="cfg-input task-input" value="${escAttr(text)}">
       <button class="task-del" title="${t('common.delete')}">×</button>
     </div>`;
   }
@@ -714,9 +709,9 @@ export default class SkinEditor {
     // 存储 "YYYY-MM-DD HH:MM:SS" ↔ 输入框 "YYYY-MM-DDTHH:MM:SS"
     return `<div class="task-row dt-row">
       <input type="datetime-local" step="1" class="cfg-input dt-time"
-        value="${this.escAttr(time.replace(' ', 'T'))}">
+        value="${escAttr(time.replace(' ', 'T'))}">
       <input type="text" class="cfg-input task-input dt-text" placeholder="${t('editor.taskContent')}"
-        value="${this.escAttr(text)}">
+        value="${escAttr(text)}">
       <button class="task-del" title="${t('common.delete')}">×</button>
     </div>`;
   }
@@ -919,46 +914,23 @@ export default class SkinEditor {
   // 重置数据：清除该皮肤的全部持久化配置（「窗口」页与「皮肤设置」页），
   // 恢复 skin.json 默认值；皮肤已加载时后端会连带重载使其立即生效。
   confirmReset() {
-    const overlay = document.createElement('div');
-    overlay.className = 'confirm-overlay';
-    overlay.innerHTML = `
-      <div class="confirm-dialog">
-        <div class="confirm-icon danger"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
-        <h3>${t('editor.confirmResetTitle')}</h3>
-        <p>${t('editor.confirmResetBody', { name: `<strong>"${this.esc(dispName(this.detail) || this.skinId)}"</strong>` })}</p>
-        <p class="confirm-hint">${t('editor.confirmResetHint')}</p>
-        <div class="confirm-buttons">
-          <button class="confirm-btn cancel">${t('common.cancel')}</button>
-          <button class="confirm-btn danger">${t('common.reset')}</button>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-
-    // Esc 关闭 + 初始焦点落在「取消」（危险操作，焦点不放确认键）；
-    // 关闭时摘除文档级监听，避免泄漏
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    const close = () => {
-      document.removeEventListener('keydown', onKey);
-      overlay.remove();
-    };
-    document.addEventListener('keydown', onKey);
-
-    overlay.querySelector('.confirm-btn.cancel').onclick = close;
-    overlay.querySelector('.confirm-btn.danger').onclick = async () => {
-      close();
-      try {
-        await API.resetSkinConfig(this.skinId);
-        this.showToast(t('editor.resetDone'), 'success');
-        await this.load(this.skinId);
-        await window.__app?.skinList?.refresh();
-      } catch (err) {
-        this.showToast(t('editor.resetFailed') + String(err), 'error');
-      }
-    };
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
+    confirmDialog({
+      title: t('editor.confirmResetTitle'),
+      bodyHtml: t('editor.confirmResetBody', { name: `<strong>"${esc(dispName(this.detail) || this.skinId)}"</strong>` }),
+      hint: t('editor.confirmResetHint'),
+      confirmText: t('common.reset'),
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await API.resetSkinConfig(this.skinId);
+          this.showToast(t('editor.resetDone'), 'success');
+          await this.load(this.skinId);
+          await window.__app?.skinList?.refresh();
+        } catch (err) {
+          this.showToast(t('editor.resetFailed') + String(err), 'error');
+        }
+      },
     });
-    overlay.querySelector('.confirm-btn.cancel').focus();
   }
 
   bindToggle(id, onChange) {
@@ -1138,94 +1110,65 @@ export default class SkinEditor {
       endEl?.addEventListener('change', onChange);
     });
 
-    // 任务列表：行编辑 / 删除 / 添加（事件委托，动态行也生效）
-    this.container.querySelectorAll('.cfg-tasklist').forEach(list => {
-      const key = list.dataset.key;
-      const rowsEl = list.querySelector('.task-rows');
-      const addBtn = list.querySelector('.task-add');
-      const updateAddBtn = () => {
-        if (addBtn) addBtn.style.display =
-          rowsEl.querySelectorAll('.task-row').length >= MAX_TASKS ? 'none' : '';
-      };
-      const save = () => {
-        // 快照保存时刻的行：add 按钮在 API 返回前新加的空行不在快照内，
-        // 防止下方清理把刚添加的行误删（blur→change→save 与 click 的竞态）
-        const rowsAtSave = [...rowsEl.querySelectorAll('.task-row')];
-        const items = rowsAtSave
-          .map(r => r.querySelector('.task-input').value)
-          .filter(v => v.trim() !== '');
-        this.saveCustomSetting(key, items).then(() => {
-          // 后端会剔除空行 —— 同步移除快照内的本地空行
-          rowsAtSave.forEach(row => {
-            if (row.isConnected && row.querySelector('.task-input').value.trim() === '') row.remove();
-          });
-          updateAddBtn();
-        });
-      };
-      list.addEventListener('change', (e) => {
+    // 任务列表：行 = 单个文本输入
+    this.bindListControl('.cfg-tasklist', {
+      onChange: (e, save) => {
         if (e.target.classList.contains('task-input')) save();
-      });
-      list.addEventListener('click', (e) => {
-        if (e.target.classList.contains('task-del')) {
-          e.target.closest('.task-row').remove();
-          save();
-        } else if (e.target.classList.contains('task-add')) {
-          // 只加本地行，输入失焦（change）后才落盘
-          rowsEl.insertAdjacentHTML('beforeend', this.renderTaskRow(''));
-          updateAddBtn();
-          rowsEl.lastElementChild.querySelector('.task-input').focus();
-        }
-      });
+      },
+      rowToItem: (r) => r.querySelector('.task-input').value,
+      keepItem: (v) => v.trim() !== '',
+      rowEmpty: (r) => r.querySelector('.task-input').value.trim() === '',
+      renderEmptyRow: () => this.renderTaskRow(''),
+      focusSelector: '.task-input',
     });
 
-    // 待办任务列表：勾选 / 行编辑 / 删除 / 添加（事件委托，动态行也生效）
-    this.container.querySelectorAll('.cfg-todolist').forEach(list => {
-      const key = list.dataset.key;
-      const rowsEl = list.querySelector('.task-rows');
-      const addBtn = list.querySelector('.task-add');
-      const updateAddBtn = () => {
-        if (addBtn) addBtn.style.display =
-          rowsEl.querySelectorAll('.task-row').length >= MAX_TASKS ? 'none' : '';
-      };
-      const save = () => {
-        // 快照保存时刻的行（与 tasklist 同一 blur/click 竞态防护）
-        const rowsAtSave = [...rowsEl.querySelectorAll('.task-row')];
-        const items = rowsAtSave
-          .map(r => ({
-            text: r.querySelector('.task-input').value,
-            done: r.querySelector('.todo-check').checked,
-          }))
-          .filter(it => it.text.trim() !== '');
-        this.saveCustomSetting(key, items).then(() => {
-          rowsAtSave.forEach(row => {
-            if (row.isConnected && row.querySelector('.task-input').value.trim() === '') row.remove();
-          });
-          updateAddBtn();
-        });
-      };
-      list.addEventListener('change', (e) => {
+    // 待办任务列表：行 = 勾选框 + 文本；勾选切换 done 态
+    this.bindListControl('.cfg-todolist', {
+      onChange: (e, save) => {
         if (e.target.classList.contains('todo-check')) {
           e.target.closest('.task-row').classList.toggle('done', e.target.checked);
           save();
         } else if (e.target.classList.contains('task-input')) {
           save();
         }
-      });
-      list.addEventListener('click', (e) => {
-        if (e.target.classList.contains('task-del')) {
-          e.target.closest('.task-row').remove();
-          save();
-        } else if (e.target.classList.contains('task-add')) {
-          // 只加本地行，输入失焦（change）后才落盘
-          rowsEl.insertAdjacentHTML('beforeend', this.renderTodoRow('', false));
-          updateAddBtn();
-          rowsEl.lastElementChild.querySelector('.task-input').focus();
-        }
-      });
+      },
+      rowToItem: (r) => ({
+        text: r.querySelector('.task-input').value,
+        done: r.querySelector('.todo-check').checked,
+      }),
+      keepItem: (it) => it.text.trim() !== '',
+      rowEmpty: (r) => r.querySelector('.task-input').value.trim() === '',
+      renderEmptyRow: () => this.renderTodoRow('', false),
+      focusSelector: '.task-input',
     });
 
-    // 日期任务列表：结构同 tasklist，行 = 日期时间 + 任务文本
-    this.container.querySelectorAll('.cfg-datetasklist').forEach(list => {
+    // 日期任务列表：行 = 日期时间 + 任务文本
+    this.bindListControl('.cfg-datetasklist', {
+      onChange: (e, save) => {
+        if (e.target.classList.contains('dt-time') ||
+            e.target.classList.contains('dt-text')) save();
+      },
+      // 输入框 "YYYY-MM-DDTHH:MM:SS" → 存储 "YYYY-MM-DD HH:MM:SS"
+      rowToItem: (r) => ({
+        time: (r.querySelector('.dt-time').value || '').replace('T', ' '),
+        text: r.querySelector('.dt-text').value,
+      }),
+      // 时间与内容都空的行不落盘
+      keepItem: (it) => it.time.trim() !== '' || it.text.trim() !== '',
+      rowEmpty: (r) => !r.querySelector('.dt-time').value &&
+        r.querySelector('.dt-text').value.trim() === '',
+      renderEmptyRow: () => this.renderDateTaskRow('', ''),
+      focusSelector: '.dt-text',
+    });
+  }
+
+  // tasklist / todolist / datetasklist 的公共绑定：行编辑 / 删除 / 添加
+  // （事件委托，动态行也生效）。三者仅 change 目标、行序列化、空行判定、
+  // 新行渲染与焦点目标不同，由 opts 注入；save 快照与 blur→change→save /
+  // click 竞态防护与合并前的三个独立实现逐点一致。
+  bindListControl(selector, opts) {
+    const { onChange, rowToItem, keepItem, rowEmpty, renderEmptyRow, focusSelector } = opts;
+    this.container.querySelectorAll(selector).forEach(list => {
       const key = list.dataset.key;
       const rowsEl = list.querySelector('.task-rows');
       const addBtn = list.querySelector('.task-add');
@@ -1237,35 +1180,25 @@ export default class SkinEditor {
         // 快照保存时刻的行：add 按钮在 API 返回前新加的空行不在快照内，
         // 防止下方清理把刚添加的行误删（blur→change→save 与 click 的竞态）
         const rowsAtSave = [...rowsEl.querySelectorAll('.task-row')];
-        const items = rowsAtSave
-          .map(r => ({
-            time: (r.querySelector('.dt-time').value || '').replace('T', ' '),
-            text: r.querySelector('.dt-text').value,
-          }))
-          // 时间与内容都空的行不落盘
-          .filter(it => it.time.trim() !== '' || it.text.trim() !== '');
+        const items = rowsAtSave.map(rowToItem).filter(keepItem);
         this.saveCustomSetting(key, items).then(() => {
-          rowsAtSave.forEach(r => {
-            if (!r.isConnected) return;
-            const t = r.querySelector('.dt-time').value;
-            const x = r.querySelector('.dt-text').value;
-            if (!t && x.trim() === '') r.remove();
+          // 后端会剔除空行 —— 同步移除快照内的本地空行
+          rowsAtSave.forEach(row => {
+            if (row.isConnected && rowEmpty(row)) row.remove();
           });
           updateAddBtn();
         });
       };
-      list.addEventListener('change', (e) => {
-        if (e.target.classList.contains('dt-time') ||
-            e.target.classList.contains('dt-text')) save();
-      });
+      list.addEventListener('change', (e) => onChange(e, save));
       list.addEventListener('click', (e) => {
         if (e.target.classList.contains('task-del')) {
           e.target.closest('.task-row').remove();
           save();
         } else if (e.target.classList.contains('task-add')) {
-          rowsEl.insertAdjacentHTML('beforeend', this.renderDateTaskRow('', ''));
+          // 只加本地行，输入失焦（change）后才落盘
+          rowsEl.insertAdjacentHTML('beforeend', renderEmptyRow());
           updateAddBtn();
-          rowsEl.lastElementChild.querySelector('.dt-text').focus();
+          rowsEl.lastElementChild.querySelector(focusSelector).focus();
         }
       });
     });
@@ -1279,17 +1212,6 @@ export default class SkinEditor {
     };
     elX?.addEventListener('change', handler);
     elY?.addEventListener('change', handler);
-  }
-
-  esc(str) {
-    const div = document.createElement('div');
-    div.textContent = String(str ?? '');
-    return div.innerHTML;
-  }
-
-  // Escape for double-quoted HTML attribute values (esc() leaves quotes intact)
-  escAttr(str) {
-    return this.esc(str).replace(/"/g, '&quot;');
   }
 
   showToast(msg, type) {

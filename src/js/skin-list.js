@@ -3,13 +3,8 @@
  */
 import API from './api.js';
 import showToast from './toast.js';
-import { t, getLang } from './i18n.js';
-
-// 双语皮肤（skin.json 声明 bilingual）：英文界面优先显示 *_en 文案，
-// 字段留空回退默认文案。与 skin-editor.js 的 schema 文案同一选取规则
-function dispName(skin) {
-  return (getLang() === 'en' && skin.bilingual && skin.name_en) || skin.name;
-}
+import { t } from './i18n.js';
+import { esc, escAttr, dispName, confirmDialog } from './dom.js';
 
 export default class SkinList {
   constructor(container, { onSelect } = {}) {
@@ -122,7 +117,7 @@ export default class SkinList {
     if (skin.preview) {
       const src = API.assetUrl(skin.preview) + '?v=' + (this.previewVersions.get(skin.id) || 0);
       // alt/src/data-* 一律 escAttr：皮肤包字段进双引号属性，esc() 不转义引号
-      previewHtml = `<img class="skin-preview-img" src="${this.escAttr(src)}" alt="${this.escAttr(skin.name)}" loading="lazy">`;
+      previewHtml = `<img class="skin-preview-img" src="${escAttr(src)}" alt="${escAttr(skin.name)}" loading="lazy">`;
       previewHtml += `<div class="skin-preview-placeholder" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></div>`;
     } else {
       previewHtml = `<div class="skin-preview-placeholder"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></div>`;
@@ -132,23 +127,23 @@ export default class SkinList {
       .filter(Boolean).join(' · ');
 
     return `
-      <div class="skin-card${selected}" data-skin-id="${this.escAttr(skin.id)}">
+      <div class="skin-card${selected}" data-skin-id="${escAttr(skin.id)}">
         <div class="skin-preview">
           ${previewHtml}
-          <button class="skin-delete-btn${deleteDisabled}" data-skin-id="${this.escAttr(skin.id)}" data-skin-name="${this.escAttr(dispName(skin))}" title="${deleteTitle}">
+          <button class="skin-delete-btn${deleteDisabled}" data-skin-id="${escAttr(skin.id)}" data-skin-name="${escAttr(dispName(skin))}" title="${deleteTitle}">
             <svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           </button>
         </div>
         <div class="skin-card-content">
           <div class="skin-card-header">
-            <span class="skin-card-name">${this.esc(dispName(skin))}</span>
+            <span class="skin-card-name">${esc(dispName(skin))}</span>
             <span class="status-badge ${statusClass}"><span class="status-dot"></span>${statusText}</span>
           </div>
           <div class="skin-card-footer">
-            <span class="skin-card-meta">${this.esc(meta)}</span>
+            <span class="skin-card-meta">${esc(meta)}</span>
             ${skin.loaded
-              ? `<button class="load-btn unload" data-skin-id="${this.escAttr(skin.id)}" data-action="unload">${t('common.unload')}</button>`
-              : `<button class="load-btn" data-skin-id="${this.escAttr(skin.id)}" data-action="load">${t('common.load')}</button>`
+              ? `<button class="load-btn unload" data-skin-id="${escAttr(skin.id)}" data-action="unload">${t('common.unload')}</button>`
+              : `<button class="load-btn" data-skin-id="${escAttr(skin.id)}" data-action="load">${t('common.load')}</button>`
             }
           </div>
         </div>
@@ -179,39 +174,14 @@ export default class SkinList {
   }
 
   confirmDelete(skinId, skinName) {
-    const overlay = document.createElement('div');
-    overlay.className = 'confirm-overlay';
-    overlay.innerHTML = `
-      <div class="confirm-dialog">
-        <div class="confirm-icon danger"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
-        <h3>${t('list.confirmDeleteTitle')}</h3>
-        <p>${t('list.confirmDeleteBody', { name: `<strong>"${this.esc(skinName)}"</strong>` })}</p>
-        <p class="confirm-hint">${t('list.confirmDeleteHint')}</p>
-        <div class="confirm-buttons">
-          <button class="confirm-btn cancel">${t('common.cancel')}</button>
-          <button class="confirm-btn danger">${t('common.delete')}</button>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-
-    // Esc 关闭 + 初始焦点落在「取消」（危险操作，焦点不放确认键）；
-    // 关闭时摘除文档级监听，避免泄漏
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    const close = () => {
-      document.removeEventListener('keydown', onKey);
-      overlay.remove();
-    };
-    document.addEventListener('keydown', onKey);
-
-    overlay.querySelector('.confirm-btn.cancel').onclick = close;
-    overlay.querySelector('.confirm-btn.danger').onclick = async () => {
-      close();
-      await this.deleteSkin(skinId);
-    };
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
+    confirmDialog({
+      title: t('list.confirmDeleteTitle'),
+      bodyHtml: t('list.confirmDeleteBody', { name: `<strong>"${esc(skinName)}"</strong>` }),
+      hint: t('list.confirmDeleteHint'),
+      confirmText: t('common.delete'),
+      danger: true,
+      onConfirm: () => this.deleteSkin(skinId),
     });
-    overlay.querySelector('.confirm-btn.cancel').focus();
   }
 
   async deleteSkin(skinId) {
@@ -226,17 +196,6 @@ export default class SkinList {
     } catch (err) {
       this.showToast(t('common.deleteFailed') + String(err), 'error');
     }
-  }
-
-  esc(str) {
-    const div = document.createElement('div');
-    div.textContent = String(str ?? '');
-    return div.innerHTML;
-  }
-
-  // Escape for double-quoted HTML attribute values (esc() leaves quotes intact)
-  escAttr(str) {
-    return this.esc(str).replace(/"/g, '&quot;');
   }
 
   showToast(msg, type) {

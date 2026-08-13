@@ -74,7 +74,9 @@ npm run tauri build
 │   ├── controls-demo/        # 全部设置控件演示（中英双语、界面语言跟随管理器）
 │   ├── sys-monitor/          # 系统监视（只读系统信息接口全家桶）
 │   ├── media-hub/            # 媒体控制台（音量/媒体/频谱/通知）
-│   └── toolbox/              # 本机工具箱（剪贴板/文件/注册表/命令/设置读写）
+│   ├── toolbox/              # 本机工具箱（剪贴板/文件/注册表/命令/设置读写）
+│   ├── driftlet.js           # 可选封装：命令命名函数 + 事件助手（复制进皮肤文件夹即用）
+│   └── driftlet.d.ts         # 桥与全部命令的类型定义（编辑器自动补全）
 ├── tools/
 │   ├── pack-skin.exe     # 皮肤打包工具（免安装，生成 .dskin）
 │   ├── pack-skin/        # 打包工具源码（Rust）
@@ -84,8 +86,7 @@ npm run tauri build
     ├── 皮肤开发指南.md    # 皮肤创作者接口文档与规范
     ├── 关键机制.md        # 窗口 / 桌面层级实现细节（勿回归）
     ├── 设计系统.md        # 管理器 UI 视觉体系与前端契约
-    ├── 已知问题.md        # 已知问题与后续方向
-    └── 路线图.md          # 候选新方向与 1.0 发布后实机回归清单
+    └── 已知问题.md        # 已知问题与后续方向
 ```
 
 ---
@@ -145,13 +146,16 @@ my-skin/
 
 ### 调用后端命令
 
-皮肤内可以通过注入的 `window.__DESK_PP__` 调用 Tauri 命令：
+皮肤内通过注入桥调用后端命令（推荐入口 `window.driftlet`；`window.__DESK_PP__` 是同一对象的历史名称，永久兼容）：
 
 ```js
-if (window.__DESK_PP__?.invoke) {
-  const stats = await window.__DESK_PP__.invoke('get_system_stats');
+if (window.driftlet?.invoke) {
+  const [cpu] = await window.driftlet.invoke('get_cpu_info');
+  console.log(cpu.usage); // 总使用率 %；速率类读数首调为 0（基线），建议每秒轮询
 }
 ```
+
+可选封装 `examples/driftlet.js` 把命令包成 `Driftlet.getCpuInfo()` 这类命名函数（配 `driftlet.d.ts` 有编辑器补全）；完整命令清单与契约见 `docs/皮肤开发指南.md` 第 5 章。
 
 ### 自定义设置
 
@@ -202,7 +206,7 @@ if (window.__DESK_PP__?.invoke) {
 | `todolist` | 待办任务列表（勾选） | `[{ "text": "...", "done": true }]` | 皮肤可经 `skin_set_setting` 写回 |
 | `datetasklist` | 日期任务列表 | `[{ "time": "YYYY-MM-DD HH:MM:SS", "text": "..." }]` | 每条任务带日期时间，time 可空 |
 
-`password` 类型的值**不随 `__DESK_PP__.settings` 烘焙进页面**（skin:// 全皮肤同源，注入页面会被其他皮肤抓取）；皮肤内改用 `skin_get_setting` 命令按需读取——`await __DESK_PP__.invoke('skin_get_setting', { key: 'my_key' })`，身份取自调用窗口，只能读到自己的值。
+`password` 类型的值**不随桥的 `settings` 烘焙进页面**（skin:// 全皮肤同源，注入页面会被其他皮肤抓取）；皮肤内改用 `skin_get_setting` 命令按需读取——`await driftlet.invoke('skin_get_setting', { key: 'my_key' })`，身份取自调用窗口，只能读到自己的值。
 
 `options` 的 `label` 均可省略，回退显示 `value`。每个设置项还可用 `"description"` 加一句说明，显示在控件标签下方：
 
@@ -226,7 +230,7 @@ if (window.__DESK_PP__?.invoke) {
 
 ```js
 // 初始值：页面加载前已由注入桥烘焙好
-const settings = window.__DESK_PP__?.settings || {};
+const settings = window.driftlet?.settings || {};
 console.log(settings.accent_color);
 
 // 运行时变更：管理器里改设置后实时推送，无需重载

@@ -103,12 +103,12 @@ pub fn rebuild_tray_menu(app: &AppHandle, lang: &str) {
 }
 
 /// Create and configure the system tray icon
-pub fn create_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+pub fn create_tray(app: &AppHandle) -> Result<(), String> {
     let lang = app.state::<crate::AppState>().lang();
-    let menu = build_menu(app, &lang)?;
+    let menu = build_menu(app, &lang).map_err(|e| e.to_string())?;
 
     let _tray = TrayIconBuilder::with_id(TRAY_ID)
-        .icon(Image::from_bytes(tray_icon_bytes())?)
+        .icon(Image::from_bytes(tray_icon_bytes()).map_err(|e| e.to_string())?)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .tooltip(tr(&lang, Key::TrayTooltip))
@@ -140,7 +140,8 @@ pub fn create_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 toggle_manager_window(app);
             }
         })
-        .build(app)?;
+        .build(app)
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -176,6 +177,10 @@ fn reload_all_skins(app: &AppHandle) {
     // the error was swallowed — every skin window disappeared until a
     // manual reload.
     tauri::async_runtime::spawn(async move {
+        // 与备份导入/包安装互斥：它们整树替换 skins/ 期间重载会在半替换
+        // 状态的目录上扫描/建窗（可与安装方同排队，自愈但避免无谓报错）
+        let state = handle.state::<crate::AppState>();
+        let _install_guard = state.install_lock.lock().await;
         for skin_id in loaded_ids {
             if let Err(e) = crate::commands::reload_skin_impl(handle.clone(), skin_id.clone()).await {
                 log::error!("reload_all_skins: failed to reload '{}': {}", skin_id, e);

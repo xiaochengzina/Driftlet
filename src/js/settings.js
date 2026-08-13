@@ -1,10 +1,11 @@
 /**
  * settings.js — 设置面板（页签布局，与皮肤编辑器 cfg-tabs 同一套视觉：
- *               通用[自启动/更新检测/快捷键] + 外观[主题/语言] + 高级[备份/热重载]）
+ *               通用[自启动/更新检测/快捷键] + 外观[主题/语言] + 高级[备份/日志/开发模式]）
  */
 import API from './api.js';
 import showToast from './toast.js';
 import { t, getLang, applyLang } from './i18n.js';
+import { esc, confirmDialog } from './dom.js';
 
 // 当前打开的设置面板实例（供语言切换后原地重绘；关闭时清空）
 let openSettings = null;
@@ -20,8 +21,7 @@ export function refreshOpenSettings() {
 }
 
 export default class Settings {
-  constructor(onClose) {
-    this.onClose = onClose;
+  constructor() {
     this.autostart = false;
     this.theme = 'auto';
     this.hotkey = '';
@@ -93,7 +93,7 @@ export default class Settings {
               <label>${t('settings.hotkey')}</label>
               <div class="hint">${t('settings.hotkeyHint')}</div>
             </div>
-            <button class="theme-btn" id="cfg-hotkey">${this.esc(this.hotkey) || t('settings.hotkeyNone')}</button>
+            <button class="theme-btn" id="cfg-hotkey">${esc(this.hotkey) || t('settings.hotkeyNone')}</button>
           </div>
         </div>
 
@@ -130,6 +130,15 @@ export default class Settings {
             <div class="theme-options">
               <button class="theme-btn" id="cfg-export">${t('settings.backupExport')}</button>
               <button class="theme-btn" id="cfg-import">${t('settings.backupImport')}</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div>
+              <label>${t('settings.log')}</label>
+              <div class="hint">${t('settings.logHint')}</div>
+            </div>
+            <div class="theme-options">
+              <button class="theme-btn" id="cfg-open-log">${t('settings.logOpen')}</button>
             </div>
           </div>
           <div class="settings-row">
@@ -218,6 +227,16 @@ export default class Settings {
     // 合法组合（≥1 修饰键 + 普通键）保存。注意录制期间按下当前热键仍会
     // 触发一次全局显隐切换（全局热键无法局部屏蔽，已知小怪癖）。
     const hotkeyBtn = overlay.querySelector('#cfg-hotkey');
+
+    // 打开日志窗口（已开着则后端把它提到前台）；成功后设置页自动关闭
+    overlay.querySelector('#cfg-open-log').onclick = async () => {
+      try {
+        await API.openLogWindow();
+        close();
+      } catch (err) {
+        showToast(t('common.setFailed') + String(err), 'error');
+      }
+    };
     const renderHotkey = () => {
       hotkeyBtn.textContent = this.hotkey || t('settings.hotkeyNone');
     };
@@ -268,7 +287,8 @@ export default class Settings {
       window.addEventListener('keydown', onKey, true);
     };
 
-    // 皮肤热重载开关（开发分区，仅 debug 构建的 watcher 读取该标志）
+    // 开发模式开关（热重载仅 debug 构建的 watcher 读取该标志；DevTools 解锁
+    // 由 open_skin_devtools 实时读同一标志，全构建生效）
     overlay.querySelector('#cfg-hotreload').onchange = async (e) => {
       const on = e.target.checked;
       try {
@@ -301,44 +321,30 @@ export default class Settings {
     importBtn.onclick = () => {
       // 确认框 + 原生选择对话框存续期间禁止重复点击，防叠开
       importBtn.disabled = true;
-      const confirmOverlay = document.createElement('div');
-      confirmOverlay.className = 'confirm-overlay';
-      confirmOverlay.innerHTML = `
-        <div class="confirm-dialog">
-          <div class="confirm-icon danger"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
-          <h3>${t('settings.backupImportTitle')}</h3>
-          <p>${t('settings.backupImportBody')}</p>
-          <p class="confirm-hint">${t('settings.backupImportHint')}</p>
-          <div class="confirm-buttons">
-            <button class="confirm-btn cancel">${t('common.cancel')}</button>
-            <button class="confirm-btn danger">${t('settings.backupImport')}</button>
-          </div>
-        </div>`;
-      document.body.appendChild(confirmOverlay);
-      const closeConfirm = () => {
-        confirmOverlay.remove();
-        importBtn.disabled = false;
-      };
-      confirmOverlay.querySelector('.confirm-btn.cancel').onclick = closeConfirm;
-      confirmOverlay.querySelector('.confirm-btn.danger').onclick = async () => {
-        // 确认后文件选择器仍在交互，按钮保持禁用直至导入流程结束
-        confirmOverlay.remove();
-        try {
-          const done = await API.importConfig();
-          if (done) {
-            showToast(t('settings.backupImported'), 'success');
-            setTimeout(() => location.reload(), 800);
-          } else {
-            showToast(t('common.canceled'), 'info');
+      confirmDialog({
+        title: t('settings.backupImportTitle'),
+        bodyHtml: t('settings.backupImportBody'),
+        hint: t('settings.backupImportHint'),
+        confirmText: t('settings.backupImport'),
+        danger: true,
+        // 未确认而关闭（取消 / Esc / 点遮罩）：解除按钮禁用
+        onCancel: () => { importBtn.disabled = false; },
+        onConfirm: async () => {
+          // 确认后文件选择器仍在交互，按钮保持禁用直至导入流程结束
+          try {
+            const done = await API.importConfig();
+            if (done) {
+              showToast(t('settings.backupImported'), 'success');
+              setTimeout(() => location.reload(), 800);
+            } else {
+              showToast(t('common.canceled'), 'info');
+            }
+          } catch (err) {
+            showToast(t('common.setFailed') + String(err), 'error');
+          } finally {
+            importBtn.disabled = false;
           }
-        } catch (err) {
-          showToast(t('common.setFailed') + String(err), 'error');
-        } finally {
-          importBtn.disabled = false;
-        }
-      };
-      confirmOverlay.addEventListener('click', (e) => {
-        if (e.target === confirmOverlay) closeConfirm();
+        },
       });
     };
 
@@ -346,7 +352,6 @@ export default class Settings {
       this._unbindHotkey();
       overlay.remove();
       if (openSettings === this) openSettings = null;
-      if (this.onClose) this.onClose();
     };
 
     // Close
@@ -365,12 +370,6 @@ export default class Settings {
       window.removeEventListener('keydown', this._hotkeyListener, true);
       this._hotkeyListener = null;
     }
-  }
-
-  esc(str) {
-    const div = document.createElement('div');
-    div.textContent = String(str ?? '');
-    return div.innerHTML;
   }
 }
 

@@ -51,6 +51,9 @@ struct SkinManifest {
     entry: String,
     #[serde(default)]
     version: Option<String>,
+    /// 对应安装端 SkinManifest.min_host_version（格式校验见 validate 阶段）
+    #[serde(default)]
+    min_host_version: Option<String>,
     #[serde(default)]
     window: WindowDefaults,
     #[serde(default)]
@@ -316,6 +319,20 @@ fn main() {
             fail(&format!("version 不能包含 '/' 或 '\\\\'（用于输出文件名）：\"{}\"", v))
         }
         _ => {}
+    }
+    if let Some(v) = manifest.min_host_version.as_deref() {
+        // 宽松数字段格式（与安装端 update::is_newer 的解析口径一致：1.2 / 1.2.3 / v1.2.3）
+        let valid = v
+            .trim()
+            .trim_start_matches(['v', 'V'])
+            .split('.')
+            .all(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()));
+        if !valid {
+            fail(&format!(
+                "min_host_version 格式非法（应为 \"1.0.5\" 这类数字段版本号）：\"{}\"",
+                v
+            ));
+        }
     }
 
     // 收集文件（排序保证可复现）；目录/条目读取错误汇总后一并报出

@@ -14,6 +14,8 @@ use crate::skin::loader::{self, validate_skin_id};
 use crate::skin::types::{Skin, SkinManifest};
 
 /// 安全上限：防恶意/损坏包耗尽磁盘
+/// （tools/pack-skin/src/main.rs 手工镜像了这些上限与清单体积上限——
+/// 改动必须同步并重建 pack-skin.exe）
 const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024; // 压缩包 64 MB
 const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024; // 解压后合计 256 MB
 const MAX_FILES: usize = 5000;
@@ -40,6 +42,9 @@ pub struct PackageInfo {
     pub status: String,
     /// 已安装的版本（未安装为 None）
     pub installed_version: Option<String>,
+    /// skin.json 声明的 min_host_version 高于当前宿主版本时为 Some（该值），
+    /// 安装向导据此提示「部分功能可能不可用」；满足或未声明为 None。
+    pub requires_host_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +93,13 @@ pub fn inspect_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
             description: manifest.description,
             status: status.to_string(),
             installed_version,
+            // 宿主版本不足时把要求值带给向导（提示不拦截；比较复用更新检测的
+            // 数字段口径）
+            requires_host_version: manifest
+                .min_host_version
+                .as_deref()
+                .filter(|v| crate::update::is_newer(v, env!("CARGO_PKG_VERSION")))
+                .map(str::to_string),
         })
     })();
     result
@@ -423,6 +435,32 @@ mod tests {
         io::Write::write_all(&mut zw, b"<html></html>").unwrap();
         zw.finish().unwrap();
         pkg
+    }
+
+    #[test]
+    fn extract_skips_zip_slip_entries() {
+        let dir = unique_dir("zipslip");
+        let pkg = dir.join("slip.dskin");
+        let file = fs::File::create(&pkg).unwrap();
+        let mut zw = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("skin.json", opts).unwrap();
+        io::Write::write_all(&mut zw, br#"{"name":"T","id":"slip-skin"}"#).unwrap();
+        // 逃逸条目：解压目标的上一级（系统临时目录）——enclosed_name 必须拦下
+        let marker = format!("driftlet-zipslip-{}-marker.txt", std::process::id());
+        zw.start_file(format!("../{}", marker), opts).unwrap();
+        io::Write::write_all(&mut zw, b"evil").unwrap();
+        zw.finish().unwrap();
+
+        let extracted = extract_package(&pkg, "zh-CN").unwrap();
+        assert!(
+            !std::env::temp_dir().join(&marker).exists(),
+            "zip-slip 条目落盘了：enclosed_name 防护失效"
+        );
+        assert!(extracted.path().join("skin.json").exists());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

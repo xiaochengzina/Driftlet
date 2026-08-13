@@ -1,0 +1,4 @@
+# 行尾统一：入库一律 LF，与克隆者的 core.autocrlf 设置解耦。
+# PowerShell 5.1 对 LF 脚本个别场景有坑，.ps1 显式 CRLF。
+* text=auto eol=lf
+*.ps1 text eol=crlf

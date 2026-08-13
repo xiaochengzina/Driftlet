@@ -95,30 +95,37 @@ fn find_skin_dir(state: &AppState, skin_id: &str) -> Option<std::path::PathBuf> 
 #[tauri::command]
 pub async fn capture_skin_preview(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<(), String> {
     require_manager(&window)?;
-    let state = app.state::<AppState>();
-    let lang = state.lang();
-    let window = state.registry.get(&skin_id)
-        .ok_or_else(|| tr(&lang, Key::PreviewNeedsLoadedSkin).to_string())?;
-
-    let skin_dir = find_skin_dir(&state, &skin_id)
-        .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
-    let preview_path = skin_dir.join("preview.png");
+    // 注意别遮蔽：window 参数是管理器窗，这里取出的是皮肤窗
+    let (skin_window, preview_path, lang) = {
+        let state = app.state::<AppState>();
+        let lang = state.lang();
+        let skin_window = state.registry.get(&skin_id)
+            .ok_or_else(|| tr(&lang, Key::PreviewNeedsLoadedSkin).to_string())?;
+        let skin_dir = find_skin_dir(&state, &skin_id)
+            .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
+        (skin_window, skin_dir.join("preview.png"), lang)
+    };
 
     #[cfg(target_os = "windows")]
     {
-        crate::capture::capture_webview_to_png(
-            &window,
-            &preview_path,
-            crate::i18n::normalize(&lang),
-        )?;
+        // 截图内含最长 10s 的同步等待（capture.rs 的 recv_timeout）——
+        // 挪 spawn_blocking，不占 async worker
+        let preview_path2 = preview_path.clone();
+        let lang_static = crate::i18n::normalize(&lang);
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::capture::capture_webview_to_png(&skin_window, &preview_path2, lang_static)
+        })
+        .await
+        .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))??;
+        log::info!("Preview captured for skin '{}' → {:?}", skin_id, preview_path);
     }
 
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = (skin_window, preview_path);
         return Err(tr(&lang, Key::PreviewWindowsOnly).to_string());
     }
 
-    log::info!("Preview captured for skin '{}' → {:?}", skin_id, preview_path);
     Ok(())
 }
 
@@ -216,9 +223,8 @@ pub(crate) async fn load_skin_impl(app: AppHandle, skin_id: String) -> Result<()
                 .unwrap_or_else(|| SkinRuntimeConfig::from_manifest(&skin.manifest))
         };
 
-        log::info!("Creating skin window for: {}", sid);
+        log::debug!("Creating skin window for: {}", sid);
         let window = factory::create_skin_window(&handle, &skin, &config)?;
-        log::info!("Window created successfully for: {}", sid);
 
         state.registry.register(sid.clone(), window);
 
@@ -240,6 +246,7 @@ pub(crate) async fn load_skin_impl(app: AppHandle, skin_id: String) -> Result<()
             }
         }
 
+        log::info!("Skin loaded: {}", sid);
         let _ = handle.emit("skin-loaded", &sid);
         Ok(())
     }).await.map_err(|e| trf(&outer_lang, Key::TaskFailed, &[&e.to_string()]))?
@@ -285,6 +292,7 @@ pub(crate) async fn unload_skin_impl(app: AppHandle, skin_id: String) -> Result<
             }
         }
 
+        log::info!("Skin unloaded: {}", sid);
         let _ = handle.emit("skin-unloaded", &sid);
         Ok(())
     }).await.map_err(|e| trf(&outer_lang, Key::TaskFailed, &[&e.to_string()]))?
@@ -602,6 +610,8 @@ pub fn set_skin_custom_setting(
     settings::save_skin_settings(&skin.directory, &overrides)
         .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     drop(_guard);
+    // 只记 key 不记 value：够用且不会把 password 类设置值写进日志
+    log::info!("Skin setting changed: {} key={}", skin_id, key);
 
     // Push to the live window so the skin can apply the change without a
     // reload: update the baked __DESK_PP__.settings and notify listeners.
@@ -885,6 +895,11 @@ fn is_fixed_uint(s: &str, width: usize, min: u32, max: u32) -> bool {
         && s.parse::<u32>().map(|n| (min..=max).contains(&n)).unwrap_or(false)
 }
 
+/// 右键菜单重入守卫：TrackPopupMenu 是模态的，等待期间调用方被占住——皮肤
+/// 循环调用本命令可停满 async worker 池（宿主命令瘫痪），模态嵌套还会在
+/// 主线程栈上无限递归。菜单开着时后续调用直接丢弃。
+static SKIN_MENU_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Show the skin window's right-click popup menu and run the chosen action.
 /// Invoked from the injected bridge's contextmenu handler.
 #[tauri::command]
@@ -895,14 +910,26 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
     };
 
     // TrackPopupMenu is modal and must run on the window's owner (main) thread.
+    // 等待挪进 spawn_blocking：rx.recv() 裸阻塞会把 tokio worker 占满整个
+    // 模态期间（配合上面的重入守卫，worker 池不再被本命令停放）。
     #[cfg(target_os = "windows")]
     let choice = {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let _ = tx.send(factory::track_skin_popup_menu(&window, &lang));
+        if SKIN_MENU_OPEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        let app2 = app.clone();
+        let lang2 = lang.clone();
+        let wait = tauri::async_runtime::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            app2.run_on_main_thread(move || {
+                let _ = tx.send(factory::track_skin_popup_menu(&window, &lang2));
+            })
+            .map_err(|e| e.to_string())?;
+            rx.recv().map_err(|e| e.to_string())
         })
-        .map_err(|e| e.to_string())?;
-        rx.recv().map_err(|e| e.to_string())?
+        .await;
+        SKIN_MENU_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+        wait.map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))??
     };
     #[cfg(not(target_os = "windows"))]
     let choice = 0u32;
@@ -935,6 +962,28 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
         }
         _ => {} // menu cancelled
     }
+    Ok(())
+}
+
+/// 皮肤窗内 F12 / Ctrl+Shift+I 打开 DevTools（桥接 keydown 捕获后调用，
+/// capture 阶段注册防页面吞键）。浏览器加速键仍全局禁用，DevTools 经
+/// OpenDevToolsWindow 精确开锁。仅开发模式（设置页「高级」开关，运行时标志
+/// AppState.hot_reload_enabled）开启时生效；未开启静默 no-op——桥每次
+/// 按键都发，报错无处可去也无意义。
+#[tauri::command]
+pub fn open_skin_devtools(app: AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    if window.label().strip_prefix("skin-").is_none() {
+        return Err(tr(&lang, Key::NotASkinWindow).to_string());
+    }
+    if !state.hot_reload_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    factory::open_devtools(&window);
+    #[cfg(not(target_os = "windows"))]
+    let _ = &window;
     Ok(())
 }
 
@@ -1195,7 +1244,20 @@ pub async fn export_config(window: tauri::WebviewWindow, app: AppHandle) -> Resu
             .map(|p| p.to_string())
     }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))?;
     let Some(dest) = dest else { return Ok(None) };
-    backup::export_backup(&app, std::path::Path::new(&dest))?;
+    // install_lock 在异步上下文获取，guard 留在本帧持有到导出完成（tokio
+    // guard 是 Send，可跨 await）；重 IO 挪 spawn_blocking
+    let state = app.state::<AppState>();
+    let _install_guard = state.install_lock.lock().await;
+    let (config_dir, skins_dir, lang2) = {
+        let state = app.state::<AppState>();
+        (state.config_dir.clone(), state.skins_dir.clone(), lang.clone())
+    };
+    let dest_path = std::path::PathBuf::from(&dest);
+    tauri::async_runtime::spawn_blocking(move || {
+        backup::export_backup(&config_dir, &skins_dir, &dest_path, &lang2)
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))??;
     Ok(Some(dest))
 }
 
@@ -1253,7 +1315,22 @@ pub async fn install_skin_package(window: tauri::WebviewWindow, app: AppHandle, 
         unload_skin_impl(app.clone(), info.id.clone()).await?;
     }
 
-    let skin = package::install_package(std::path::Path::new(&package_path), &state.skins_dir, &lang)?;
+    // 目录替换 + settings.json 恢复期间持 settings_lock：与
+    // set_skin_custom_setting / skin_set_setting 的设置写入互斥，防设置
+    // 写进刚被替换掉的旧目录而丢失。重 IO 挪 spawn_blocking 不占 async worker。
+    let app2 = app.clone();
+    let lang2 = lang.clone();
+    let skin = tauri::async_runtime::spawn_blocking(move || {
+        let state2 = app2.state::<AppState>();
+        let _settings_guard = state2.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+        package::install_package(
+            std::path::Path::new(&package_path),
+            &state2.skins_dir,
+            &lang2,
+        )
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))??;
     let preview = loader::find_preview_image(&skin.directory);
     let info_out = SkinInfo {
         id: skin.id.clone(),
@@ -1265,8 +1342,6 @@ pub async fn install_skin_package(window: tauri::WebviewWindow, app: AppHandle, 
         description_en: skin.manifest.description_en.clone(),
         bilingual: skin.manifest.bilingual,
         loaded: false,
-        has_error: false,
-        error_msg: None,
         preview,
     };
 
@@ -1334,9 +1409,10 @@ pub fn set_autostart(window: tauri::WebviewWindow, app: AppHandle, on: bool) -> 
     }
 
     let state = app.state::<AppState>();
+    let lang = state.lang();
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.autostart = on;
-    config::save_config(&state.config_dir, &config)
+    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
 #[tauri::command]
@@ -1350,9 +1426,17 @@ pub fn get_autostart(window: tauri::WebviewWindow, app: AppHandle) -> Result<boo
 pub fn set_theme(window: tauri::WebviewWindow, app: AppHandle, theme: String) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
+    let lang = state.lang();
+    // 主题值白名单：config.json 可手改，非法值归一为 auto
+    let theme = match theme.as_str() {
+        "light" | "dark" | "auto" => theme,
+        _ => "auto".to_string(),
+    };
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
-    config.theme = theme;
-    config::save_config(&state.config_dir, &config)
+    config.theme = theme.clone();
+    // 日志窗开着时同步主题（其主题烘焙在建窗 URL 里，不推会停在旧主题）
+    let _ = app.emit_to("log", "app-log-theme", &theme);
+    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
 /// 皮肤热重载总开关（持久化 config.hot_reload + 即时翻转运行时标志）。
@@ -1361,10 +1445,11 @@ pub fn set_theme(window: tauri::WebviewWindow, app: AppHandle, theme: String) ->
 pub fn set_hot_reload(window: tauri::WebviewWindow, app: AppHandle, on: bool) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
+    let lang = state.lang();
     state.hot_reload_enabled.store(on, std::sync::atomic::Ordering::Relaxed);
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.hot_reload = on;
-    config::save_config(&state.config_dir, &config)
+    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
 // ─── Update Check ───
@@ -1385,9 +1470,10 @@ pub async fn check_update(window: tauri::WebviewWindow) -> Result<crate::update:
 pub fn set_update_check(window: tauri::WebviewWindow, app: AppHandle, on: bool) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
+    let lang = state.lang();
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.update_check = on;
-    config::save_config(&state.config_dir, &config)
+    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
 /// 跳转 GitHub 最新 release 下载页。URL 后端固定（不接受前端入参）；
@@ -1406,12 +1492,13 @@ pub fn open_release_page(window: tauri::WebviewWindow, app: AppHandle) -> Result
 pub fn set_language(window: tauri::WebviewWindow, app: AppHandle, language: String) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
+    let lang = state.lang();
     // 非法语言值归一到支持的语言（未知一律回 zh-CN）
     let language = crate::i18n::normalize(&language).to_string();
     {
         let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         config.language = language.clone();
-        config::save_config(&state.config_dir, &config)?;
+        config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
     *state.language.lock().unwrap_or_else(|e| e.into_inner()) = language.clone();
     crate::tray::rebuild_tray_menu(&app, &language);
@@ -1428,6 +1515,8 @@ pub fn set_language(window: tauri::WebviewWindow, app: AppHandle, language: Stri
             let _ = win.eval(&script);
         }
     }
+    // 日志窗开着时也同步：它的语言烘焙在建窗 URL 里，不推会停在旧语言
+    let _ = app.emit_to("log", "app-log-language", &language);
     Ok(())
 }
 
@@ -1439,9 +1528,10 @@ pub fn set_hotkey(window: tauri::WebviewWindow, app: AppHandle, hotkey: String) 
     require_manager(&window)?;
     crate::hotkey::apply_hotkey(&app, hotkey.trim())?;
     let state = app.state::<AppState>();
+    let lang = state.lang();
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.hotkey_toggle_skins = hotkey.trim().to_string();
-    config::save_config(&state.config_dir, &config)
+    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
 /// Startup hotkey-registration failure, if any (the configured combo).
@@ -1566,6 +1656,93 @@ fn enum_system_fonts() -> Vec<String> {
     fonts.sort();
     fonts.dedup();
     fonts
+}
+
+
+// ─── Log Window ───
+
+/// 日志窗口专属命令的身份校验（与 require_manager 同理：自定义命令对任何
+/// 窗口开放，皮肤可经注入桥直达，必须按 label 把关——缓冲里可能有其它
+/// 皮肤的消息和内部路径，不能放给皮肤读）。
+fn require_log_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() == "log" {
+        Ok(())
+    } else {
+        let lang = window.app_handle().state::<AppState>().lang();
+        Err(tr(&lang, Key::LogWindowOnly).to_string())
+    }
+}
+
+/// 设置页「打开日志窗口」。已开着则提到前台；否则仿管理器窗建一个
+/// 无边框小窗。theme/lang 烘焙进 URL query（与皮肤窗烘焙 opacity 同
+/// 一模式）——日志窗不是管理器窗，调不动 get_app_config。
+/// 必须 async + spawn_blocking：同步命令在主线程的 WebView2 IPC 回调
+/// 上下文里执行，就地 build() 新窗口会把主线程卡死在 wry 建窗路径上
+/// （整窗无响应，实测复现）；皮肤建窗走同一路径（load_skin_impl）。
+#[tauri::command]
+pub async fn open_log_window(window: tauri::WebviewWindow, app: AppHandle) -> Result<(), String> {
+    require_manager(&window)?;
+    let outer_lang = app.state::<AppState>().lang();
+    tauri::async_runtime::spawn_blocking(move || open_log_window_impl(&app))
+        .await
+        .map_err(|e| trf(&outer_lang, Key::TaskFailed, &[&e.to_string()]))?
+}
+
+/// open_log_window 的内部实现（进程内调用见 load_skin_impl 注释同款约定）。
+pub(crate) fn open_log_window_impl(app: &AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("log") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let (theme, lang) = {
+        let state = app.state::<AppState>();
+        let config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        (config.theme.clone(), config.language.clone())
+    };
+    let win = tauri::WebviewWindowBuilder::new(
+        app,
+        "log",
+        tauri::WebviewUrl::App(format!("log.html?theme={}&lang={}", theme, lang).into()),
+    )
+    .title("Driftlet")
+    .inner_size(860.0, 540.0)
+    .min_inner_size(560.0, 360.0)
+    .decorations(false)
+    // 同管理器窗：无边框 + 原生阴影（皮肤窗必须 shadow(false)，这里不是皮肤窗）
+    .shadow(true)
+    .resizable(true)
+    .center()
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(hwnd) = win.hwnd() {
+            crate::round_window_corners(hwnd.0 as isize);
+            // 同管理器窗：任务栏按钮/悬停预览图标（见 apply_window_icon 注释）
+            crate::apply_window_icon(hwnd.0 as isize);
+        }
+        // 右键菜单 / F5·Ctrl+R 等浏览器加速键屏蔽（异步初始化重试，同管理器窗）
+        factory::spawn_webview_hardening_retry(&app, "log");
+    }
+    Ok(())
+}
+
+/// 日志窗口打开时拉全量快照（之后经 "app-log-added" 事件增量，按 seq 去重）。
+#[tauri::command]
+pub fn get_app_log(window: tauri::WebviewWindow) -> Result<Vec<crate::app_log::LogEntry>, String> {
+    require_log_window(&window)?;
+    Ok(crate::app_log::entries())
+}
+
+/// 清空后端环形缓冲（前端同步清空本地渲染）。
+#[tauri::command]
+pub fn clear_app_log(window: tauri::WebviewWindow) -> Result<(), String> {
+    require_log_window(&window)?;
+    crate::app_log::clear();
+    Ok(())
 }
 
 

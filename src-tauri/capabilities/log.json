@@ -1,0 +1,10 @@
+{
+  "identifier": "log",
+  "description": "日志窗口权限（管理器主窗口见 default.json，皮肤窗口见 skin.json）。窗口按钮用 minimize/close，事件 listen 由 core:default 覆盖。",
+  "windows": ["log"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-close"
+  ]
+}

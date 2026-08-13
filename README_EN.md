@@ -74,7 +74,9 @@ npm run tauri build
 │   ├── controls-demo/        # Demo of all settings controls (bilingual; UI language follows the manager)
 │   ├── sys-monitor/          # System monitor (the read-only system-info API set)
 │   ├── media-hub/            # Media console (volume / media / spectrum / notifications)
-│   └── toolbox/              # Local toolbox (clipboard / files / registry / commands / settings read-write)
+│   ├── toolbox/              # Local toolbox (clipboard / files / registry / commands / settings read-write)
+│   ├── driftlet.js           # Optional wrapper: named command functions + event helpers (copy into a skin folder)
+│   └── driftlet.d.ts         # Type definitions for the bridge and all commands (editor autocomplete)
 ├── tools/
 │   ├── pack-skin.exe     # Skin packaging tool (standalone, generates .dskin)
 │   ├── pack-skin/        # Packaging tool source (Rust)
@@ -84,8 +86,7 @@ npm run tauri build
     ├── 皮肤开发指南.md    # Interface docs and specs for skin creators
     ├── 关键机制.md        # Window / desktop layer implementation details (do not regress)
     ├── 设计系统.md        # Manager UI visual system and frontend contract
-    ├── 已知问题.md        # Known issues and future directions
-    └── 路线图.md          # Candidate new directions and the post-1.0 on-device regression checklist
+    └── 已知问题.md        # Known issues and future directions
 ```
 
 ---
@@ -145,13 +146,16 @@ The skin window size can be changed by the user at any time (via values in the m
 
 ### Calling Backend Commands
 
-Inside a skin, you can call Tauri commands through the injected `window.__DESK_PP__`:
+Inside a skin, backend commands are called through the injected bridge (recommended entry `window.driftlet`; `window.__DESK_PP__` is the same object under its legacy name, kept forever):
 
 ```js
-if (window.__DESK_PP__?.invoke) {
-  const stats = await window.__DESK_PP__.invoke('get_system_stats');
+if (window.driftlet?.invoke) {
+  const [cpu] = await window.driftlet.invoke('get_cpu_info');
+  console.log(cpu.usage); // total usage %; rate readings return 0 on the first call (baseline) — poll once per second
 }
 ```
+
+The optional wrapper `examples/driftlet.js` turns commands into named functions like `Driftlet.getCpuInfo()` (with `driftlet.d.ts` for editor autocomplete); the full command list and contracts are in `docs/skin-development-guide.md` chapter 5.
 
 ### Custom Settings
 
@@ -202,7 +206,7 @@ Supported `type` values and value formats:
 | `todolist` | Todo list (checkable) | `[{ "text": "...", "done": true }]` | Skins can write back via `skin_set_setting` |
 | `datetasklist` | Dated task list | `[{ "time": "YYYY-MM-DD HH:MM:SS", "text": "..." }]` | Each task carries a date-time; time may be empty |
 
-Values of type `password` are **not baked into the page with `__DESK_PP__.settings`** (all skins share the same origin under skin://, so anything injected into the page could be scraped by other skins); instead, read them on demand inside the skin with the `skin_get_setting` command — `await __DESK_PP__.invoke('skin_get_setting', { key: 'my_key' })`. Identity is taken from the calling window, so a skin can only read its own values.
+Values of type `password` are **not baked into the page with the bridge's `settings`** (all skins share the same origin under skin://, so anything injected into the page could be scraped by other skins); instead, read them on demand inside the skin with the `skin_get_setting` command — `await driftlet.invoke('skin_get_setting', { key: 'my_key' })`. Identity is taken from the calling window, so a skin can only read its own values.
 
 The `label` of each `options` entry may be omitted, falling back to displaying the `value`. Each setting can also carry a `"description"` note, shown below the control's label:
 
@@ -226,7 +230,7 @@ Reading and listening inside a skin:
 
 ```js
 // Initial values: baked in by the injected bridge before the page loads
-const settings = window.__DESK_PP__?.settings || {};
+const settings = window.driftlet?.settings || {};
 console.log(settings.accent_color);
 
 // Runtime changes: pushed in real time when settings change in the manager, no reload needed

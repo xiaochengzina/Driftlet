@@ -1,15 +1,16 @@
 //! Skin-facing backend APIs: read-only system information plus the
-//! permission-gated capabilities.  Six permissions, each gating its own
+//! permission-gated capabilities.  Five permissions, each gating its own
 //! command set:
 //!
-//!   * `files`     — skin_read_file / skin_write_file / skin_list_dir /
-//!                   skin_delete_file (sandboxed to the skin's own folder)
 //!   * `registry`  — read_registry_value
 //!   * `shell`     — run_command
 //!   * `system`    — set_volume / set_mute / media_control / open_external /
 //!                   show_notification
 //!   * `clipboard` — read_clipboard_text / write_clipboard_text
 //!   * `mic`       — get_mic_spectrum
+//!
+//! （皮肤自身目录内的文件读写不需要权限——fs.rs 的沙箱即边界；曾有过的
+//! `files` 权限已整体取消。）
 //!
 //! Skins call these through `window.__DESK_PP__.invoke` — the bridge is a
 //! raw passthrough, so every command registered here is skin-callable.
@@ -841,6 +842,8 @@ pub fn skin_set_setting(
     crate::skin::settings::save_skin_settings(&skin.directory, &overrides)
         .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     drop(_guard);
+    // 与管理器侧 set_skin_custom_setting 同款：只记 key，（by skin）标出来源
+    log::info!("Skin setting changed: {} key={} (by skin)", skin.id, key);
 
     // Notify the manager panel so an open config page refreshes in place.
     // 定向发给管理器窗口：广播会把设置值（可能含 password）泄露给所有皮肤窗口。
@@ -861,6 +864,62 @@ pub fn skin_set_setting(
     );
     let _ = window.eval(&script);
 
+    Ok(())
+}
+
+// ─── Skin log messages (no permission needed) ───
+
+/// 皮肤主动发一条消息到宿主日志（设置页可打开的日志窗口）。caller_skin 只做
+/// 身份识别：消息只进本机内存环形缓冲，无权限声明。level 只认
+/// "warn"/"error"，缺省 info；source 自动带皮肤 id，便于开发者定位归属。
+#[tauri::command]
+pub fn skin_log(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    level: Option<String>,
+    message: String,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let skin = caller_skin(&state, &window)?;
+    crate::app_log::push(
+        crate::app_log::LogLevel::from_level_str(level.as_deref()),
+        format!("skin:{}", skin.id),
+        message,
+    );
+    Ok(())
+}
+
+// ─── Skin console forwarding (no permission needed) ───
+
+#[derive(serde::Deserialize)]
+pub struct ConsoleEntry {
+    level: Option<String>,
+    message: String,
+}
+
+/// 皮肤 webview 控制台输出的批量上报通道：注入桥自动捕获 console.*、未捕获
+/// 异常/rejection、资源加载失败与 CSP 拦截，队列每 250ms 整批上报一次。
+/// 身份取自窗口 label（同 show_skin_context_menu），不走 caller_skin 的全量
+/// 扫盘——本命令是持续高频通道，每批扫一次盘不值。消息只进本机内存环形
+/// 缓冲（与 skin_log 同一口径），无权限声明。
+#[tauri::command]
+pub fn skin_console_log(
+    window: tauri::WebviewWindow,
+    entries: Vec<ConsoleEntry>,
+) -> Result<(), String> {
+    let state = window.app_handle().state::<AppState>();
+    let lang = state.lang();
+    let Some(skin_id) = window.label().strip_prefix("skin-").map(str::to_string) else {
+        return Err(tr(&lang, Key::NotASkinWindow).to_string());
+    };
+    // 每批条数兜底截断：桥接侧已有 flush 上限，这里防绕过桥直接调的失控皮肤
+    for entry in entries.into_iter().take(60) {
+        crate::app_log::push(
+            crate::app_log::LogLevel::from_level_str(entry.level.as_deref()),
+            format!("skin:{}", skin_id),
+            entry.message,
+        );
+    }
     Ok(())
 }
 
@@ -1068,12 +1127,16 @@ fn is_open_target_allowed(target: &str) -> bool {
     !is_blocked_executable(path)
 }
 
-/// 可直接执行/被系统当代码解析的扩展名黑名单（大小写不敏感）。
+/// 可直接执行/被系统当代码解析、或能间接触发远程连接（NTLM 外泄面）的
+/// 扩展名黑名单（大小写不敏感）。
 fn is_blocked_executable(path: &std::path::Path) -> bool {
-    const BLOCKED: [&str; 23] = [
+    const BLOCKED: [&str; 29] = [
         "exe", "bat", "cmd", "ps1", "vbs", "vbe", "js", "jse", "wsf", "wsh",
         "msi", "msp", "scr", "com", "pif", "cpl", "lnk", "hta", "reg", "dll",
         "msc", "jar", "url",
+        // 间接远程连接面：Explorer 搜索/库可指向远程共享（NTLM 哈希外泄）、
+        // ClickOnce 激活、msdt 诊断包、Internet 快捷方式变体
+        "search-ms", "library-ms", "application", "appref-ms", "diagcab", "website",
     ];
     path.extension()
         .and_then(|e| e.to_str())

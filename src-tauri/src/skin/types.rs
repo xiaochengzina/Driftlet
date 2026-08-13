@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Skin manifest — read from skin.json, never written back
+///
+/// 注意：tools/pack-skin/src/main.rs 手工镜像了本结构（校验所需字段）、
+/// SkinSettingKind/SkinSettingDef/WindowDefaults 与安全上限——改动必须同步，
+/// 并重新构建 tools/pack-skin.exe（打包放行 ≠ 安装放行 的漂移即源于此失守）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkinManifest {
     /// 皮肤唯一 ID（小写字母/数字/中划线）。打包分发（.dskin）时必填，
@@ -17,6 +21,11 @@ pub struct SkinManifest {
     pub author: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
+    /// 最低宿主版本要求（可选，形如 "1.0.5"）：宿主版本低于它时安装向导
+    /// 提示「部分功能可能不可用」（不拦截安装）；皮肤运行期可经桥烘焙的
+    /// __DESK_PP__.hostVersion 自行探测降级。
+    #[serde(default)]
+    pub min_host_version: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     /// 英文简介（bilingual 皮肤专用；留空回退 description）
@@ -194,8 +203,6 @@ pub struct SkinInfo {
     /// skin.json 声明的中英双语开关：决定前端是否启用 *_en 文案
     pub bilingual: bool,
     pub loaded: bool,
-    pub has_error: bool,
-    pub error_msg: Option<String>,
     /// Absolute path to preview image (preview.png / preview.jpg) if present
     pub preview: Option<String>,
 }

@@ -181,6 +181,11 @@ const API = {
     return invoke('open_release_page');
   },
 
+  // 打开日志窗口（已开着则提到前台；窗口由后端创建，label "log"）
+  openLogWindow() {
+    return invoke('open_log_window');
+  },
+
   // Utility
   openSkinsFolder() {
     return invoke('open_skins_folder');

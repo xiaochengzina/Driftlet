@@ -1,0 +1,17 @@
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- 全目标统一清单（与 tauri-build 默认 windows-app-manifest.xml 同内容）：
+       comctl32 v6 激活上下文。build.rs 用 compile_for_everything 嵌到所有
+       目标（bins 的 tauri winres 已不带清单，lib 单元测试二进制靠它获得）。 -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>

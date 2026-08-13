@@ -11,6 +11,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import API from './api.js';
 import { t } from './i18n.js';
+import { esc, bindEsc, closeOnMaskClick } from './dom.js';
 
 export async function initUpdateCheck() {
   try {
@@ -49,12 +50,12 @@ function showUpdateDialog(result) {
   const goBtn = overlay.querySelector('.confirm-btn.primary');
   const dontRemind = overlay.querySelector('#update-dont-remind');
 
-  const close = () => {
-    window.removeEventListener('keydown', onKey, true);
+  function close() {
+    unbindEsc();
     overlay.remove();
-  };
+  }
   // 取消：勾选「不再提示」时同时关闭更新检测，并补告知弹窗
-  const cancel = async () => {
+  async function cancel() {
     const stop = dontRemind.checked;
     close();
     if (!stop) return;
@@ -64,13 +65,8 @@ function showUpdateDialog(result) {
       console.error('setUpdateCheck failed:', err);
     }
     showDisabledNotice();
-  };
-  const onKey = (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      cancel();
-    }
-  };
+  }
+  const unbindEsc = bindEsc(cancel);
 
   cancelBtn.onclick = cancel;
   goBtn.onclick = async () => {
@@ -81,7 +77,6 @@ function showUpdateDialog(result) {
       console.error('openReleasePage failed:', err);
     }
   };
-  window.addEventListener('keydown', onKey, true);
   // 与删除/重置确认框一致：初始焦点落在「取消」
   cancelBtn.focus();
 }
@@ -102,26 +97,12 @@ function showDisabledNotice() {
   document.body.appendChild(overlay);
 
   const okBtn = overlay.querySelector('.confirm-btn.primary');
-  const close = () => {
-    window.removeEventListener('keydown', onKey, true);
+  function close() {
+    unbindEsc();
     overlay.remove();
-  };
-  const onKey = (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      close();
-    }
-  };
+  }
+  const unbindEsc = bindEsc(close);
   okBtn.onclick = close;
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close();
-  });
-  window.addEventListener('keydown', onKey, true);
+  closeOnMaskClick(overlay, close);
   okBtn.focus();
-}
-
-function esc(str) {
-  const div = document.createElement('div');
-  div.textContent = String(str ?? '');
-  return div.innerHTML;
 }

@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::http;
 use tauri::Manager;
 
@@ -30,48 +30,10 @@ pub fn handle_skin_request<R: tauri::Runtime>(
     let skins_dir = state.skins_dir.clone();
 
     let uri = request.uri();
-    // wry 递交的 URI 保留百分号编码（tauri 自家 asset 协议同样先解码再处理）。
-    // 先解码再做 ../冒号/settings 拦截与 canonicalize——中文 entry/资源名才能
-    // 命中；且 ../冒号判定也须落在解码后的语义上（%2e%2e 解码前不像逃逸）。
-    let decoded_path = percent_encoding::percent_decode_str(uri.path()).decode_utf8_lossy();
-    let path = decoded_path.as_ref();
-    let relative_path = path.strip_prefix('/').unwrap_or(path);
-
-    // Security: reject empty paths and anything that escapes skins_dir.
-    if relative_path.is_empty() || relative_path.contains("..") {
-        return not_found();
-    }
-
-    // 拒绝任何含冒号的路径段：冒号只可能意味着 ADS（settings.json:$DATA）
-    // 或盘符路径，都不是合法的皮肤内文件
-    if relative_path.split('/').any(|seg| seg.contains(':')) {
-        return not_found();
-    }
-
-    // settings.json（含 .bak/.tmp 备份/临时文件）存的是用户设置值——拦截，
-    // 防止 A 皮肤经 skin:// fetch B 皮肤的设置（该暴露面由值文件引入）。
-    if is_settings_file_name(relative_path.rsplit('/').next().unwrap_or("")) {
-        return not_found();
-    }
-
-    let file_path = skins_dir.join(relative_path);
-    let Ok(canonical_skins_dir) = skins_dir.canonicalize() else {
+    let relative_path = decode_uri_path(uri.path());
+    let Some(canonical_file_path) = resolve_skin_file(&skins_dir, &relative_path) else {
         return not_found();
     };
-    let Ok(canonical_file_path) = file_path.canonicalize() else {
-        return not_found();
-    };
-    if !canonical_file_path.starts_with(&canonical_skins_dir) {
-        return not_found();
-    }
-
-    // 规范化后按真实文件名再拦截一次 settings.json：Windows 8.3 短名
-    //（SETTIN~1.JSO）能绕过规范化前的字符串判断，canonicalize 会还原成长名
-    if is_settings_file_name(
-        canonical_file_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-    ) {
-        return not_found();
-    }
 
     let bytes = match std::fs::read(&canonical_file_path) {
         Ok(b) => b,
@@ -85,12 +47,12 @@ pub fn handle_skin_request<R: tauri::Runtime>(
         }
     };
 
-    let (body, mime) = if is_html_entry(&canonical_file_path, relative_path) {
+    let (body, mime) = if is_html_entry(&canonical_file_path, &relative_path) {
         let html = String::from_utf8_lossy(&bytes).into_owned();
         let opacity = parse_opacity(uri.query());
         let locked = parse_locked(uri.query());
         let resizable = parse_resizable(uri.query());
-        let settings_json = baked_settings_json(&skins_dir, relative_path);
+        let settings_json = baked_settings_json(&skins_dir, &relative_path);
         let language = state.lang();
         let injected = inject_bridge(html, opacity, locked, resizable, &settings_json, &language);
         (Cow::Owned(injected.into_bytes()), "text/html")
@@ -110,8 +72,58 @@ pub fn handle_skin_request<R: tauri::Runtime>(
         })
 }
 
+/// URI 路径 → 皮肤相对路径：percent 解码 + 去前导 `/`。
+/// wry 递交的 URI 保留百分号编码（tauri 自家 asset 协议同样先解码再处理）——
+/// 中文 entry/资源名解码后才能命中；`..`/冒号判定也须落在解码后的语义上
+///（%2e%2e 解码前不像逃逸）。
+fn decode_uri_path(uri_path: &str) -> String {
+    let decoded = percent_encoding::percent_decode_str(uri_path).decode_utf8_lossy();
+    let path = decoded.as_ref();
+    path.strip_prefix('/').unwrap_or(path).to_string()
+}
+
+/// 把皮肤相对路径解析为 skins_dir 内的真实文件路径——全部防护集中在
+/// 这里：空路径、`..`、冒号路径段、settings.json 变体（规范化前后各拦一次）、
+/// canonicalize 包含性校验。任一步不过返回 None（调用方统一 404，不区分
+/// 原因）。抽成纯函数是让逃逸拦截这个安全不变量可被测试钉住。
+fn resolve_skin_file(skins_dir: &Path, relative_path: &str) -> Option<PathBuf> {
+    // Security: reject empty paths and anything that escapes skins_dir.
+    if relative_path.is_empty() || relative_path.contains("..") {
+        return None;
+    }
+
+    // 拒绝任何含冒号的路径段：冒号只可能意味着 ADS（settings.json:$DATA）
+    // 或盘符路径，都不是合法的皮肤内文件
+    if relative_path.split('/').any(|seg| seg.contains(':')) {
+        return None;
+    }
+
+    // settings.json（含 .bak/.tmp 备份/临时文件）存的是用户设置值——拦截，
+    // 防止 A 皮肤经 skin:// fetch B 皮肤的设置（该暴露面由值文件引入）。
+    if is_settings_file_name(relative_path.rsplit('/').next().unwrap_or("")) {
+        return None;
+    }
+
+    let file_path = skins_dir.join(relative_path);
+    let canonical_skins_dir = skins_dir.canonicalize().ok()?;
+    let canonical_file_path = file_path.canonicalize().ok()?;
+    if !canonical_file_path.starts_with(&canonical_skins_dir) {
+        return None;
+    }
+
+    // 规范化后按真实文件名再拦截一次 settings.json：Windows 8.3 短名
+    //（SETTIN~1.JSO）能绕过规范化前的字符串判断，canonicalize 会还原成长名
+    if is_settings_file_name(
+        canonical_file_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+    ) {
+        return None;
+    }
+
+    Some(canonical_file_path)
+}
+
 /// settings.json 及其衍生文件（.bak/.tmp 等）的文件名判断，大小写不敏感。
-/// 规范化前后各用一次（见 handle_skin_request）。
+/// 规范化前后各用一次（见 resolve_skin_file）。
 fn is_settings_file_name(file_name: &str) -> bool {
     let name = file_name.to_ascii_lowercase();
     name == crate::skin::settings::SETTINGS_FILENAME
@@ -223,6 +235,10 @@ fn inject_bridge(html: String, opacity: f64, locked: bool, resizable: bool, sett
     // 态同理，必须在 serve 时烘焙而非创建后 eval，防竞态）。运行时切换由
     // set_language 命令 eval 更新并派发 desk-language-changed 事件。
     let language_json = serde_json::to_string(language).unwrap_or_else(|_| "\"zh-CN\"".into());
+    // 宿主版本烘焙进桥：皮肤据此做能力探测（新控件/新命令在老宿主上自行降级），
+    // 与 min_host_version 的安装期提示互补。版本号不随运行期变化，无需事件同步。
+    let host_version_json =
+        serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"unknown\"".into());
     let bridge = format!(
         r#"<style>
 .drag-region {{
@@ -239,6 +255,7 @@ window.__DESK_PP__={{
   positionLocked: {locked},
   resizable: {resizable},
   language: {language_json},
+  hostVersion: {host_version_json},
   // 约定：password 类型设置项的值在此恒为空串——skin:// 对所有皮肤同源，
   // 烘焙值可被任意皮肤读取；password 值需经 skin_get_setting 命令获取
   //（后端按窗口身份校验后单独下发）。
@@ -291,6 +308,9 @@ window.__DESK_PP__={{
     }}
   }}
 }};
+// Recommended alias (same object); __DESK_PP__ is the legacy name, kept for
+// compatibility.  New skins should use window.driftlet.
+window.driftlet=window.__DESK_PP__;
 (function(){{
   // Right-click: suppress WebView2's default menu (also disabled via
   // ICoreWebView2Settings) and open the native skin menu instead —
@@ -388,6 +408,103 @@ window.__DESK_PP__={{
   }} else {{
     syncFrame();
   }}
+}})();
+(function(){{
+  // Console forwarding to the host log: DevTools is disabled in skin
+  // windows, so console output and uncaught errors would vanish otherwise.
+  // Batched (one invoke per flush) + capped — a console.log in a tight
+  // loop must not drown the IPC channel.  ASCII-only on purpose: the
+  // bridge is injected into pages whose charset we don't control.
+  var FLUSH_MS = 250, FLUSH_CAP = 30, QUEUE_CAP = 300, MSG_CAP = 1200;
+  var queue = [], dropped = 0, timer = null;
+  function ser(v){{
+    try {{
+      if (typeof v === 'string') return v;
+      if (v instanceof Error) return String(v.stack || v);
+      if (v === undefined) return 'undefined';
+      if (typeof v === 'function') return String(v);
+      var seen = [];
+      return JSON.stringify(v, function(k, x){{
+        if (x && typeof x === 'object') {{
+          if (seen.indexOf(x) !== -1) return '[Circular]';
+          seen.push(x);
+        }}
+        return x;
+      }});
+    }} catch (e) {{ return String(v); }}
+  }}
+  function enqueue(level, message){{
+    if (message.length > MSG_CAP) message = message.slice(0, MSG_CAP) + '...';
+    var last = queue[queue.length - 1];
+    if (last && last.level === level && last.message === message) {{
+      last.n++;
+      return;
+    }}
+    // Hard in-queue cap: a tight loop logging DISTINCT messages would
+    // otherwise grow the queue unboundedly within one flush window.
+    if (queue.length >= QUEUE_CAP) {{ dropped++; return; }}
+    queue.push({{level: level, message: message, n: 1}});
+    if (!timer) timer = setTimeout(flush, FLUSH_MS);
+  }}
+  function flush(){{
+    timer = null;
+    var batch = queue.splice(0, FLUSH_CAP);
+    if (queue.length) {{ dropped += queue.length; queue.length = 0; }}
+    var entries = [];
+    for (var i = 0; i < batch.length; i++) {{
+      var e = batch[i];
+      entries.push({{level: e.level, message: e.n > 1 ? e.message + ' (x' + e.n + ')' : e.message}});
+    }}
+    if (dropped) {{
+      entries.push({{level: 'warn', message: '[host] dropped ' + dropped + ' console messages (flood guard)'}});
+      dropped = 0;
+    }}
+    if (!entries.length) return;
+    // Never log from inside the forwarder (recursion): send failures are
+    // swallowed silently.
+    try {{ window.__DESK_PP__.invoke('skin_console_log', {{entries: entries}}).catch(function(){{}}); }} catch (e) {{}}
+  }}
+  var LEVELS = {{log: 'info', info: 'info', debug: 'info', warn: 'warn', error: 'error'}};
+  ['log','info','debug','warn','error'].forEach(function(name){{
+    var orig = console[name];
+    if (typeof orig !== 'function') return;
+    console[name] = function(){{
+      try {{ enqueue(LEVELS[name], Array.prototype.map.call(arguments, ser).join(' ')); }} catch (e) {{}}
+      return orig.apply(console, arguments);
+    }};
+  }});
+  // Capture phase: resource-error events (img/script/link) don't bubble.
+  window.addEventListener('error', function(e){{
+    try {{
+      if (e && e.message) {{
+        enqueue('error', e.message + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : ''));
+      }} else if (e && e.target && e.target !== window) {{
+        var src = e.target.src || e.target.href;
+        if (src) enqueue('error', 'resource failed: ' + src);
+      }}
+    }} catch (_) {{}}
+  }}, true);
+  window.addEventListener('unhandledrejection', function(e){{
+    try {{ enqueue('error', 'unhandled rejection: ' + ser(e.reason)); }} catch (_) {{}}
+  }});
+  document.addEventListener('securitypolicyviolation', function(e){{
+    try {{ enqueue('error', 'CSP blocked: ' + (e.blockedURI || '') + ' (' + e.violatedDirective + ')'); }} catch (_) {{}}
+  }});
+}})();
+(function(){{
+  // Dev mode (设置页「高级」开关): F12 / Ctrl+Shift+I opens DevTools for
+  // this skin window.  Browser accelerator keys stay disabled (F5/Ctrl+R
+  // et al.) — with them off these keys reach the page as DOM events, which
+  // we forward; the backend command is the authority and no-ops while dev
+  // mode is off, so this listener can live here unconditionally.  Capture
+  // phase so the page cannot swallow the keys.
+  window.addEventListener('keydown', function(e){{
+    var hit = e.key === 'F12'
+      || (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.code === 'KeyI'));
+    if (!hit) return;
+    e.preventDefault();
+    try {{ window.__DESK_PP__.invoke('open_skin_devtools').catch(function(){{}}); }} catch (_) {{}}
+  }}, true);
 }})();
 </script>"#
     );
@@ -511,11 +628,70 @@ mod tests {
     }
 
     #[test]
+    fn resolve_skin_file_blocks_escapes_and_settings() {
+        let skins_dir = std::env::temp_dir().join(format!(
+            "driftlet-resolve-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let skin_dir = skins_dir.join("my-skin");
+        std::fs::create_dir_all(&skin_dir).unwrap();
+        std::fs::write(skin_dir.join("index.html"), "<html></html>").unwrap();
+        std::fs::write(skin_dir.join("settings.json"), "{}").unwrap();
+        // skins_dir 外的目标（逃逸终点）
+        std::fs::write(skins_dir.parent().unwrap().join("outside.txt"), "x").unwrap();
+
+        // 正常文件可解析
+        assert!(resolve_skin_file(&skins_dir, "my-skin/index.html").is_some());
+        // 空路径 / 不存在
+        assert!(resolve_skin_file(&skins_dir, "").is_none());
+        assert!(resolve_skin_file(&skins_dir, "my-skin/nope.png").is_none());
+        // 逃逸：.. 与编码后的 %2e%2e（先经 decode_uri_path 解码）
+        assert!(resolve_skin_file(&skins_dir, "../outside.txt").is_none());
+        assert!(resolve_skin_file(&skins_dir, &decode_uri_path("/%2e%2e/outside.txt")).is_none());
+        assert!(resolve_skin_file(&skins_dir, "my-skin/../../outside.txt").is_none());
+        // 冒号路径段（ADS / 盘符）
+        assert!(resolve_skin_file(&skins_dir, "my-skin/settings.json:$DATA").is_none());
+        // settings.json 及其衍生（大小写不敏感）
+        assert!(resolve_skin_file(&skins_dir, "my-skin/settings.json").is_none());
+        assert!(resolve_skin_file(&skins_dir, "my-skin/SETTINGS.JSON").is_none());
+        assert!(resolve_skin_file(&skins_dir, "my-skin/settings.json.bak").is_none());
+        // 普通同名文件在子目录不受限
+        std::fs::create_dir_all(skin_dir.join("sub")).unwrap();
+        std::fs::write(skin_dir.join("sub/settings.json"), "{}").unwrap();
+        // 注意：文件名拦截只看末段——子目录里的 settings.json 同样被拦（与
+        // handle_skin_request 现行口径一致：任何位置的 settings.json 都不出协议）
+        assert!(resolve_skin_file(&skins_dir, "my-skin/sub/settings.json").is_none());
+
+        let _ = std::fs::remove_dir_all(&skins_dir);
+        let _ = std::fs::remove_file(skins_dir.parent().unwrap().join("outside.txt"));
+    }
+
+    #[test]
     fn bridge_bakes_language() {
         let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN");
         assert!(out.contains(r#"language: "zh-CN""#), "桥必须烘焙管理器语言");
         let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "en");
         assert!(out.contains(r#"language: "en""#));
+    }
+
+    #[test]
+    fn bridge_hooks_console_forwarding() {
+        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN");
+        assert!(out.contains("skin_console_log"), "桥必须注入 console 转发 hook");
+        assert!(out.contains("unhandledrejection"), "桥必须捕获未处理 rejection");
+        assert!(out.contains("open_skin_devtools"), "桥必须注入 DevTools 快捷键 hook");
+        assert!(
+            out.contains(&format!("hostVersion: \"{}\"", env!("CARGO_PKG_VERSION"))),
+            "桥必须烘焙宿主版本号"
+        );
+        assert!(
+            out.contains("window.driftlet=window.__DESK_PP__"),
+            "桥必须挂 driftlet 别名"
+        );
     }
 
     #[test]

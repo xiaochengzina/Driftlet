@@ -1,0 +1,3 @@
+// 统一清单资源（RT_MANIFEST = 24）。清单内容见同目录 app.manifest，
+// 由 build.rs 的 compile_for_everything 嵌入全部链接目标。
+1 24 "app.manifest"

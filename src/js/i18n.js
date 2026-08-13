@@ -105,10 +105,10 @@ const MESSAGES = {
     'settings.backupImportTitle': '导入备份',
     'settings.backupImportBody': '将用备份文件覆盖当前全部配置与皮肤，<br>此操作不可撤销。',
     'settings.backupImportHint': '未在备份中的皮肤将会被覆盖移除',
-    'settings.hotReload': '皮肤热重载',
-    'settings.hotReloadHint': '皮肤文件保存后自动重载已加载的皮肤；仅开发构建生效，正常用户无需开启',
-    'settings.hotReloadOn': '已开启皮肤热重载',
-    'settings.hotReloadOff': '已关闭皮肤热重载',
+    'settings.hotReload': '开发模式',
+    'settings.hotReloadHint': '皮肤文件保存后自动重载已加载的皮肤（仅开发构建生效）；皮肤窗口内按 F12 或 Ctrl+Shift+I 打开开发者工具',
+    'settings.hotReloadOn': '已开启开发模式',
+    'settings.hotReloadOff': '已关闭开发模式',
     'settings.tabGeneral': '通用',
     'settings.tabAppearance': '外观',
     'settings.tabAdvanced': '高级',
@@ -116,6 +116,20 @@ const MESSAGES = {
     'settings.updateCheckHint': '启动时检测 GitHub 上的新版本',
     'settings.updateCheckOn': '已开启更新检测',
     'settings.updateCheckOff': '已关闭更新检测',
+    'settings.log': '日志',
+    'settings.logHint': '查看后端警告/报错与皮肤控制台输出（调试皮肤时定位问题）',
+    'settings.logOpen': '打开日志窗口',
+
+    // ── 日志窗口（log.js） ──
+    'log.title': '日志',
+    'log.levelInfo': '信息',
+    'log.levelWarn': '警告',
+    'log.levelError': '错误',
+    'log.sourceAll': '全部来源',
+    'log.sourceBackend': '后端',
+    'log.sourceSkin': '皮肤',
+    'log.clear': '清空',
+    'log.empty': '暂无日志',
 
     // ── 更新弹窗（update-check.js） ──
     'update.title': '发现新版本',
@@ -206,8 +220,10 @@ const MESSAGES = {
     'wizard.loadFailed': '加载失败',
     'wizard.permissions': '权限声明',
     'wizard.permNone': '该皮肤未声明额外权限',
+    'wizard.freeCapabilities': '无需声明即可用：只读系统信息（CPU/内存/前台窗口/正在播放/进程等）与皮肤自身目录文件读写',
     'wizard.permHighRisk': '高危',
     'wizard.permMediumRisk': '中危',
+    'wizard.hostTooOld': '该皮肤要求 Driftlet ≥ v{version}；当前应用版本较旧，部分功能可能不可用',
     'wizard.permRegistry': '注册表读取',
     'wizard.permRegistryDesc': '只读访问 Windows 注册表',
     'wizard.permShell': '执行命令',
@@ -312,10 +328,10 @@ const MESSAGES = {
     'settings.backupImportTitle': 'Import Backup',
     'settings.backupImportBody': 'The backup will replace all current settings and skins. This cannot be undone.',
     'settings.backupImportHint': 'Skins not in the backup will be overwritten and removed.',
-    'settings.hotReload': 'Skin hot reload',
-    'settings.hotReloadHint': 'Reloads loaded skins when their files are saved; development builds only — regular users do not need this',
-    'settings.hotReloadOn': 'Skin hot reload enabled',
-    'settings.hotReloadOff': 'Skin hot reload disabled',
+    'settings.hotReload': 'Developer mode',
+    'settings.hotReloadHint': 'Reloads loaded skins when their files are saved (development builds only); press F12 or Ctrl+Shift+I inside a skin window to open DevTools',
+    'settings.hotReloadOn': 'Developer mode enabled',
+    'settings.hotReloadOff': 'Developer mode disabled',
     'settings.tabGeneral': 'General',
     'settings.tabAppearance': 'Appearance',
     'settings.tabAdvanced': 'Advanced',
@@ -323,6 +339,20 @@ const MESSAGES = {
     'settings.updateCheckHint': 'Check GitHub for a new version on startup',
     'settings.updateCheckOn': 'Update check enabled',
     'settings.updateCheckOff': 'Update check disabled',
+    'settings.log': 'Logs',
+    'settings.logHint': 'View backend warnings/errors and skin console output (for debugging skins)',
+    'settings.logOpen': 'Open Log Window',
+
+    // ── Log window (log.js) ──
+    'log.title': 'Logs',
+    'log.levelInfo': 'Info',
+    'log.levelWarn': 'Warn',
+    'log.levelError': 'Error',
+    'log.sourceAll': 'All sources',
+    'log.sourceBackend': 'Backend',
+    'log.sourceSkin': 'Skin',
+    'log.clear': 'Clear',
+    'log.empty': 'No log entries',
 
     // ── Update dialog (update-check.js) ──
     'update.title': 'Update Available',
@@ -413,8 +443,10 @@ const MESSAGES = {
     'wizard.loadFailed': 'Failed to load',
     'wizard.permissions': 'Permissions',
     'wizard.permNone': 'This skin declares no extra permissions',
+    'wizard.freeCapabilities': 'Available without declaration: read-only system info (CPU/memory/foreground window/now playing/processes, etc.) and file I/O within the skin\'s own folder',
     'wizard.permHighRisk': 'High risk',
     'wizard.permMediumRisk': 'Medium risk',
+    'wizard.hostTooOld': 'This skin requires Driftlet ≥ v{version}; your app is older, so some features may not work',
     'wizard.permRegistry': 'Registry read',
     'wizard.permRegistryDesc': 'Read-only access to the Windows Registry',
     'wizard.permShell': 'Run commands',
@@ -445,8 +477,17 @@ export function t(key, params) {
   return s;
 }
 
-/** 启动时读取后端配置确定界面语言（须在首屏渲染前调用） */
-export async function initI18n() {
+/**
+ * 启动时读取后端配置确定界面语言（须在首屏渲染前调用）。
+ * forceLang：日志窗口这类调不动 get_app_config 的页面，由后端把语言
+ * 烘焙进 URL query 传进来。
+ */
+export async function initI18n(forceLang) {
+  if (forceLang && MESSAGES[forceLang]) {
+    currentLang = forceLang;
+    document.documentElement.lang = currentLang;
+    return;
+  }
   try {
     const config = await API.getAppConfig();
     if (config?.language && MESSAGES[config.language]) {

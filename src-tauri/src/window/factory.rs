@@ -1036,7 +1036,7 @@ pub fn create_skin_window(
     // injected bridge).  Do NOT re-add an eval here: it races the page load
     // and used to drop the lock flag on every window recreation.
 
-    log::info!("Skin window created: {}", skin.id);
+    log::debug!("Skin window created: {}", skin.id);
     Ok(window)
 }
 
@@ -1313,6 +1313,21 @@ pub fn disable_browser_accelerator_keys(
         flag.store(ok.is_ok(), std::sync::atomic::Ordering::SeqCst);
     });
     applied
+}
+
+/// Open a skin webview's DevTools window (开发模式：桥接捕获 F12 /
+/// Ctrl+Shift+I 后经 open_skin_devtools 命令调用)。精确开锁，不动全局禁用
+/// 的浏览器加速键——SetAreBrowserAcceleratorKeysEnabled(true) 会连带放回
+/// F5/Ctrl+R 刷新键，并与 5 秒维护定时器的自愈重设互踩。
+/// with_webview 在主线程内联执行（同 disable_default_context_menu 的契约）。
+#[cfg(target_os = "windows")]
+pub fn open_devtools(window: &tauri::WebviewWindow) {
+    let _ = window.with_webview(move |webview| unsafe {
+        let _ = webview
+            .controller()
+            .CoreWebView2()
+            .and_then(|core| core.OpenDevToolsWindow());
+    });
 }
 
 /// Retry applying webview hardening after window creation (no default
