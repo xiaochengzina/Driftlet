@@ -166,6 +166,13 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 
 ; Installer pages, must be ordered as they appear
 ; 1. Welcome Page
+; Driftlet customization: the stock MUI welcome text claims all other apps
+; must be closed before installing (to update system files without reboot).
+; Not true here — only Driftlet itself is restarted, already covered by the
+; appRunning checks — so the text is replaced via MUI_WELCOMEPAGE_TEXT with
+; a per-language LangString (defined below, next to `autostart`; forward
+; LangString references resolve fine, same as the finish-page label).
+!define MUI_WELCOMEPAGE_TEXT "$(driftletWelcomeText)"
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_WELCOME
 
@@ -236,23 +243,33 @@ Function PageReinstall
   ${If} $R0 = 0
     StrCpy $R1 "$(alreadyInstalledLong)"
     StrCpy $R2 "$(addOrReinstall)"
-    StrCpy $R3 "$(uninstallApp)"
+    ; Driftlet customization: uninstalling always wipes app data (hook
+    ; POSTUNINSTALL), so the label says so — same as the upgrade branch.
+    StrCpy $R3 "$(driftletUninstallApp)"
     !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(chooseMaintenanceOption)"
   ; Upgrading
   ${ElseIf} $R0 = 1
-    StrCpy $R1 "$(olderOrUnknownVersionInstalled)"
-    StrCpy $R2 "$(uninstallBeforeInstalling)"
-    StrCpy $R3 "$(dontUninstall)"
+    StrCpy $R1 "$(driftletUpgradePrompt)"
+    ; Driftlet customization: overwrite install is now the first (default)
+    ; option; uninstalling first wipes app data, so it is the second option
+    ; and says so. The bundled lang-file labels (uninstallBeforeInstalling /
+    ; dontUninstall) are bundler output and can't be edited — our own
+    ; LangStrings are defined below, next to `autostart`.
+    StrCpy $R2 "$(driftletOverwriteInstall)"
+    StrCpy $R3 "$(driftletUninstallFirst)"
     !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(choowHowToInstall)"
   ; Downgrading
   ${ElseIf} $R0 = -1
+    ; Driftlet customization: the two options are swapped/renamed as in the
+    ; upgrade branch, but the header prompt stays stock — downgrading is
+    ; genuinely discouraged, so "uninstall first" remains the recommendation.
     StrCpy $R1 "$(newerVersionInstalled)"
-    StrCpy $R2 "$(uninstallBeforeInstalling)"
     !if "${ALLOWDOWNGRADES}" == "true"
-      StrCpy $R3 "$(dontUninstall)"
+      StrCpy $R2 "$(driftletOverwriteInstall)"
     !else
-      StrCpy $R3 "$(dontUninstallDowngrade)"
+      StrCpy $R2 "$(driftletOverwriteDowngradeDisabled)"
     !endif
+    StrCpy $R3 "$(driftletUninstallFirst)"
     !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(choowHowToInstall)"
   ${Else}
     Abort
@@ -280,9 +297,14 @@ Function PageReinstall
 
     ${NSD_CreateRadioButton} 30u 70u -30u 8u $R3
     Pop $R3
-    ; Disable this radio button if downgrading and downgrades are disabled
+    ; Disable the overwrite option (the first radio after the Driftlet swap)
+    ; if downgrading and downgrades are disabled, and force the default
+    ; selection onto uninstall-first.
     !if "${ALLOWDOWNGRADES}" == "false"
-      ${IfThen} $R0 = -1 ${|} EnableWindow $R3 0 ${|}
+      ${If} $R0 = -1
+        EnableWindow $R2 0
+        StrCpy $ReinstallPageCheck 2
+      ${EndIf}
     !endif
     ${NSD_OnClick} $R3 PageReinstallUpdateSelection
 
@@ -331,16 +353,16 @@ Function PageLeaveReinstall
       Goto reinst_uninstall
     ${EndIf}
   ${ElseIf} $R0 = 1 ; Upgrading
-    ${If} $R1 = 1              ; User chose to uninstall
+    ${If} $R1 = 1              ; User chose overwrite install (default)
+      Goto reinst_done
+    ${Else}                    ; User chose to uninstall first (data erased)
       Goto reinst_uninstall
-    ${Else}
-      Goto reinst_done         ; User chose NOT to uninstall
     ${EndIf}
   ${ElseIf} $R0 = -1 ; Downgrading
-    ${If} $R1 = 1              ; User chose to uninstall
+    ${If} $R1 = 1              ; User chose overwrite install (default)
+      Goto reinst_done
+    ${Else}                    ; User chose to uninstall first (data erased)
       Goto reinst_uninstall
-    ${Else}
-      Goto reinst_done         ; User chose NOT to uninstall
     ${EndIf}
   ${EndIf}
 
@@ -431,18 +453,11 @@ Function RunMainBinary
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
 FunctionEnd
 
-; First entry reflects the CURRENT registry (a reinstall with autostart
-; already on shows the box checked; fresh installs default unchecked,
-; matching the app's autostart default). Re-entries (Back → Next) restore
-; the user's own choice instead.
+; First entry defaults to CHECKED — project decision: autostart is opt-out,
+; not opt-in. Re-entries (Back → Next) restore the user's own choice instead.
 Function FinishPageShow
   ${If} $AutostartCheckboxState == ""
-    ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "driftlet"
-    ${If} $R0 == ""
-      StrCpy $AutostartCheckboxState ${BST_UNCHECKED}
-    ${Else}
-      StrCpy $AutostartCheckboxState ${BST_CHECKED}
-    ${EndIf}
+    StrCpy $AutostartCheckboxState ${BST_CHECKED}
   ${EndIf}
   ${NSD_CreateCheckbox} 120u 130u 195u 10u "$(autostart)"
   Pop $AutostartCheckbox
@@ -502,6 +517,30 @@ FunctionEnd
 ; FinishPageShow above). Keep in sync with the settings panel wording.
 LangString autostart ${LANG_ENGLISH} "Launch Driftlet at login"
 LangString autostart ${LANG_SIMPCHINESE} "开机自动启动 Driftlet"
+
+; Driftlet customization: welcome-page text (referenced by the
+; MUI_WELCOMEPAGE_TEXT define above) — replaces the stock paragraph that
+; claims all other applications must be closed before installing.
+LangString driftletWelcomeText ${LANG_ENGLISH} "Setup will guide you through the installation of ${PRODUCTNAME}.$\r$\n$\r$\nNo need to close other applications first.$\r$\n$\r$\nClick Next to continue."
+LangString driftletWelcomeText ${LANG_SIMPCHINESE} "此程序将引导你完成 ${PRODUCTNAME} 的安装。$\r$\n$\r$\n安装过程无需关闭其他应用程序。$\r$\n$\r$\n点击 [下一步(N)] 继续。"
+
+; Driftlet customization: reinstall-page prompt and radio labels (used by
+; PageReinstall above). Overwrite install is the first/default option;
+; uninstall-first is demoted to second and warns that data will be erased.
+; The upgrade prompt recommends overwriting; the downgrade prompt stays
+; stock (newerVersionInstalled). $R4 in the prompt holds
+; "$(older)"/"$(unknown)" at runtime.
+LangString driftletOverwriteInstall ${LANG_ENGLISH} "Install over the current version"
+LangString driftletOverwriteInstall ${LANG_SIMPCHINESE} "覆盖安装"
+LangString driftletUninstallFirst ${LANG_ENGLISH} "Uninstall before installing (data will be erased)"
+LangString driftletUninstallFirst ${LANG_SIMPCHINESE} "安装前卸载（数据将会清除）"
+LangString driftletUninstallApp ${LANG_ENGLISH} "Uninstall ${PRODUCTNAME} (data will be erased)"
+LangString driftletUninstallApp ${LANG_SIMPCHINESE} "卸载 ${PRODUCTNAME}（数据将会清除）"
+LangString driftletUpgradePrompt ${LANG_ENGLISH} "An $R4 version of ${PRODUCTNAME} is installed on your system. Installing over the current version is recommended. Select the operation you want to perform and click Next to continue."
+LangString driftletUpgradePrompt ${LANG_SIMPCHINESE} "系统中已存在版本为 $R4 的 ${PRODUCTNAME}。推荐直接覆盖安装。选择你想要执行的操作后点击下一步以继续。"
+; Only used when ALLOWDOWNGRADES == "false" (currently not the case).
+LangString driftletOverwriteDowngradeDisabled ${LANG_ENGLISH} "Install over the current version (downgrading without uninstall is disabled for this installer)"
+LangString driftletOverwriteDowngradeDisabled ${LANG_SIMPCHINESE} "覆盖安装（此安装程序禁止未卸载就进行版本降级的操作）"
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode

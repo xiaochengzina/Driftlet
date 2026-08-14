@@ -1709,9 +1709,9 @@ pub(crate) fn open_log_window_impl(app: &AppHandle) -> Result<(), String> {
     .title("Driftlet")
     .inner_size(860.0, 540.0)
     .min_inner_size(560.0, 360.0)
+    // 同管理器窗：无边框建窗 + apply_native_frame 补「无标题栏原生窗框」
     .decorations(false)
-    // 同管理器窗：无边框 + 原生阴影（皮肤窗必须 shadow(false)，这里不是皮肤窗）
-    .shadow(true)
+    .shadow(false)
     .resizable(true)
     .center()
     .build()
@@ -1720,9 +1720,20 @@ pub(crate) fn open_log_window_impl(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(hwnd) = win.hwnd() {
-            crate::round_window_corners(hwnd.0 as isize);
+            // SetWindowSubclass 必须在窗口属主线程调用，本函数跑在
+            // spawn_blocking worker 上——转交主线程执行（窗框几帧内补上，
+            // 期间是既有的无边框观感，无标题栏闪现风险：tao 对无边框窗
+            // 本就归零 NCCALCSIZE）
+            let hwnd_val = hwnd.0 as isize;
+            if let Err(e) = app.run_on_main_thread(move || {
+                if !crate::apply_native_frame(hwnd_val) {
+                    log::error!("apply_native_frame: SetWindowSubclass failed for log window");
+                }
+            }) {
+                log::error!("run_on_main_thread failed for log window frame: {}", e);
+            }
             // 同管理器窗：任务栏按钮/悬停预览图标（见 apply_window_icon 注释）
-            crate::apply_window_icon(hwnd.0 as isize);
+            crate::apply_window_icon(hwnd_val);
         }
         // 右键菜单 / F5·Ctrl+R 等浏览器加速键屏蔽（异步初始化重试，同管理器窗）
         factory::spawn_webview_hardening_retry(&app, "log");

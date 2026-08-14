@@ -1963,11 +1963,6 @@ body.hover-ok .settings-close:hover {
   color: var(--warning);
 }
 
-/* 免声明能力披露（固定显示在权限区块后）：中性小字，区别于成功/警告色的 wizard-note */
-.wizard-note.wizard-freecaps {
-  color: var(--text-faint);
-}
-
 /* 权限声明列表：已知权限带名称与说明；高危（红）/ 中危（黄）分级标出 */
 .wizard-perms {
   margin: 0 0 14px;

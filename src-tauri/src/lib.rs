@@ -272,11 +272,12 @@ pub fn run() {
             .title("Driftlet")
             .inner_size(960.0, 640.0)
             .min_inner_size(640.0, 460.0)
+            // 「无标题栏原生窗框」：无边框建窗（tao 剥 WS_CAPTION|WS_THICKFRAME）
+            // + 建窗后补回 WS_THICKFRAME|WS_BORDER（见 apply_native_frame）。
+            // 保持 shadow(false)——那是 DwmExtendFrameIntoClientArea 玻璃延伸
+            // 路径，与真实窗框叠加会在窗缘留 1px 玻璃线
             .decorations(false)
-            // 无边框窗口的原生阴影：经 tao with_undecorated_shadow 调
-            // DwmExtendFrameIntoClientArea（1px 边距），与其它自绘标题栏
-            // 软件同款；皮肤窗口必须保持 shadow(false)（见 factory.rs）
-            .shadow(true)
+            .shadow(false)
             .resizable(true)
             .center()
             .visible(false)
@@ -285,12 +286,13 @@ pub fn run() {
                 fatal_startup_error(&format!("Failed to create manager window: {}", e))
             });
 
-            // Apply rounded corners (Win11 DWM) on the frameless window
+            // 补回「无标题栏原生窗框」样式 + 任务栏/悬停预览/Alt+Tab 图标
             #[cfg(target_os = "windows")]
             {
                 if let Ok(hwnd) = manager.hwnd() {
-                    round_window_corners(hwnd.0 as isize);
-                    // 任务栏按钮/悬停预览/Alt+Tab 图标（见 apply_window_icon 注释）
+                    if !apply_native_frame(hwnd.0 as isize) {
+                        log::error!("apply_native_frame: SetWindowSubclass failed for manager window");
+                    }
                     apply_window_icon(hwnd.0 as isize);
                 }
             }
@@ -735,24 +737,172 @@ fn file_modified(path: &std::path::Path) -> std::time::SystemTime {
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
 }
 
+/// 管理器类窗口（管理器/日志窗）的「无标题栏原生窗框」子类。
+///
+/// 背景：tao 0.35 对 decorations(false) 的窗口自建 NCCALCSIZE=0（client=
+/// 整个窗口矩形，见其 event_loop.rs 对 WM_NCCALCSIZE 的处理）——DWM 据
+/// 「非客户区为空」判定无框可画，边框与阴影都不出现。本子类把 WM_NCCALCSIZE
+/// 绕开 tao 直接交给 DefWindowProcW 默认处理：非客户区回到真实窗框厚度
+/// （配合 apply_native_frame 剥掉 WS_CAPTION，无标题栏高度），DWM 随即画出
+/// 原生 1px 边框、阴影与最大化/贴靠动画。默认处理后还要按状态修正几何：
+/// 还原态把 client 顶边拉回「窗口顶 + 1px」（默认结果把可缩放边框厚度 inset
+/// 留在可视区顶部，DWM 只画 1px 顶边框、其余 ~7px 成死白边）；最大化把
+/// client 改为显示器 work area、并拦 WM_GETMINMAXINFO 把最大化摆窗改为
+/// 「work area + 边框膨胀」（无 WS_CAPTION 时系统按显示器全矩形摆窗、不做
+/// work area 收缩——client 盖住任务栏区，窗口矩形底边非客户区还会把非置顶
+/// 任务栏整段盖掉）。探针实证见 apply_native_frame。
+///
+/// 第二个坑：tao 的 WindowState::apply_diff 在任何窗口标志变化时
+/// （set_visible、最大化/还原等）用 to_window_styles() 全量重写
+/// GWL_STYLE，而该函数无条件带上 WS_CAPTION（仅 CHILD 窗口才按
+/// decorations 剥除）——建窗时剥掉的标题栏会被 show() 静默加回。
+/// 故子类同时拦截 WM_STYLECHANGING，在样式落地前就地改写 styleNew，
+/// 让 WS_CAPTION 永远落不了地（同 factory.rs 皮肤子类的既有手法）。
 #[cfg(target_os = "windows")]
-pub(crate) fn round_window_corners(hwnd_val: isize) {
-    use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWM_WINDOW_CORNER_PREFERENCE,
-    };
-    use windows::Win32::Foundation::HWND;
+const NATIVE_FRAME_SUBCLASS_ID: usize = 0x4E4652; // "NFR"；皮肤无边框子类见 factory.rs
 
-    let h = HWND(hwnd_val as *mut _);
-    // DWMWCP_ROUND = 2 — enable rounded corners (Win11 only, no-op on Win10)
-    let corner_pref = DWM_WINDOW_CORNER_PREFERENCE(2);
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn native_frame_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    msg: u32,
+    w_param: windows::Win32::Foundation::WPARAM,
+    l_param: windows::Win32::Foundation::LPARAM,
+    _uidsubclass: usize,
+    _dwrefdata: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DefWindowProcW, GWL_STYLE, IsZoomed, MINMAXINFO, NCCALCSIZE_PARAMS, STYLESTRUCT,
+        WM_GETMINMAXINFO, WM_NCCALCSIZE, WM_STYLECHANGING, WS_BORDER, WS_CAPTION,
+        WS_THICKFRAME,
+    };
+    // 纯 FFI 转发/就地改写、无锁无分配，不存在 panic 路径（无需 catch_unwind 包装）
+    if msg == WM_GETMINMAXINFO {
+        // 先让 tao 套它自己的 min/max 约束，再修正最大化摆放：无 WS_CAPTION 的
+        // THICKFRAME 窗口，系统默认按显示器全矩形 + 边框膨胀摆放最大化
+        // （实测 (-7,-7)-(1543,871)，显示器 1536x864）——client 修正只保住了
+        // 内容区，窗口矩形的底边非客户区仍会盖住非置顶任务栏。改成与带标题栏
+        // 窗口一致的「work area + 边框膨胀」口径（(-7,-7)-(1543,831)）。
+        // 膨胀量不硬编码：从 tao/默认填好的 ptMaxSize 与显示器尺寸反推（跨 DPI）。
+        let result = DefSubclassProc(hwnd, msg, w_param, l_param);
+        let mmi = &mut *(l_param.0 as *mut MINMAXINFO);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi).as_bool()
+        {
+            let inflate_x =
+                (mmi.ptMaxSize.x - (mi.rcMonitor.right - mi.rcMonitor.left)) / 2;
+            let inflate_y =
+                (mmi.ptMaxSize.y - (mi.rcMonitor.bottom - mi.rcMonitor.top)) / 2;
+            mmi.ptMaxPosition.x = mi.rcWork.left - inflate_x;
+            mmi.ptMaxPosition.y = mi.rcWork.top - inflate_y;
+            mmi.ptMaxSize.x = (mi.rcWork.right - mi.rcWork.left) + 2 * inflate_x;
+            mmi.ptMaxSize.y = (mi.rcWork.bottom - mi.rcWork.top) + 2 * inflate_y;
+        }
+        return result;
+    }
+    if msg == WM_NCCALCSIZE {
+        if w_param.0 == 0 {
+            return DefWindowProcW(hwnd, msg, w_param, l_param);
+        }
+        // 默认处理把可缩放边框厚度 inset 加在四边，两处都需修正：
+        // 1) 非最大化：左/右/下 inset 被 DWM 放到可视区外（GetWindowRect 比
+        //    可视框大约 7px），唯独顶部留在可视区内——DWM 只画 1px 顶边框，
+        //    其余 ~7px 成死白边。故把 client 顶边拉回「窗口顶 + 1px」。
+        // 2) 最大化：无 WS_CAPTION 的 THICKFRAME 窗口最大化时系统按显示器
+        //    全矩形摆窗（不做 work area 收缩），默认结果 client 盖住任务栏
+        //    区域（实测 client=显示器全尺寸，底部 40px 藏进任务栏下）——
+        //    这里把 client 矩形改写为显示器 work area；窗口矩形本身的摆放
+        //    由上面的 WM_GETMINMAXINFO 分支同步修正（否则底边非客户区会把
+        //    非置顶任务栏整段盖掉）。
+        // 探针实证 tools/win32-probes/top-inset-probe.ps1：还原态 clientTop
+        // 8px→1px、最大化 client=rcWork 精确贴合，两种状态下边框/阴影/无
+        // 标题栏均完好（不触发细框环那条「DWM 画出完整标题栏」的坑）。
+        let params = &mut *(l_param.0 as *mut NCCALCSIZE_PARAMS);
+        let win_top = params.rgrc[0].top;
+        let result = DefWindowProcW(hwnd, msg, w_param, l_param);
+        if IsZoomed(hwnd).as_bool() {
+            let mut mi = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi)
+                .as_bool()
+            {
+                params.rgrc[0] = mi.rcWork;
+            }
+        } else {
+            params.rgrc[0].top = win_top + 1;
+        }
+        return result;
+    }
+    if msg == WM_STYLECHANGING && w_param.0 as i32 == GWL_STYLE.0 {
+        // tao apply_diff 全量重写样式时会带回 WS_CAPTION（见上注释）——
+        // 落地前剥掉标题栏、保住可缩放边框，之后的 WM_STYLECHANGED /
+        // NCCALCSIZE 都按净化后的样式走，无需二次 SetWindowPos
+        let ss = &mut *(l_param.0 as *mut STYLESTRUCT);
+        ss.styleNew = (ss.styleNew & !WS_CAPTION.0) | WS_THICKFRAME.0 | WS_BORDER.0;
+    }
+    DefSubclassProc(hwnd, msg, w_param, l_param)
+}
+
+/// 给无边框建窗的管理器类窗口补回「无标题栏的原生窗框」：
+/// 样式剥 WS_CAPTION（标题栏）、加回 WS_THICKFRAME|WS_BORDER（可缩放框），
+/// 并装上 native_frame_proc 子类把 NCCALCSIZE 交还默认处理、再按状态修正
+/// 几何（还原态 client 顶边拉回「窗口顶 + 1px」消除顶部死白边；最大化
+/// client 改为显示器 work area，并拦 WM_GETMINMAXINFO 把最大化摆窗改为
+/// 「work area + 边框膨胀」——无 WS_CAPTION 时系统按全矩形摆窗，client 与
+/// 窗口底边非客户区都会盖住任务栏）——DWM 随即绘制
+/// 原生 1px 边框与阴影而无标题栏。Win10 探针实证
+/// （tools/win32-probes/frame-probe.ps1）：
+///   - NCCALCSIZE 归零（tao 对无边框窗的默认行为）→ DWM 什么都不画；
+///   - 部分非客户区（细框环）→ DWM 画出完整标题栏；
+///   - 唯有「WS_THICKFRAME|WS_BORDER、无 WS_CAPTION、NCCALCSIZE 默认」
+///     = 原生框+影+无标题栏。
+/// client/摆窗修正方案另经 tools/win32-probes/top-inset-probe.ps1 实证：
+/// 还原态 clientTop 8px→1px、最大化 rect=work+膨胀 且 client=rcWork 精确
+/// 贴合、边框+阴影完好、不触发细框环的标题栏坑。
+/// SetWindowSubclass 必须在窗口属主线程调用（跨线程失败，见 factory.rs）。
+#[cfg(target_os = "windows")]
+pub(crate) fn apply_native_frame(hwnd_val: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
+        GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+        SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_THICKFRAME,
+    };
+
+    let hwnd = HWND(hwnd_val as *mut _);
     unsafe {
-        let _ = DwmSetWindowAttribute(
-            h,
-            DWMWA_WINDOW_CORNER_PREFERENCE,
-            &corner_pref as *const _ as *const std::ffi::c_void,
-            std::mem::size_of_val(&corner_pref) as u32,
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        SetWindowLongPtrW(
+            hwnd,
+            GWL_STYLE,
+            (style & !(WS_CAPTION.0 as isize))
+                | WS_THICKFRAME.0 as isize
+                | WS_BORDER.0 as isize,
         );
+        let ok = SetWindowSubclass(
+            hwnd,
+            Some(native_frame_proc),
+            NATIVE_FRAME_SUBCLASS_ID,
+            0,
+        )
+        .as_bool();
+        // 让 DWM 按新样式 + 新 NCCALCSIZE 口径重估窗框
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
+        );
+        ok
     }
 }
 

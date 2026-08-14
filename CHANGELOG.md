@@ -2,6 +2,22 @@
 
 本文件记录 Driftlet 的所有重要变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.7] - 2026-08-14
+
+### 变更
+
+- **安装器三处文案/默认行为修正**（installer.nsi 自定义，中英双语同步）：①欢迎页删去「请先关闭其他所有应用程序」段落——本安装器只需重启 Driftlet 自身（appRunning 检查已覆盖），无更新系统文件之虞，经 `MUI_WELCOMEPAGE_TEXT` 换成自定义 `LangString driftletWelcomeText`；②完结页「开机自动启动」改为默认勾选（opt-out，不再读注册表现状作初值，Back→Next 重进仍恢复用户选择）；③检测到旧版的重装页选项互换——「覆盖安装」（原「请勿卸载」）升为默认首项，「安装前卸载」降为次项并标注「（数据将会清除）」，顶部推荐语同步改为「推荐直接覆盖安装」（仅升级分支；降级分支保留原版「推荐先卸载」文案、只互换选项，同版本分支顺序本就是保留数据项在前故不动，仅「卸载」标签同样标注「（数据将会清除）」）；`PageLeaveReinstall` 升级/降级分支第一选项语义随之反转为直接安装。关键机制双版同步。
+
+### 修复
+
+- **管理器/日志窗改为「无标题栏原生窗框」，Win10 重获原生边框+阴影**：无边框建窗后 `apply_native_frame` 剥 `WS_CAPTION`、加回 `WS_THICKFRAME|WS_BORDER`，并用 `native_frame_proc` 子类把 `WM_NCCALCSIZE` 绕开 tao 交还 `DefWindowProcW` 默认处理——关键坑是 tao 0.35 对 `decorations(false)` 窗口自建 NCCALCSIZE=0，DWM 据「非客户区为空」判定无框可画，只补样式位无效；第二坑是 tao 的 `apply_diff` 在任何窗口标志变化时（`show()`、最大化/还原等）全量重写 `GWL_STYLE` 并无条件带回 `WS_CAPTION`，故子类再拦 `WM_STYLECHANGING` 在样式落地前就地剥掉标题栏位。Win10 实机探针（新增 `tools/win32-probes/frame-probe.ps1`）逐一证伪候选路线：NCCALCSIZE 归零 → 边框阴影全丢；部分非客户区 → 画出完整标题栏；仅「THICKFRAME+BORDER、无 CAPTION、默认 NCCALCSIZE」= 原生 1px 边框 + 阴影 + 无标题栏（Win11 圆角/轮廓随真实窗框自动生效），`verify_manager_frame.py` 实测管理器窗 ext bounds 内缩 7px 确认 DWM 画框。随附拆除：custom caption 子类（`install_custom_caption`，NCCALCSIZE 归零路线）、早前已拆的 CSS 自绘描边不再恢复；两窗口保持 `shadow(false)`（玻璃延伸与真窗框叠加会留 1px 玻璃线）。皮肤窗口无边框机制不动。关键机制双版同步改写。
+- **管理器/日志窗顶部 ~7px 死白边**（上一条「无标题栏原生窗框」落地的观感尾巴）：默认 `WM_NCCALCSIZE` 把可缩放边框厚度 inset 加在四边，左/右/下被 DWM 放到可视区外，唯独顶部留在可视区内——DWM 只画 1px 顶边框，其余 ~7px 是死白边，整个标题栏被压低。`native_frame_proc` 现在在默认处理后、非最大化时把 `rgrc[0].top` 改写为「窗口顶 + 1px」（最大化的处理见下一条），四边观感对齐为 1px 边框紧贴内容；新增探针 `tools/win32-probes/top-inset-probe.ps1` 实证 clientTop 8px→1px、边框+阴影完好、无标题栏。关键机制双版同步。
+- **管理器/日志窗最大化变「全屏」盖住任务栏区**：无 `WS_CAPTION` 的 `THICKFRAME` 窗口最大化时系统按显示器全矩形摆窗（不做 work area 收缩），默认 NCCALCSIZE 得出的 client 精确等于显示器全尺寸，且窗口矩形底边非客户区把非置顶任务栏整段盖掉（tao 归零 NCCALCSIZE 的无边框时代同样有此问题）。`native_frame_proc` 双管齐下：`IsZoomed` 时把 `rgrc[0]` 整体改写为 `MonitorFromWindow` 的 `rcWork`（内容区贴合工作区），并拦 `WM_GETMINMAXINFO` 把 `ptMaxPosition`/`ptMaxSize` 改为「work area + 边框膨胀」（窗口矩形不再伸进任务栏区，膨胀量从默认 `ptMaxSize` 反推、跨 DPI，tao 的 min 约束不受影响）；探针 `top-inset-probe.ps1` 的 M-zoomed 案实证最大化 rect=work+膨胀、client=rcWork、DWM 不画标题栏。关键机制双版「第三个坑」同步扩写。
+
+### 移除
+
+- **安装向导的免声明能力清单行**：撤下 1.0.6 新增的权限区块后固定提示（`wizard.freeCapabilities` 中英键、`.wizard-freecaps` 样式一并摘除），权限展示回到仅逐条列出声明项 + 风险分级。双版指南 §2.3 同步。
+
 ## [1.0.6] - 2026-08-13
 
 ### 新增

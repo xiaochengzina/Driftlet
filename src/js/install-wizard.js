@@ -119,7 +119,6 @@ export default class InstallWizard {
         </div>
         ${dispDesc(info) ? `<p class="wizard-desc">${esc(dispDesc(info))}</p>` : ''}
         ${this._renderPermissions(info.permissions)}
-        <p class="wizard-note wizard-freecaps">${t('wizard.freeCapabilities')}</p>
         ${info.requires_host_version ? `<p class="wizard-note warn">${t('wizard.hostTooOld', { version: esc(info.requires_host_version) })}</p>` : ''}
         <div class="wizard-statusline ${danger ? 'danger' : ''}">
           <strong>${heading}</strong> · ${statusLine}
