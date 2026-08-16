@@ -2,6 +2,24 @@
 
 本文件记录 Driftlet 的所有重要变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.8] - 2026-08-16
+
+### 变更
+
+- **五个演示皮肤 UI 统一现代化为管理器同款材质**：`controls-demo` / `media-hub` / `sys-monitor` / `toolbox` 四个浅色皮肤从「`#f4f6f8` 平涂 + 8px 圆角 + 3px 顶部色带 + 虚线分隔」的旧朴素样式接入管理器令牌语言（冷纸底 `#f4f8fb`、白色浮卡 + 双层软投影、圆角 12/16、hairline 取代虚线分隔）；应用栏撤 3px 顶部色带改 hero 晕染卡（`controls-demo` 的晕染经 `color-mix` 跟随「主题色」设置项，不写死蓝）；用量条/进度条铺品牌渐变、按钮改白面 chip（激活/主按钮渐变 + 蓝光晕，media-hub 播放/暂停升为主按钮）、sys-monitor 进程排序与 media-hub 频谱来源改现代分段控件（灰底容器 + 激活块）、sys-monitor 主读数走 Cascadia 等宽大数字、徽标改软色胶囊（免权限绿 / 桥缺失红 / 状态点带微光）、toolbox 输入改灰底嵌入 + 焦点蓝环；`controls-demo` 只留浅色：背景色调由「白天/夜晚/自动」改浅色三档（冷纸/暖白/雾蓝，夜晚与按时间自动取消，旧存值归一到默认档），互斥开关组控件演示保留，进度条与小秒表并为一行；`deepseek-balance` 由深色玻璃改浅色白卡（管理器同款冷纸语言：`#ffffff→#f2f7fc` 微渐变外壳、灰底嵌入构成行、徽标改软色胶囊、充值钮改主题色实心 + `color-mix` 光晕，`--accent` 主题色设置项保留）。布局结构与 JS 契约（全部 id、动态类名、`--accent` 变量挂点）零改动。无头 Edge + iframe 真实视口截图目检通过（340×560 controls 昼夜双档、340×480 media、340×540 sys、360×540 toolbox、300×200 balance；headless 窄窗「布局视口宽于截图宽度、右侧元素出画」的工具问题用 iframe 包裹规避）；双版开发指南 §10 措辞同步。
+
+- **管理器 UI 材质现代化（纯 CSS，布局/标记零改动）**：原版「纯白平涂 + 发丝描边 + 小圆角」偏素显旧，本次只换材质不动结构——浅色底由纯白改冷纸色（`--bg-app #f4f8fb`，侧栏 `#eaf2f8`），卡片变白色浮面并启用环境软投影（新增 `--shadow-card` 双层：贴地接触影 + 环境光，`--shadow-chip` 给页签激活块等小浮起件），层级由明度 + 投影承担而非满屏 hairline（`--border` 同步减淡）；圆角放大一代（`--radius-lg 16 / --radius-md 12 / --radius-sm 8`，原 10/8/6）；深色主题改「暮海柔蓝」柔暗（dim）路线：刻意不走近黑 + 霓虹 accent 的同质答案，整体明度抬到中灰钢蓝区间（底 `#262e39` < 侧栏 `#222a34` < 浮卡 `#323c4b`），正文 ~88% 亮 `#dce3ea`（非纯白），描边 `rgba(170,200,225,…)`，accent 天蓝 `#63b8e6` 为唯一色相来源（浮卡上文本级 ~5:1），投影随面亮收敛；空态氛围光独立令牌 `--empty-glow`（双主题各档，解决图标背景光斑过强）。品牌色更敢用：主操作按钮（`.btn-add`/`.action-btn.primary`/`.confirm-btn.primary`/`.theme-btn.active`）加 `--accent-glow` 海浪蓝光晕投影；配置页眉改 hero 卡（`--header-wash` 淡蓝晕染 + 软投影，撤掉下缘虚线海图尺）；节标菱形与滑块菱形手柄改铺 `--accent-grad` 渐变（手柄加光晕）；页签/主题分段改现代分段控件（灰底容器 + 白色激活块浮起）；皮肤预览框加 `--preview-grad` 内渐变画布 + 细点阵纹理、占位图标着 accent 色；空态漂流瓶改白面浮砖并补中心氛围光（与安装引导页既有光晕同配方）；动作按钮默认态改白面 chip；toast/弹层/引导页图标砖随新圆角与阴影令牌。类名契约、`hover-ok` 门控、动效时长预算、菱形标绘语言全部保持；JS 与 Rust 净改动为零。无头 Edge 双主题截图目检通过（主界面填充态/空态/设置页，960×640），`docs/设计系统.md` 概念与验证工作流同步（另修正截图宽度为真实窗宽 960×640、补 `--user-data-dir` 无头静默退出坑）。
+
+### 新增
+
+- **皮肤库搜索**：侧栏头部右侧新增放大镜钮（`.search-toggle`，收起态零占位），点击或 `Ctrl/Cmd+F` 展开搜索行（`.sidebar-search`，与皮肤卡同一浮面材质），按显示名（当前语言）/ ID / 作者大小写不敏感即时过滤（列表规模小，无防抖）；**可收起设计**——有查询词时行强制保持展开，清空后 `Esc` 或再点按钮收起（不做 blur 自动收起：blur 时卡片还在原位，收起引起的行高变化会让 click 落到错误卡片上）；展开中放大镜钮转 accent 软底常亮。查询状态常驻 `SkinList.query`、展开态常驻 `App.searchOpen`（均不随外壳重建丢失），语言切换全量重绘后由 `app.js bindSearch` 恢复；清除钮（有内容时出现，点击后焦点回输入框）；`Ctrl/Cmd+F` 在输入控件内与设置弹层开着时不劫持；过滤中数量徽标显示「命中/总数」；零命中为搜索专属空态（放大镜 × 图标，与「还没有皮肤」区分）；选中皮肤被滤掉时保留选中态，配置面板不受影响。i18n 五键双语言（`list.searchToggle` / `list.searchPlaceholder` / `list.searchClear` / `list.noResults` / `list.noResultsHint`）；按压共享规则与 reduced-motion 块收编 `.search-toggle`。无头 Edge 双主题收起/展开两态截图目检通过；`docs/设计系统.md` 类名契约同步。
+
+- **示例皮肤 `deepseek-balance`**：DeepSeek 账户余额自动查询（`examples/deepseek-balance`，联网皮肤参考实现）——皮肤页直接 `fetch` 官方 REST 接口 `GET https://api.deepseek.com/user/balance`（服务端返回 CORS 允许头）；官方鲸鱼 Logo 自带文字 SVG 裁切图标区、内联 `currentColor` 随主题反白；API Key 走 `password` 设置项经 `skin_get_setting` 读取；定时自动查询（间隔 1–1440 分钟可配，默认 30）+ 页面隐藏暂停 / 恢复可见即补查 + 手动刷新按钮；总余额与充值余额展示（赠金常规为 0，仅在存在时显示）；余额预警线（默认 5，任一币种跌入即标黄数字 + 徽标告警，0 关闭）与低余额 Windows 通知（边沿触发不刷屏、余额回升后重新武装）、页脚一键打开充值页（`open_external`，platform.deepseek.com/top_up）；正常 / 余额不足 / 查询失败 / 未配置四态徽标；主题色与充值余额开关实时应用，中英双语跟随管理器；权限 `system`（系统通知 + 打开外部链接，安装引导页标高危）。双版开发指南 §10 与双版 README 目录树同步。
+
+### 修复
+
+- **管理器/日志窗失焦后顶边 1px 描边消失（Win10）**：「无标题栏原生窗框」配方（`WS_THICKFRAME|WS_BORDER`、无 `WS_CAPTION`）下，DWM 只在窗口活动态画顶边描边——失焦时根本不画（探针实证失焦后窗口顶行像素=背景，不是画成浅色；该配方的帧外观完全由 `WM_NCACTIVATE` 的默认处理上报驱动）。`native_frame_proc` 现在拦截 `WM_NCACTIVATE`：原参数先放行给 tao 做焦点簿记（`set_active` + focus 事件不受影响），再对 `DefWindowProcW` 谎报 `(TRUE, -1)` 把帧外观钉在活动态，失焦后描边/阴影不再消失。新增探针 `tools/win32-probes/focus-frame-probe.ps1`（配方级三路对照：现行=失焦无描边、谎报=两态俱在、跳过 DefWindowProc 直接返回 1=连活动态描边一起丢掉）与 `manager-focus-frame.ps1`（真机管理器窗两态采样，含 `AttachThreadInput` 破前台锁手法；修复前复现、修复后两态俱在）。关键机制双版同步。
+
 ## [1.0.7] - 2026-08-14
 
 ### 变更

@@ -75,6 +75,7 @@ npm run tauri build
 │   ├── sys-monitor/          # System monitor (the read-only system-info API set)
 │   ├── media-hub/            # Media console (volume / media / spectrum / notifications)
 │   ├── toolbox/              # Local toolbox (clipboard / files / registry / commands / settings read-write)
+│   ├── deepseek-balance/     # DeepSeek balance auto-query (networked-skin reference; low-balance alert + notification + top-up)
 │   ├── driftlet.js           # Optional wrapper: named command functions + event helpers (copy into a skin folder)
 │   └── driftlet.d.ts         # Type definitions for the bridge and all commands (editor autocomplete)
 ├── tools/

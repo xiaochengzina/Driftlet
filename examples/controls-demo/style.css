@@ -1,21 +1,30 @@
-/* controls-demo —— 简单朴素的演示样式（填充 + 内部滚动范式） */
+/* controls-demo —— 管理器同款现代材质：冷纸底 + 白色浮卡 + 软投影
+   （填充 + 内部滚动范式；accent 可被「主题色」设置项经 JS 改写，故
+   柔色一律用 color-mix 跟随 var(--accent)，不要写死蓝色） */
 
 :root {
   --accent: #0e75c3;
-  --bg: #f4f6f8;
+  --bg: #f4f8fb;
   --card: #ffffff;
-  --text: #24313b;
-  --muted: #7c8a95;
-  --border: #e2e8ed;
+  --input: #eef4f9;
+  --text: #102a33;
+  --muted: #5d717c;
+  --border: rgba(14, 117, 195, 0.1);
+  --border-strong: rgba(14, 117, 195, 0.24);
+  --shadow-card: 0 1px 2px rgba(15, 60, 80, 0.05), 0 8px 22px rgba(15, 60, 80, 0.07);
 }
 
-/* 白天 / 夜晚色调（radio 设置项驱动 body[data-mode]） */
-body[data-mode="night"] {
-  --bg: #1c2530;
-  --card: #26313e;
-  --text: #d6e0e8;
-  --muted: #8593a1;
-  --border: #37444f;
+/* 背景色调（radio 设置项驱动 body[data-mode]，全部浅色）：
+   默认冷纸白；暖白带一点米调、雾蓝更冷的灰蓝——只动底与输入槽，
+   卡片始终保持白面浮起（旧版夜晚档已撤，本皮肤只留浅色） */
+body[data-mode="warm"] {
+  --bg: #f7f4ee;
+  --input: #f0ece4;
+}
+
+body[data-mode="mist"] {
+  --bg: #e9f1f8;
+  --input: #dde8f2;
 }
 
 * { box-sizing: border-box; }
@@ -27,7 +36,7 @@ html, body {
 
 body {
   overflow: hidden; /* 不允许窗口级滚动条 */
-  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
   font-size: 13px;
   color: var(--text);
   background: transparent; /* 透明窗口：背景画在外壳上 */
@@ -39,18 +48,20 @@ body {
   flex-direction: column;
   height: 100%;
   background: var(--bg);
-  border-radius: 10px;
+  border-radius: 16px;
   overflow: hidden;
 }
 
-/* ── 应用区（标题栏 = 拖动区的一部分） ── */
+/* ── 应用区（标题栏 = 拖动区的一部分）：hero 卡语言——
+   白面 + 随主题色晕染（color-mix 跟 accent）+ 底缘发丝线；
+   旧版 3px 顶部色带已撤（缎带式色带是上一代语言） ── */
 
 .appbar {
   --accent: #0e75c3;
   padding: 14px 16px 12px;
   background: var(--card);
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 62%);
   border-bottom: 1px solid var(--border);
-  border-top: 3px solid var(--accent);
 }
 
 .appbar-top {
@@ -70,15 +81,17 @@ body {
   white-space: nowrap;
 }
 
+/* 状态点：带同色微光的信号灯 */
 .status {
   flex: none;
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #2fbf71;
+  box-shadow: 0 0 6px rgba(47, 191, 113, 0.55);
 }
 
-.status.off { background: #c4ccd3; }
+.status.off { background: #c4ccd3; box-shadow: none; }
 
 .subtitle {
   margin: 4px 0 10px;
@@ -86,10 +99,19 @@ body {
   color: var(--muted);
 }
 
+/* 进度条 + 小秒表同行：条弹性占满，秒表等宽数字右置防抖动 */
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .progress {
+  flex: 1;
+  min-width: 0;
   height: 6px;
-  border-radius: 3px;
-  background: var(--border);
+  border-radius: 999px;
+  background: var(--input);
   overflow: hidden;
 }
 
@@ -97,13 +119,14 @@ body {
   display: block;
   height: 100%;
   background: var(--accent);
-  border-radius: 3px;
+  border-radius: 999px;
   transition: width 0.2s ease;
 }
 
 /* 小秒表（stepper 驱动）：等宽数字防计数抖动 */
 .ticker {
-  margin: 6px 0 0;
+  flex: none;
+  margin: 0;
   font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -115,7 +138,7 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden auto; /* 内容超高在面板内滚动，不撑出窗口 */
-  padding: 12px 14px 16px;
+  padding: 12px 12px 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -125,11 +148,13 @@ body {
 body[data-layout="compact"] .panel { padding: 8px 10px 10px; gap: 6px; }
 body[data-layout="compact"] .card { padding: 8px 10px; }
 
+/* 卡片：白面浮起（发丝描边 + 软投影），大圆角 */
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   padding: 10px 12px;
+  box-shadow: var(--shadow-card);
 }
 
 .card h2 {
@@ -146,7 +171,7 @@ body[data-layout="compact"] .card { padding: 8px 10px; }
   justify-content: space-between;
   gap: 10px;
   padding: 4px 0;
-  border-top: 1px dashed var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .row:first-of-type { border-top: none; }
@@ -181,7 +206,7 @@ body[data-layout="compact"] .card { padding: 8px 10px; }
 .palette i {
   width: 14px;
   height: 14px;
-  border-radius: 4px;
+  border-radius: 5px;
   border: 1px solid var(--border);
 }
 

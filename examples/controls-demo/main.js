@@ -122,10 +122,9 @@ function applySettings() {
   // 字体（font）：空串 = 默认
   document.body.style.fontFamily = s.font_family || '';
 
-  // 互斥开关组（radio）→ 背景色调；auto 按当前小时折算
-  const hour = new Date().getHours();
-  const mode = s.mode === 'auto' || !s.mode ? (hour >= 6 && hour < 18 ? 'day' : 'night') : s.mode;
-  document.body.dataset.mode = mode;
+  // 互斥开关组（radio）→ 背景色调（浅色三档：冷纸/暖白/雾蓝；
+  // 旧版 night/auto 存值归一到默认档——只留浅色后不再有深色调）
+  document.body.dataset.mode = ['day', 'warm', 'mist'].includes(s.mode) ? s.mode : 'day';
 
   // 下拉选择（select）→ 面板密度
   document.body.dataset.layout = s.layout === 'compact' ? 'compact' : 'comfy';

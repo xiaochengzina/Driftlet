@@ -1,0 +1,170 @@
+/* deepseek-balance —— 浅色白卡（管理器同款冷纸材质；--accent 可被
+   「主题色」设置项经 JS 改写，柔色一律 color-mix 跟随，不写死蓝）；
+   布局采用「填充 + 内部滚动」范式（§3.3） */
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  background: transparent;
+  overflow: hidden;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+  color: #102a33;
+  user-select: none;
+}
+
+.shell {
+  --accent: #4d6bfe;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  background: linear-gradient(155deg, #ffffff, #f2f7fc);
+  border: 1px solid rgba(14, 117, 195, 0.12);
+  border-radius: 16px;
+}
+
+/* ── 头部：标志 + 标题 + 状态徽标 ─────────────────────────── */
+
+.head { display: flex; align-items: center; gap: 8px; flex: none; }
+
+.logo {
+  width: 26px; height: 26px; flex: none;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #9b5cff));
+  color: #fff;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+/* 鲸鱼取自官方带文字 SVG 的图标区（viewBox 裁切），currentColor 随 .logo 呈白色 */
+.logo svg { width: 17px; height: auto; display: block; }
+
+.title {
+  flex: 1; margin: 0;
+  font-size: 13px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 状态徽标：软色胶囊 + 光点（管理器信号灯语言） */
+.badge {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 10.5px;
+  background: rgba(14, 117, 195, 0.07); color: #5d717c;
+}
+.badge[hidden] { display: none; }
+.badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge em { font-style: normal; }
+.badge.ok  { color: #0e7a4f; background: rgba(14, 122, 79, 0.1); }
+.badge.ok i { box-shadow: 0 0 5px currentColor; }
+.badge.low { color: #a16207; background: rgba(161, 98, 7, 0.1); }
+.badge.err { color: #c2402f; background: rgba(194, 64, 47, 0.1); }
+
+/* ── 主体：余额区块（超高时内部滚动） ─────────────────────── */
+
+.body {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; gap: 10px;
+  overflow: hidden auto;
+  scrollbar-width: thin;
+}
+.body::-webkit-scrollbar { width: 4px; }
+.body::-webkit-scrollbar-thumb { background: rgba(14, 117, 195, 0.2); border-radius: 2px; }
+
+.bal { display: flex; flex-direction: column; gap: 6px; }
+
+.total-row { display: flex; align-items: baseline; gap: 6px; }
+
+.cur-tag {
+  font-size: 10px; color: #5d717c;
+  border: 1px solid rgba(14, 117, 195, 0.2);
+  padding: 0 5px; border-radius: 5px;
+  transform: translateY(-2px);
+}
+
+.total {
+  font-size: clamp(20px, min(9vw, 30vh), 28px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  line-height: 1.1;
+  word-break: break-all;
+}
+.total .sym { font-size: 0.6em; margin-right: 2px; opacity: 0.8; }
+
+/* 构成行：灰底嵌入小卡 */
+.parts { display: flex; gap: 8px; }
+.part {
+  flex: 1;
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 5px 10px;
+  background: #eef4f9;
+  border-radius: 10px;
+}
+.part label { font-size: 10px; color: #5d717c; }
+.part b { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ── 空态 / 错误态 ───────────────────────────────────────── */
+
+.note {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px;
+  padding: 6px;
+  text-align: center;
+}
+.note .big { font-size: 13px; font-weight: 600; }
+.note .small { font-size: 11px; color: #5d717c; line-height: 1.5; }
+.note.error .big { color: #c2402f; }
+
+/* ── 底部：更新时间 + 手动刷新 ───────────────────────────── */
+
+.foot { flex: none; display: flex; align-items: center; gap: 8px; }
+
+.updated {
+  flex: 1;
+  font-size: 10.5px; color: #5d717c;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.refresh {
+  flex: none;
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 10px;
+  background: #eef4f9;
+  color: #4d616e;
+  cursor: pointer;
+}
+.refresh:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.refresh:disabled { cursor: default; opacity: 0.7; }
+.refresh svg { width: 13px; height: 13px; }
+.refresh.spin svg { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 预警与充值 ──────────────────────────────────────────── */
+
+.total.low { color: #a16207; }
+
+/* 充值 = 主按钮：主题色实心 + 同色光晕（管理器主按钮语言） */
+.topup {
+  flex: none;
+  border: 0; border-radius: 10px;
+  padding: 4px 11px;
+  font-size: 10.5px;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 32%, transparent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.topup:hover { background: color-mix(in srgb, var(--accent) 88%, #000); }
+
+/* 矮窗口压缩：隐藏构成行、收紧间距，保住总余额与状态 */
+@media (max-height: 130px) {
+  .shell { gap: 4px; padding: 8px 12px; }
+  .parts { display: none; }
+}

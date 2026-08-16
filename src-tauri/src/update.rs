@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 公开分发仓库（开发仓库 Driftlet-Dev 不发 release）
+/// 公开分发仓库（仅此仓库发 release，更新检测比对它的最新 release）
 const REPO: &str = "xiaochengzina/Driftlet";
 
 /// 「前往下载」固定打开最新 release 页（GitHub 自动重定向到最新 tag），

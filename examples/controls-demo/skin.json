@@ -36,11 +36,11 @@
         { "value": "b", "label": "功能 B", "label_en": "Feature B" },
         { "value": "c", "label": "功能 C", "label_en": "Feature C" }
       ] },
-    { "key": "mode", "type": "radio", "label": "互斥开关组", "label_en": "Radio Group", "group": "开关与选项", "group_en": "Toggles & Options", "description": "白天/夜晚/自动——切换应用区的背景色调", "description_en": "Day / Night / Auto — tints the applied area background", "default": "auto",
+    { "key": "mode", "type": "radio", "label": "互斥开关组", "label_en": "Radio Group", "group": "开关与选项", "group_en": "Toggles & Options", "description": "冷纸/暖白/雾蓝——切换应用区的背景色调（全部浅色）", "description_en": "Cool Paper / Warm White / Mist Blue — tints the applied area background (all light)", "default": "day",
       "options": [
-        { "value": "day", "label": "白天", "label_en": "Day" },
-        { "value": "night", "label": "夜晚", "label_en": "Night" },
-        { "value": "auto", "label": "自动", "label_en": "Auto" }
+        { "value": "day", "label": "冷纸", "label_en": "Cool Paper" },
+        { "value": "warm", "label": "暖白", "label_en": "Warm White" },
+        { "value": "mist", "label": "雾蓝", "label_en": "Mist Blue" }
       ] },
     { "key": "layout", "type": "select", "label": "下拉选择", "label_en": "Dropdown", "group": "开关与选项", "group_en": "Toggles & Options", "description": "舒适/紧凑——切换面板的信息密度", "description_en": "Comfy / Compact — switches the panel density", "default": "comfy",
       "options": [

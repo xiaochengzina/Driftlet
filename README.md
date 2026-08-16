@@ -75,6 +75,7 @@ npm run tauri build
 │   ├── sys-monitor/          # 系统监视（只读系统信息接口全家桶）
 │   ├── media-hub/            # 媒体控制台（音量/媒体/频谱/通知）
 │   ├── toolbox/              # 本机工具箱（剪贴板/文件/注册表/命令/设置读写）
+│   ├── deepseek-balance/     # DeepSeek 余额自动查询（联网皮肤参考，预警+系统通知+充值页，password 存 API Key）
 │   ├── driftlet.js           # 可选封装：命令命名函数 + 事件助手（复制进皮肤文件夹即用）
 │   └── driftlet.d.ts         # 桥与全部命令的类型定义（编辑器自动补全）
 ├── tools/

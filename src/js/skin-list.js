@@ -12,6 +12,9 @@ export default class SkinList {
     this.onSelect = onSelect;
     this.skins = [];
     this.selectedId = null;
+    // 搜索查询词：在实例上常驻——外壳语言重绘只换容器与输入框，
+    // app.js bindSearch 重绑时从这里回填，查询不丢
+    this.query = '';
     // 预览图 URL 的缓存戳：值不变则 WebView2 直接命中缓存，避免每次
     // render 全量重解码；重新截取或皮肤版本更新时才 bump。
     this.previewVersions = new Map();
@@ -20,6 +23,13 @@ export default class SkinList {
 
   bumpPreview(skinId) {
     this.previewVersions.set(skinId, (this.previewVersions.get(skinId) || 0) + 1);
+  }
+
+  // 搜索过滤入口（app.js 搜索框 input 事件调用）：就地重绘，
+  // 选中的皮肤被滤掉时保留选中态（配置面板不动，清空查询后卡片回来）
+  setQuery(q) {
+    this.query = q;
+    this.render();
   }
 
   async refresh() {
@@ -47,9 +57,21 @@ export default class SkinList {
   }
 
   render() {
-    // 侧栏标题旁的数量徽标（有皮肤时才显示数字）
+    const q = this.query.trim().toLowerCase();
+    // 匹配显示名（当前语言）、id、作者，大小写不敏感；列表规模小，
+    // 每次输入即时过滤即可，无需防抖
+    const visible = q
+      ? this.skins.filter(s => `${dispName(s) || ''} ${s.id} ${s.author || ''}`.toLowerCase().includes(q))
+      : this.skins;
+
+    // 侧栏标题旁的数量徽标：过滤中且命中数 ≠ 总数时显示「命中/总数」，
+    // 否则显示总数（无皮肤时置空字符串，:empty 整体收起）
     const countEl = document.getElementById('skin-count');
-    if (countEl) countEl.textContent = this.skins.length ? String(this.skins.length) : '';
+    if (countEl) {
+      countEl.textContent = (q && visible.length !== this.skins.length)
+        ? `${visible.length}/${this.skins.length}`
+        : (this.skins.length ? String(this.skins.length) : '');
+    }
     if (this.skins.length === 0) {
       this.container.innerHTML = `
         <div class="list-empty">
@@ -62,7 +84,20 @@ export default class SkinList {
       return;
     }
 
-    this.container.innerHTML = this.skins.map(skin => this.renderCard(skin)).join('');
+    // 有过滤词但零命中：搜索专属空态（与「还没有皮肤」区分）
+    if (visible.length === 0) {
+      this.container.innerHTML = `
+        <div class="list-empty">
+          <div class="list-empty-icon">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/><line x1="8.5" y1="8.5" x2="13.5" y2="13.5"/><line x1="13.5" y1="8.5" x2="8.5" y2="13.5"/></svg>
+          </div>
+          <p>${t('list.noResults')}</p>
+          <p class="list-empty-hint">${t('list.noResultsHint')}</p>
+        </div>`;
+      return;
+    }
+
+    this.container.innerHTML = visible.map(skin => this.renderCard(skin)).join('');
 
     this.container.querySelectorAll('.skin-card').forEach(card => {
       card.addEventListener('click', (e) => {

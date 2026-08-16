@@ -1,15 +1,25 @@
-/* sys-monitor —— 系统监视仪表板样式（填充 + 内部滚动范式，浅色卡片 UI） */
+/* sys-monitor —— 管理器同款现代材质：冷纸底 + 白色浮卡 + 软投影
+   （填充 + 内部滚动范式；读数走等宽字体，用量条铺品牌渐变） */
 
 :root {
   --accent: #0e75c3;
-  --bg: #f4f6f8;
+  --accent-grad: linear-gradient(150deg, #1279c4, #0e68b4);
+  --accent-soft: rgba(14, 117, 195, 0.1);
+  --accent-glow: rgba(14, 117, 195, 0.25);
+  --bg: #f4f8fb;
   --card: #ffffff;
-  --text: #24313b;
-  --muted: #7c8a95;
-  --border: #e2e8ed;
-  --err: #c0392b;
+  --input: #eef4f9;
+  --text: #102a33;
+  --muted: #5d717c;
+  --border: rgba(14, 117, 195, 0.1);
+  --border-strong: rgba(14, 117, 195, 0.24);
+  --shadow-card: 0 1px 2px rgba(15, 60, 80, 0.05), 0 8px 22px rgba(15, 60, 80, 0.07);
+  --err: #c2402f;
+  --ok: #0e7a4f;
+  --ok-soft: rgba(14, 122, 79, 0.1);
   --warn-bg: #fdf3e0;
   --warn-text: #8a6d1d;
+  --font-mono: "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -21,7 +31,7 @@ html, body {
 
 body {
   overflow: hidden; /* 不允许窗口级滚动条 */
-  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
   font-size: 13px;
   color: var(--text);
   background: transparent; /* 透明窗口：背景画在外壳上 */
@@ -33,17 +43,18 @@ body {
   flex-direction: column;
   height: 100%;
   background: var(--bg);
-  border-radius: 10px;
+  border-radius: 16px;
   overflow: hidden;
 }
 
-/* ── 标题栏（拖动区的一部分） ── */
+/* ── 标题栏（拖动区的一部分）：hero 语言——白面 + 淡蓝晕染 + 底缘发丝线；
+   旧版 3px 顶部色带已撤 ── */
 
 .appbar {
   padding: 14px 16px 12px;
   background: var(--card);
+  background-image: linear-gradient(135deg, var(--accent-soft), transparent 62%);
   border-bottom: 1px solid var(--border);
-  border-top: 3px solid var(--accent);
 }
 
 .appbar-top {
@@ -63,18 +74,22 @@ body {
   white-space: nowrap;
 }
 
-/* 「免权限」卖点标注 */
+/* 「免权限」卖点标注：实色绿砖改软绿胶囊（管理器信号灯语言） */
 .badge {
   flex: none;
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 9px;
-  color: #ffffff;
-  background: #2fbf71;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 
 .subtitle {
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   font-size: 11px;
   color: var(--muted);
 }
@@ -83,7 +98,7 @@ body {
   margin: 8px 0 0;
   padding: 6px 8px;
   font-size: 11px;
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--warn-bg);
   color: var(--warn-text);
 }
@@ -94,21 +109,23 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden auto; /* 内容超高在面板内滚动，不撑出窗口 */
-  padding: 12px 14px 16px;
+  padding: 12px 12px 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
+/* 卡片：白面浮起（发丝描边 + 软投影），大圆角 */
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
 }
 
 .card h2 {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -119,8 +136,8 @@ body {
   font-size: 10px;
   font-weight: 400;
   padding: 1px 6px;
-  border-radius: 8px;
-  background: var(--border);
+  border-radius: 999px;
+  background: var(--input);
   color: var(--muted);
   vertical-align: 1px;
 }
@@ -150,7 +167,7 @@ body {
   word-break: break-all;
 }
 
-/* ── 用量条 ── */
+/* ── 用量条：灰底轨道 + 品牌渐变填充 ── */
 
 .meter-row {
   display: flex;
@@ -163,16 +180,16 @@ body {
   flex: 1;
   min-width: 0;
   height: 6px;
-  border-radius: 3px;
-  background: var(--border);
+  border-radius: 999px;
+  background: var(--input);
   overflow: hidden;
 }
 
 .meter i {
   display: block;
   height: 100%;
-  background: var(--accent);
-  border-radius: 3px;
+  background-image: var(--accent-grad);
+  border-radius: 999px;
   transition: width 0.3s ease;
 }
 
@@ -187,14 +204,19 @@ body {
   flex: none;
   min-width: 44px;
   text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
+/* 主读数（CPU%）：等宽大数字（管理器数据读数语言） */
 .meter-value {
   flex: none;
-  min-width: 52px;
-  font-size: 15px;
-  font-weight: 600;
+  min-width: 56px;
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 
@@ -204,22 +226,22 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(9px, 1fr));
   gap: 3px;
-  margin-top: 6px;
+  margin-top: 8px;
 }
 
 .cores i {
   display: flex;
   align-items: flex-end;
   height: 26px;
-  background: var(--border);
-  border-radius: 2px;
+  background: var(--input);
+  border-radius: 3px;
   overflow: hidden;
 }
 
 .cores i b {
   display: block;
   width: 100%;
-  background: var(--accent);
+  background-image: var(--accent-grad);
   transition: height 0.3s ease;
 }
 
@@ -227,7 +249,7 @@ body {
 
 .gpu-item, .disk-item, .net-item {
   padding: 4px 0;
-  border-top: 1px dashed var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .gpu-item:first-child, .disk-item:first-child, .net-item:first-child {
@@ -247,7 +269,7 @@ body {
   justify-content: space-between;
   gap: 10px;
   padding: 4px 0;
-  border-top: 1px dashed var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .row:first-of-type { border-top: none; }
@@ -284,28 +306,35 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
+/* 排序切换 = 现代分段控件：灰底容器 + 白块激活（小型） */
 .toggle {
   display: inline-flex;
+  gap: 2px;
+  padding: 2px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
+  border-radius: 9px;
+  background: var(--input);
 }
 
 .toggle button {
   border: none;
   padding: 3px 10px;
   font-size: 11px;
-  background: var(--card);
+  border-radius: 7px;
+  background: transparent;
   color: var(--muted);
   cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .toggle button.on {
-  background: var(--accent);
-  color: #ffffff;
+  background: var(--card);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(15, 60, 80, 0.14);
 }
 
 .proc-row {
@@ -314,7 +343,7 @@ body {
   justify-content: space-between;
   gap: 10px;
   padding: 3px 0;
-  border-top: 1px dashed var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .proc-row:first-of-type { border-top: none; }
@@ -328,5 +357,7 @@ body {
 
 .proc-val {
   flex: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }

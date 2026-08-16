@@ -30,6 +30,8 @@ class App {
     this.skinList = null;
     this.skinEditor = null;
     this._loadStateTimers = new Map();
+    // 侧栏搜索行展开态（收起是默认态；有查询词时强制展开，见 bindSearch）
+    this.searchOpen = false;
     window.__app = this;
     this.init();
   }
@@ -51,6 +53,7 @@ class App {
       onClose: (result) => this.onWizardClose(result),
     });
     this.bindToolbar();
+    this.bindSearch();
     this.bindBackendEvents();
     this._paintVersion();
     await initTheme();
@@ -122,7 +125,21 @@ class App {
               <span class="sidebar-eyebrow">HARBOR</span>
               <span class="sidebar-title">${t('app.skins')}</span>
             </div>
-            <span class="sidebar-count" id="skin-count"></span>
+            <div class="sidebar-tools">
+              <span class="sidebar-count" id="skin-count"></span>
+              <button id="skin-search-toggle" class="search-toggle" title="${t('list.searchToggle')}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+              </button>
+            </div>
+          </div>
+          <!-- 可收起搜索行：平时只占头部一个放大镜钮（零占位），点击或
+               Ctrl/Cmd+F 展开；有查询词时强制保持展开，清空后 Esc/再点收起 -->
+          <div class="sidebar-search">
+            <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+            <input id="skin-search" type="text" placeholder="${t('list.searchPlaceholder')}" autocomplete="off" spellcheck="false" />
+            <button id="skin-search-clear" class="search-clear" title="${t('list.searchClear')}">
+              <svg width="10" height="10" viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
           </div>
           <div class="skin-list" id="skin-list-container">
             <div class="list-empty"><p>${t('app.loadingSkins')}</p></div>
@@ -171,6 +188,19 @@ class App {
     // Disable right-click context menu
     document.addEventListener('contextmenu', e => e.preventDefault());
 
+    // Ctrl/Cmd+F 展开并聚焦皮肤搜索框（输入控件内不劫持；弹层开着不聚焦幕后）
+    document.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'f') return;
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (document.getElementById('settings-overlay')) return;
+      const box = document.getElementById('skin-search');
+      if (!box) return;
+      e.preventDefault();
+      if (this.searchOpen) box.focus();
+      else this._openSearch?.();
+    });
+
     document.addEventListener('pointermove', () => setHoverEnabled(true), { capture: true });
     document.addEventListener('visibilitychange', () => { if (document.hidden) setHoverEnabled(false); });
     win.onFocusChanged(({ payload: focused }) => { if (!focused) setHoverEnabled(false); });
@@ -212,6 +242,7 @@ class App {
     this.renderShell();
     this.bindWindowControls();
     this.bindToolbar();
+    this.bindSearch();
     this._paintVersion();
     // 外壳重建后容器元素已更换，重新挂接再重绘
     this.skinList.container = document.getElementById('skin-list-container');
@@ -267,6 +298,61 @@ class App {
         await new Settings().open();
       };
     }
+  }
+
+  // 搜索框绑定（外壳重绘后需重绑）。查询状态存在 SkinList.query、
+  // 展开态存在 App.searchOpen（均不随外壳重建丢失）。收起只允许发生在
+  // 无查询时——有词过滤中行必须可见；不做 blur 自动收起（blur 时列表
+  // 还在原位，收起导致行高变化会让 click 落到错误卡片上）
+  bindSearch() {
+    const input = document.getElementById('skin-search');
+    const clearBtn = document.getElementById('skin-search-clear');
+    const toggle = document.getElementById('skin-search-toggle');
+    const row = document.querySelector('.sidebar-search');
+    if (!input || !clearBtn || !toggle || !row || !this.skinList) return;
+
+    const hasQuery = () => input.value.length > 0;
+    const applyVisibility = () => {
+      const open = this.searchOpen || hasQuery();
+      row.classList.toggle('open', open);
+      toggle.classList.toggle('active', open);
+    };
+    const open = (focus = true) => {
+      this.searchOpen = true;
+      applyVisibility();
+      if (focus) input.focus();
+    };
+    const close = () => {
+      this.searchOpen = false;
+      applyVisibility();
+    };
+    const sync = () => {
+      clearBtn.classList.toggle('show', hasQuery());
+      this.skinList.setQuery(input.value);
+      applyVisibility();
+    };
+    this._openSearch = () => open(true);
+
+    // 语言重绘后恢复：查询词在 SkinList、展开态在 App（不抢焦点）
+    input.value = this.skinList.query;
+    clearBtn.classList.toggle('show', hasQuery());
+    applyVisibility();
+
+    toggle.onclick = () => {
+      if (this.searchOpen) {
+        if (hasQuery()) input.focus(); else close();
+      } else {
+        open();
+      }
+    };
+    input.oninput = sync;
+    clearBtn.onclick = () => { input.value = ''; sync(); input.focus(); };
+    // Esc：有词清词（保持展开），无词收起并交还焦点
+    input.onkeydown = (e) => {
+      if (e.key !== 'Escape') return;
+      if (hasQuery()) { input.value = ''; sync(); } else { close(); }
+      input.blur();
+    };
   }
 
   // 安装皮肤包：选完文件统一走安装引导页（与双击 .dskin 同一入口），

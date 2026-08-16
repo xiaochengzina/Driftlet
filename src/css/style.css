@@ -10,14 +10,15 @@
   /* 原生控件（date/time/datetime/select/滚动条）按浅色渲染 */
   color-scheme: light;
 
-  /* 白色为主：纸面白底，仅用极淡的冷灰区分侧栏与悬浮态 */
-  --bg-app: #ffffff;
-  --bg-sidebar: #f3f8fb;
+  /* 冷纸底取代纯白：白色卡片由此「浮」起来，层级靠明度 + 软投影
+     而不是发丝描边（现代化材质：少线、多面） */
+  --bg-app: #f4f8fb;
+  --bg-sidebar: #eaf2f8;
   --bg-surface: #ffffff;
-  --bg-surface-hover: #eef5fa;
-  --bg-input: #f2f7fa;
-  --border: rgba(14, 117, 195, 0.14);
-  --border-strong: rgba(14, 117, 195, 0.28);
+  --bg-surface-hover: #f0f6fb;
+  --bg-input: #eef4f9;
+  --border: rgba(14, 117, 195, 0.1);
+  --border-strong: rgba(14, 117, 195, 0.24);
 
   --text-primary: #102a33;
   --text-secondary: #4d616e;
@@ -27,6 +28,8 @@
   --accent: #0e75c3;
   --accent-hover: #0a63a8;
   --accent-soft: rgba(14, 117, 195, 0.1);
+  /* 空态中心氛围光（比 --accent-soft 弱一档：只提亮、不成光斑） */
+  --empty-glow: rgba(14, 117, 195, 0.05);
   --accent-select: var(--accent);
   --accent-select-soft: var(--accent-soft);
   --accent-select-ring: rgba(14, 117, 195, 0.38);
@@ -36,6 +39,12 @@
   --accent-grad-to: #0e68b4;
   --accent-grad: linear-gradient(150deg, var(--accent-grad-from), var(--accent-grad-to));
   --accent-ink: #ffffff;
+  /* 主操作投影光晕（主按钮/磁贴激活态的海浪蓝光） */
+  --accent-glow: rgba(14, 117, 195, 0.28);
+  /* 页眉 hero 卡的淡蓝晕染（左上 → 右下消散，无文字图形专用） */
+  --header-wash: linear-gradient(135deg, rgba(14, 117, 195, 0.08), rgba(45, 160, 219, 0.02) 62%);
+  /* 预览占位框的内渐变（画布感，上叠细点阵纹理） */
+  --preview-grad: linear-gradient(160deg, #eff5fa, #e2ecf4);
 
   --danger: #c2402f;
   --danger-soft: rgba(194, 64, 47, 0.1);
@@ -51,13 +60,18 @@
   /* 状态徽标描边（.status-badge.loaded 等信号灯 hairline） */
   --success-ring: rgba(14, 122, 79, 0.35);
 
-  /* 海图网格线（空态背景） */
+  /* 海图网格线（空态背景）与预览框细点阵 */
   --chart-line: rgba(14, 117, 195, 0.05);
 
-  --radius-lg: 10px;
-  --radius-md: 8px;
-  --radius-sm: 6px;
-  --shadow-pop: 0 18px 50px rgba(15, 60, 80, 0.18);
+  /* 圆角放大一代：小圆角 + 发丝描边是「旧企业后台」感的来源 */
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  /* 深度令牌：浮卡环境软投影（双层：贴地接触影 + 环境光）；
+     --shadow-chip 给页签激活块等小型浮起件 */
+  --shadow-card: 0 1px 2px rgba(15, 60, 80, 0.05), 0 10px 28px rgba(15, 60, 80, 0.07);
+  --shadow-chip: 0 1px 3px rgba(15, 60, 80, 0.14);
+  --shadow-pop: 0 18px 50px rgba(15, 60, 80, 0.16);
   /* 缓动令牌（规范见 docs/交互动画.md）：
      --ease      颜色/悬停过渡用（软曲线，hover/color 场景）；
      --ease-out  入场/出场/按压用（强 ease-out，起步快、显响应） */
@@ -79,48 +93,57 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  /* 深海夜色底（藏青墨，取自 logo 海浪的深水蓝）。
-     抗疲劳柔化：底色刻意抬离近黑、正文压到 ~87% 亮度、accent 略降亮度，
-     减轻亮-on-黑的光晕刺眼；对比度仍远高于 WCAG AA */
-  --bg-app: #0f1a24;
-  --bg-sidebar: #12202c;
-  --bg-surface: #182836;
-  --bg-surface-hover: #1e3242;
-  --bg-input: #142531;
-  --border: rgba(110, 196, 236, 0.12);
-  --border-strong: rgba(110, 196, 236, 0.27);
+  /* 暮海柔蓝（柔暗/dim）：刻意不走近黑路线——近黑深底 + 霓虹 accent
+     是所有软件的同质答案；整体明度抬到中灰蓝区间（底 262e39 <
+     侧栏 222a34 < 浮卡 303a48），像薄暮海面的钢蓝雾感，柔和抗疲劳。
+     正文 ~88% 亮度（非纯白），accent 天蓝不收（浮卡上文本级 ~5:1） */
+  --bg-app: #262e39;
+  --bg-sidebar: #222a34;
+  --bg-surface: #323c4b;
+  --bg-surface-hover: #3b4758;
+  --bg-input: #2b3542;
+  --border: rgba(170, 200, 225, 0.09);
+  --border-strong: rgba(170, 200, 225, 0.2);
 
-  --text-primary: #c8dae1;
-  --text-secondary: #87a0ab;
-  --text-faint: #6b8794;
+  --text-primary: #dce3ea;
+  --text-secondary: #96a3b0;
+  --text-faint: #77838f;
 
-  /* 天蓝（≈199°）：取自 logo 上半部分的天空蓝（#aadffa 一带）压暗而来 */
-  --accent: #5fbde8;
-  --accent-hover: #7fcdf0;
-  --accent-soft: rgba(95, 189, 232, 0.12);
-  --accent-select: #5fbde8;
-  --accent-select-soft: rgba(95, 189, 232, 0.1);
-  --accent-select-ring: rgba(95, 189, 232, 0.45);
+  /* 天空蓝 azure（去青光）：柔暗底上的唯一色相来源 */
+  --accent: #63b8e6;
+  --accent-hover: #85c9ec;
+  --accent-soft: rgba(99, 184, 230, 0.14);
+  --accent-select: var(--accent);
+  --accent-select-soft: rgba(99, 184, 230, 0.12);
+  --accent-select-ring: rgba(99, 184, 230, 0.42);
   /* 主按钮实色渐变：天蓝（浅→深），深墨文字对比度 ≥ 6:1 */
-  --accent-grad-from: #63bde8;
-  --accent-grad-to: #3fa9de;
-  --accent-ink: #052530;
+  --accent-grad-from: #5fb2e4;
+  --accent-grad-to: #3d97cc;
+  --accent-ink: #05202e;
+  --accent-glow: rgba(99, 184, 230, 0.25);
+  --header-wash: linear-gradient(135deg, rgba(99, 184, 230, 0.09), rgba(99, 184, 230, 0.02) 62%);
+  --preview-grad: linear-gradient(160deg, #2c3643, #262f3b);
+  /* 空态中心氛围光（比 --accent-soft 弱一档：只提亮、不成光斑） */
+  --empty-glow: rgba(99, 184, 230, 0.07);
 
   --danger: #e0685e;
-  --danger-soft: rgba(224, 104, 94, 0.12);
+  --danger-soft: rgba(224, 104, 94, 0.14);
   --danger-btn: #c8443b;
   --danger-btn-hover: #dc5a4e;
   /* 中危警示黄（权限分级等） */
   --warning: #e0b04f;
-  --warning-soft: rgba(224, 176, 79, 0.12);
+  --warning-soft: rgba(224, 176, 79, 0.14);
   --success: #46c48d;
-  --success-soft: rgba(70, 196, 141, 0.12);
+  --success-soft: rgba(70, 196, 141, 0.14);
   --success-ring: rgba(70, 196, 141, 0.35);
 
-  /* 海图网格线（空态背景） */
-  --chart-line: rgba(110, 196, 236, 0.05);
+  /* 海图网格线（空态背景）与预览框细点阵 */
+  --chart-line: rgba(170, 200, 225, 0.05);
 
-  --shadow-pop: 0 18px 50px rgba(2, 8, 16, 0.6);
+  /* 柔暗底上投影收敛：面比旧近黑底更亮，重影会显脏 */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 26px rgba(0, 0, 0, 0.22);
+  --shadow-chip: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 18px 50px rgba(0, 0, 0, 0.4);
 }
 
 /* ── 基础 ── */
@@ -336,12 +359,121 @@ body.hover-ok .win-btn-close:hover {
   font-size: 14px;
   font-weight: 650;
   letter-spacing: 0.5px;
+  /* 定死行高：.sidebar-tools 同高引用它做中心对齐（见下） */
+  line-height: 18px;
 }
 
 /* 皮肤数量徽标：基样式与 .brand-version 共用（见标题栏区），此处仅微调 */
 .sidebar-count {
   min-width: 20px;
   text-align: center;
+}
+
+/* 侧栏头部右侧工具行：数量徽标 + 搜索放大镜钮（收起态的搜索入口，
+   平时零占位）。行高与标题行盒一致（18px）——头部 flex-end 底对齐时，
+   徽标/按钮中心与标题文字中心重合；26px 放大镜在行内居中、上下均匀
+   探出行盒（允许按钮视觉超出文字边界）。两版对齐事故备查：行内 center
+   + 行高不定 = 徽标比按钮底边高 3~4px（曾显没对齐）；行内 flex-end =
+   三者底边共线但按钮下沿压到文字底线（用户评审后定为中心对齐） */
+.sidebar-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+}
+
+.search-toggle {
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
+}
+
+body.hover-ok .search-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--bg-surface);
+}
+
+/* 搜索行展开中（或有查询词）：放大镜钮转 accent 软底常亮 */
+.search-toggle.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 搜索框：白面浮起（与皮肤卡同一材质），放大镜左置、清除钮右置；
+   默认收起（零占位），.open 展开（纯透明淡入，见交互动画规范） */
+.sidebar-search {
+  position: relative;
+  display: none;
+  align-items: center;
+  margin: 0 10px 6px;
+}
+
+.sidebar-search.open {
+  display: flex;
+  animation: contentFade 0.15s var(--ease-out);
+}
+
+.sidebar-search .search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.sidebar-search input {
+  width: 100%;
+  padding: 6px 30px 6px 29px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+.sidebar-search input::placeholder {
+  color: var(--text-faint);
+}
+
+.sidebar-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 清除钮：仅在有内容时显示（.show），hover 出 accent 软底 */
+.search-clear {
+  position: absolute;
+  right: 5px;
+  width: 20px;
+  height: 20px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  padding: 0;
+}
+
+.search-clear.show {
+  display: flex;
+}
+
+body.hover-ok .search-clear:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .skin-list {
@@ -358,6 +490,7 @@ body.hover-ok .win-btn-close:hover {
   border-top: 1px solid var(--border);
 }
 
+/* 主操作「添加皮肤」：海浪渐变砖 + 蓝色光晕投影（品牌化主按钮） */
 .btn-add {
   flex: 1;
   display: flex;
@@ -366,17 +499,19 @@ body.hover-ok .win-btn-close:hover {
   gap: 6px;
   height: 32px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background-image: var(--accent-grad);
   color: var(--accent-ink);
   font-size: 12.5px;
   font-weight: 650;
   letter-spacing: 0.3px;
-  transition: filter 0.15s var(--ease), transform 0.12s var(--ease-out);
+  box-shadow: 0 4px 14px var(--accent-glow);
+  transition: filter 0.15s var(--ease), box-shadow 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 body.hover-ok .btn-add:not(:disabled):hover {
   filter: brightness(1.07);
+  box-shadow: 0 6px 18px var(--accent-glow);
 }
 
 .footer-actions {
@@ -426,7 +561,7 @@ body.hover-ok .icon-btn:hover {
   line-height: 1.7;
 }
 
-/* ── 皮肤卡片（泊位的瓶子）── */
+/* ── 皮肤卡片（泊位的瓶子）：白卡浮在冷纸底上，软投影承担层级 ── */
 .skin-card {
   display: flex;
   flex-direction: column;
@@ -434,8 +569,9 @@ body.hover-ok .icon-btn:hover {
   padding: 8px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  margin-bottom: 8px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 10px;
   cursor: pointer;
   transition:
     border-color 0.15s var(--ease),
@@ -446,8 +582,8 @@ body.hover-ok .icon-btn:hover {
 
 body.hover-ok .skin-card:hover {
   border-color: var(--border-strong);
-  background: var(--bg-surface-hover);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-pop);
 }
 
 /* 选中态：左缘 2px 海图标位 + 外侧 1px 定位环。
@@ -461,14 +597,18 @@ body.hover-ok .skin-card:hover {
     0 0 0 1px var(--accent-select-ring);
 }
 
+/* 预览框：内渐变画布 + 细点阵纹理（海图稿纸感） */
 .skin-preview {
   position: relative;
   width: 100%;
   height: 100px;
-  border-radius: 6px;
+  border-radius: 10px;
   overflow: hidden;
   flex-shrink: 0;
   background: var(--bg-input);
+  background-image: radial-gradient(circle, var(--chart-line) 1px, transparent 1.3px), var(--preview-grad);
+  background-size: 14px 14px, 100% 100%;
+  background-position: center;
   border: 1px solid var(--border);
   color: var(--text-faint);
 }
@@ -484,13 +624,15 @@ body.hover-ok .skin-card:hover {
   display: block;
 }
 
+/* 占位图标：略放大 + 着 accent 色（空预览也有品牌存在感） */
 .skin-preview-placeholder {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.55;
+  color: var(--accent);
+  opacity: 0.45;
 }
 
 .skin-card-content {
@@ -649,7 +791,7 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   background: var(--bg-app);
 }
 
-/* 空态：海图网格 + 漂流瓶与航迹 */
+/* 空态：海图网格 + 中心氛围光 + 漂流瓶与航迹 */
 .panel-empty {
   height: 100%;
   display: flex;
@@ -658,9 +800,10 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   color: var(--text-secondary);
   font-size: 13px;
   background-image:
+    radial-gradient(ellipse 38% 30% at 50% 44%, var(--empty-glow), transparent 68%),
     linear-gradient(var(--chart-line) 1px, transparent 1px),
     linear-gradient(90deg, var(--chart-line) 1px, transparent 1px);
-  background-size: 30px 30px;
+  background-size: 100% 100%, 30px 30px, 30px 30px;
   background-position: center;
 }
 
@@ -675,12 +818,14 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   margin-bottom: 18px;
 }
 
+/* 漂流瓶图标砖：白面 + 软投影的浮起小砖（不再平涂 accent-soft） */
 .panel-empty-icon {
   width: 74px;
   height: 74px;
   border-radius: 20px;
-  background: var(--accent-soft);
+  background: var(--bg-surface);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
   color: var(--accent);
   display: flex;
   align-items: center;
@@ -722,15 +867,20 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   to { opacity: 1; }
 }
 
-/* 面板头部：日志页眉——名称/元信息 + 运行状态，下缘虚线海图尺 */
+/* 面板头部：hero 卡——淡蓝晕染底 + 软投影（去掉旧虚线海图尺，
+   页眉从此是「一张卡」而不是「一条分隔线」） */
 .cfg-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 18px;
-  padding-bottom: 16px;
-  border-bottom: 1px dashed var(--border-strong);
+  margin-bottom: 14px;
+  padding: 16px 18px;
+  background: var(--bg-surface);
+  background-image: var(--header-wash);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
 
 .cfg-header-main {
@@ -780,7 +930,8 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 16px 18px;
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
   margin-bottom: 14px;
 }
 
@@ -805,7 +956,7 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   width: 7px;
   height: 7px;
   border-radius: 1.5px;
-  background: var(--accent);
+  background-image: var(--accent-grad);
   transform: rotate(45deg);
   flex-shrink: 0;
   box-shadow: 0 0 7px var(--accent-soft);
@@ -952,24 +1103,24 @@ html[lang="en"] .config-section h3 .sec-en {
   outline: none;
 }
 
-/* 菱形手柄：海图标绘点 */
+/* 菱形手柄：海图标绘点（品牌记号，渐变 + 光晕强化） */
 .range-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 12px;
   height: 12px;
-  background: var(--accent);
+  background-image: var(--accent-grad);
   border: none;
   border-radius: 2.5px;
   transform: rotate(45deg);
-  box-shadow: 0 0 8px var(--accent-soft), 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 0 10px var(--accent-glow), 0 1px 4px rgba(0, 0, 0, 0.35);
   cursor: pointer;
   transition: transform 0.12s var(--ease), box-shadow 0.12s var(--ease);
 }
 
 .range-slider::-webkit-slider-thumb:hover {
   transform: rotate(45deg) scale(1.2);
-  box-shadow: 0 0 12px var(--accent-soft), 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 0 14px var(--accent-glow), 0 1px 4px rgba(0, 0, 0, 0.35);
 }
 
 .range-slider:disabled {
@@ -1071,25 +1222,25 @@ html[lang="en"] .config-section h3 .sec-en {
   cursor: pointer;
 }
 
-/* 页签 */
+/* 页签：现代分段控件——灰底容器 + 白色激活块浮起（--shadow-chip） */
 .cfg-tabs {
   display: flex;
   gap: 4px;
   margin: 0 0 14px;
-  padding: 3px;
+  padding: 4px;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 
 .cfg-tab {
   flex: 1;
-  padding: 6px 0;
+  padding: 7px 0;
   font-size: 12.5px;
   color: var(--text-secondary);
   background: transparent;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   transition: background 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 
@@ -1101,7 +1252,7 @@ body.hover-ok .cfg-tab:hover {
   background: var(--bg-surface);
   color: var(--accent);
   font-weight: 650;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-chip);
 }
 
 /* 块级行（标签在上，控件在下） */
@@ -1464,21 +1615,23 @@ body.hover-ok .task-del:not(:disabled):hover {
   gap: 8px;
 }
 
+/* 动作按钮：默认白面 chip（浮在冷纸页上），主按钮渐变 + 蓝光晕 */
 .action-btn {
   padding: 7px 16px;
   font-size: 12.5px;
   font-weight: 550;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: transparent;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
   color: var(--text-primary);
-  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), filter 0.15s var(--ease), transform 0.12s var(--ease-out);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), box-shadow 0.15s var(--ease), filter 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 /* 只改 background-color：简写 background 会把 .action-btn.primary 的
    渐变 background-image 一并重置（本规则特异性已高于变体规则） */
 body.hover-ok .action-btn:not(:disabled):hover {
   background-color: var(--bg-surface-hover);
+  border-color: var(--border-strong);
 }
 
 .action-btn.primary {
@@ -1486,10 +1639,12 @@ body.hover-ok .action-btn:not(:disabled):hover {
   border-color: transparent;
   color: var(--accent-ink);
   font-weight: 650;
+  box-shadow: 0 4px 14px var(--accent-glow);
 }
 
 body.hover-ok .action-btn.primary:not(:disabled):hover {
   filter: brightness(1.07);
+  box-shadow: 0 6px 18px var(--accent-glow);
 }
 
 .action-btn.danger {
@@ -1515,7 +1670,7 @@ body.hover-ok .action-btn.danger:not(:disabled):hover {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-left: 2px solid var(--accent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   font-size: 12.5px;
   color: var(--text-primary);
   z-index: 300;
@@ -1655,10 +1810,10 @@ body.hover-ok .action-btn.danger:not(:disabled):hover {
 
 .confirm-btn {
   padding: 8px 26px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   font-size: 12.5px;
   font-weight: 550;
-  transition: background-color 0.15s var(--ease), border-color 0.15s var(--ease), filter 0.15s var(--ease), transform 0.12s var(--ease-out);
+  transition: background-color 0.15s var(--ease), border-color 0.15s var(--ease), box-shadow 0.15s var(--ease), filter 0.15s var(--ease), transform 0.12s var(--ease-out);
   border: 1px solid var(--border-strong);
 }
 
@@ -1687,10 +1842,12 @@ body.hover-ok .confirm-btn.danger:not(:disabled):hover {
   border-color: transparent;
   color: var(--accent-ink);
   font-weight: 650;
+  box-shadow: 0 4px 14px var(--accent-glow);
 }
 
 body.hover-ok .confirm-btn.primary:not(:disabled):hover {
   filter: brightness(1.07);
+  box-shadow: 0 6px 18px var(--accent-glow);
 }
 
 /* 更新弹窗「不再提示更新」勾选行（confirm 系弹层复用，居中一行） */
@@ -1754,14 +1911,14 @@ body.hover-ok .confirm-btn.primary:not(:disabled):hover {
   animation: contentFade 0.15s var(--ease-out);
 }
 
-/* 主题选择：分段控件 */
+/* 主题选择：分段控件（与 .cfg-tabs 同一现代分段语言） */
 .theme-options {
   display: flex;
   gap: 2px;
-  padding: 3px;
+  padding: 4px;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   /* 设置行右侧控件不被左侧长说明压缩（备份行「导出/导入」曾被挤成竖排） */
   flex-shrink: 0;
 }
@@ -1769,11 +1926,11 @@ body.hover-ok .confirm-btn.primary:not(:disabled):hover {
 .theme-btn {
   padding: 5px 14px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font-size: 12.5px;
-  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), transform 0.12s var(--ease-out);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 body.hover-ok .theme-btn:not(:disabled):hover {
@@ -1787,6 +1944,7 @@ body.hover-ok .theme-btn:not(:disabled):hover {
   background-image: var(--accent-grad);
   color: var(--accent-ink);
   font-weight: 650;
+  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 .settings-close {
@@ -1794,7 +1952,7 @@ body.hover-ok .theme-btn:not(:disabled):hover {
   width: 100%;
   padding: 9px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-primary);
   font-size: 13px;
@@ -1817,6 +1975,7 @@ body.hover-ok .settings-close:hover {
 .confirm-btn:not(:disabled):active,
 .cfg-chip:not(:disabled):active,
 .cfg-step-btn:not(:disabled):active,
+.search-toggle:not(:disabled):active,
 .settings-close:not(:disabled):active {
   transform: scale(0.97);
 }
@@ -1887,13 +2046,15 @@ body.hover-ok .settings-close:hover {
   animation: popIn 0.2s var(--ease-out);
 }
 
+/* 皮肤包图标砖：与空态漂流瓶同一材质（白面浮砖 + 软投影） */
 .wizard-pkg-icon {
   width: 62px;
   height: 62px;
   margin: 0 auto 14px;
   border-radius: 16px;
-  background: var(--accent-soft);
-  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
   color: var(--accent);
   display: flex;
   align-items: center;
@@ -2173,6 +2334,7 @@ body.hover-ok .settings-close:hover {
   .theme-btn:not(:disabled):active,
   .confirm-btn:not(:disabled):active,
   .cfg-chip:not(:disabled):active,
+  .search-toggle:not(:disabled):active,
   .settings-close:not(:disabled):active {
     transform: none;
   }

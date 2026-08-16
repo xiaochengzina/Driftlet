@@ -1,13 +1,23 @@
-/* toolbox —— 浅色卡片演示样式（填充 + 内部滚动范式，与 controls-demo 一致） */
+/* toolbox —— 管理器同款现代材质：冷纸底 + 白色浮卡 + 软投影
+   （填充 + 内部滚动范式，与 controls-demo 一致） */
 
 :root {
   --accent: #0e75c3;
-  --bg: #f4f6f8;
+  --accent-grad: linear-gradient(150deg, #1279c4, #0e68b4);
+  --accent-soft: rgba(14, 117, 195, 0.1);
+  --accent-glow: rgba(14, 117, 195, 0.25);
+  --bg: #f4f8fb;
   --card: #ffffff;
-  --text: #24313b;
-  --muted: #7c8a95;
-  --border: #e2e8ed;
-  --danger: #c0453e;
+  --input: #eef4f9;
+  --text: #102a33;
+  --muted: #5d717c;
+  --border: rgba(14, 117, 195, 0.1);
+  --border-strong: rgba(14, 117, 195, 0.24);
+  --shadow-card: 0 1px 2px rgba(15, 60, 80, 0.05), 0 8px 22px rgba(15, 60, 80, 0.07);
+  --danger: #c2402f;
+  --danger-soft: rgba(194, 64, 47, 0.1);
+  --ok: #0e7a4f;
+  --ok-soft: rgba(14, 122, 79, 0.1);
 }
 
 * { box-sizing: border-box; }
@@ -19,7 +29,7 @@ html, body {
 
 body {
   overflow: hidden; /* 不允许窗口级滚动条 */
-  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
   font-size: 13px;
   color: var(--text);
   background: transparent; /* 透明窗口：背景画在外壳上 */
@@ -34,17 +44,18 @@ input, textarea, select, .result { user-select: text; }
   flex-direction: column;
   height: 100%;
   background: var(--bg);
-  border-radius: 10px;
+  border-radius: 16px;
   overflow: hidden;
 }
 
-/* ── 标题栏（拖动区的一部分） ── */
+/* ── 标题栏（拖动区的一部分）：hero 语言——白面 + 淡蓝晕染 + 底缘发丝线；
+   旧版 3px 顶部色带已撤 ── */
 
 .appbar {
   padding: 14px 16px 12px;
   background: var(--card);
+  background-image: linear-gradient(135deg, var(--accent-soft), transparent 62%);
   border-bottom: 1px solid var(--border);
-  border-top: 3px solid var(--accent);
 }
 
 .appbar-top {
@@ -64,23 +75,25 @@ input, textarea, select, .result { user-select: text; }
   white-space: nowrap;
 }
 
+/* 桥接状态徽标：软色胶囊（正常绿 / 桥缺失红） */
 .badge {
   flex: none;
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: #e2f5e9;
-  color: #1e8e4f;
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok);
   white-space: nowrap;
 }
 
 .badge.missing {
-  background: #fdeeee;
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
 .subtitle {
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   font-size: 11px;
   color: var(--muted);
 }
@@ -91,21 +104,23 @@ input, textarea, select, .result { user-select: text; }
   flex: 1;
   min-height: 0;
   overflow: hidden auto; /* 内容超高在面板内滚动，不撑出窗口 */
-  padding: 12px 14px 16px;
+  padding: 12px 12px 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
+/* 卡片：白面浮起（发丝描边 + 软投影），大圆角 */
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
 }
 
 .card h2 {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -121,7 +136,7 @@ input, textarea, select, .result { user-select: text; }
   font-weight: 600;
 }
 
-/* 卡片右上角的权限标签 */
+/* 卡片右上角的权限标签：hairline 胶囊 */
 .perm {
   margin-left: auto;
   font-size: 10px;
@@ -129,8 +144,8 @@ input, textarea, select, .result { user-select: text; }
   letter-spacing: 0;
   color: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1px 6px;
+  border-radius: 999px;
+  padding: 1px 8px;
   white-space: nowrap;
 }
 
@@ -144,32 +159,34 @@ input, textarea, select, .result { user-select: text; }
 .note.warn {
   color: #9a6200;
   background: #fff7e8;
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 5px 8px;
 }
 
-/* ── 控件 ── */
+/* ── 控件：白面 chip 按钮；输入 = 灰底嵌入 + 焦点蓝环 ── */
 
 .btn {
   font: inherit;
   font-size: 12px;
-  padding: 4px 10px;
+  padding: 5px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
+  border-radius: 10px;
+  background: var(--card);
   color: var(--text);
   cursor: pointer;
   white-space: nowrap;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .btn:hover {
-  border-color: var(--accent);
+  border-color: var(--border-strong);
   color: var(--accent);
 }
 
 .btn.danger:hover {
   border-color: var(--danger);
   color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .btn-row {
@@ -186,16 +203,24 @@ input, textarea, select, .result { user-select: text; }
 }
 
 .input-row input[type="text"],
+.input-row select,
+.input-row input[type="number"],
+textarea {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input-row input[type="text"],
 .input-row select {
   flex: 1;
   min-width: 0;
-  font: inherit;
-  font-size: 12px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--text);
 }
 
 .input-row select { flex: none; }
@@ -203,37 +228,31 @@ input, textarea, select, .result { user-select: text; }
 .input-row input[type="number"] {
   flex: none;
   width: 96px;
-  font: inherit;
-  font-size: 12px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--text);
 }
 
 textarea {
   width: 100%;
   resize: vertical;
   min-height: 48px;
-  font: inherit;
-  font-size: 12px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--text);
+  line-height: 1.5;
 }
 
-/* ── 结果区（内部滚动，不撑破卡片） ── */
+.input-row input:focus,
+.input-row select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ── 结果区（灰底嵌入，内部滚动，不撑破卡片） ── */
 
 .result {
   margin: 8px 0 0;
   padding: 8px 10px;
-  background: #f0f3f6;
+  background: var(--input);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  font-family: ui-monospace, Consolas, "Microsoft YaHei UI", monospace;
+  border-radius: 10px;
+  font-family: "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace;
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -246,8 +265,8 @@ textarea {
 
 .result.error {
   color: var(--danger);
-  background: #fdf3f2;
-  border-color: #e5b4b2;
+  background: var(--danger-soft);
+  border-color: transparent;
 }
 
 /* ── 待办列表 ── */
@@ -263,7 +282,7 @@ textarea {
   align-items: center;
   gap: 6px;
   padding: 3px 0;
-  border-top: 1px dashed var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .tasks li:first-child { border-top: none; }
@@ -290,10 +309,10 @@ textarea {
   font-size: 14px;
   line-height: 1;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .task-del:hover {
   color: var(--danger);
-  background: #fdeeee;
+  background: var(--danger-soft);
 }

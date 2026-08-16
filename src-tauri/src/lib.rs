@@ -758,6 +758,12 @@ fn file_modified(path: &std::path::Path) -> std::time::SystemTime {
 /// decorations 剥除）——建窗时剥掉的标题栏会被 show() 静默加回。
 /// 故子类同时拦截 WM_STYLECHANGING，在样式落地前就地改写 styleNew，
 /// 让 WS_CAPTION 永远落不了地（同 factory.rs 皮肤子类的既有手法）。
+///
+/// 第四个坑（Win10 失焦丢顶边描边）：这套无 CAPTION 配方下 DWM 只在窗口
+/// 活动态画顶边 1px 描边，失焦根本不画；子类拦 WM_NCACTIVATE，原参数先放行
+/// 给 tao 做焦点簿记，再对 DefWindowProcW 谎报 (TRUE, -1) 把帧外观钉在活动态
+/// （失焦后描边/阴影不再消失；探针 focus-frame-probe.ps1 / manager-focus-frame.ps1
+/// 实证，详见分支内注释）。
 #[cfg(target_os = "windows")]
 const NATIVE_FRAME_SUBCLASS_ID: usize = 0x4E4652; // "NFR"；皮肤无边框子类见 factory.rs
 
@@ -776,10 +782,30 @@ unsafe extern "system" fn native_frame_proc(
     use windows::Win32::UI::Shell::DefSubclassProc;
     use windows::Win32::UI::WindowsAndMessaging::{
         DefWindowProcW, GWL_STYLE, IsZoomed, MINMAXINFO, NCCALCSIZE_PARAMS, STYLESTRUCT,
-        WM_GETMINMAXINFO, WM_NCCALCSIZE, WM_STYLECHANGING, WS_BORDER, WS_CAPTION,
-        WS_THICKFRAME,
+        WM_GETMINMAXINFO, WM_NCCALCSIZE, WM_NCACTIVATE, WM_STYLECHANGING, WS_BORDER,
+        WS_CAPTION, WS_THICKFRAME,
     };
     // 纯 FFI 转发/就地改写、无锁无分配，不存在 panic 路径（无需 catch_unwind 包装）
+    if msg == WM_NCACTIVATE {
+        // 失焦丢顶边描边的修法：这套「无 CAPTION 的 THICKFRAME|BORDER」配方下，
+        // DWM 只在窗口活动态画顶边 1px 描边——失焦时根本不画（不是画成浅色，
+        // 探针实证 tools/win32-probes/focus-frame-probe.ps1 与
+        // manager-focus-frame.ps1：失焦后窗口顶行像素=背景）。这套配方的帧外观
+        // 完全由 WM_NCACTIVATE 的默认处理上报驱动，故先放行原参数——tao 用它做
+        // 焦点簿记（window_state.set_active + focus 事件，管理器 hover-ok 门控
+        // 依赖这些事件；其 ProcResult::DefWindowProc 会把真实状态报给 DWM）——
+        // 再对 DefWindowProcW 谎报 (TRUE, -1) 把帧外观钉回活动态（后写覆盖，
+        // 探针 N2 方案实证两态描边俱在）。只改 NC 外观，不动真实激活状态；
+        // 反方向「跳过 DefWindowProc 直接返回 1」会连活动态描边一起丢掉
+        // （DWM 永远收不到帧状态通知，探针 N1 方案实证），勿用。
+        let _ = DefSubclassProc(hwnd, msg, w_param, l_param);
+        return DefWindowProcW(
+            hwnd,
+            msg,
+            windows::Win32::Foundation::WPARAM(1),
+            windows::Win32::Foundation::LPARAM(-1),
+        );
+    }
     if msg == WM_GETMINMAXINFO {
         // 先让 tao 套它自己的 min/max 约束，再修正最大化摆放：无 WS_CAPTION 的
         // THICKFRAME 窗口，系统默认按显示器全矩形 + 边框膨胀摆放最大化

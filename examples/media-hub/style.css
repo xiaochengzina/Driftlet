@@ -1,13 +1,20 @@
-/* media-hub —— 浅色卡片 UI（与 controls-demo 同一范式：填充 + 内部滚动） */
+/* media-hub —— 管理器同款现代材质：冷纸底 + 白色浮卡 + 软投影
+   （与 controls-demo 同一范式：填充 + 内部滚动） */
 
 :root {
   --accent: #0e75c3;
-  --bg: #f4f6f8;
+  --accent-grad: linear-gradient(150deg, #1279c4, #0e68b4);
+  --accent-soft: rgba(14, 117, 195, 0.1);
+  --accent-glow: rgba(14, 117, 195, 0.25);
+  --bg: #f4f8fb;
   --card: #ffffff;
-  --text: #24313b;
-  --muted: #7c8a95;
-  --border: #e2e8ed;
-  --danger: #c92a2a;
+  --input: #eef4f9;
+  --text: #102a33;
+  --muted: #5d717c;
+  --border: rgba(14, 117, 195, 0.1);
+  --border-strong: rgba(14, 117, 195, 0.24);
+  --shadow-card: 0 1px 2px rgba(15, 60, 80, 0.05), 0 8px 22px rgba(15, 60, 80, 0.07);
+  --danger: #c2402f;
 }
 
 * { box-sizing: border-box; }
@@ -19,7 +26,7 @@ html, body {
 
 body {
   overflow: hidden; /* 不允许窗口级滚动条 */
-  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
   font-size: 13px;
   color: var(--text);
   background: transparent; /* 透明窗口：背景画在外壳上 */
@@ -34,17 +41,18 @@ body {
   flex-direction: column;
   height: 100%;
   background: var(--bg);
-  border-radius: 10px;
+  border-radius: 16px;
   overflow: hidden;
 }
 
-/* ── 标题栏（拖动区的一部分） ── */
+/* ── 标题栏（拖动区的一部分）：hero 语言——白面 + 淡蓝晕染 + 底缘发丝线；
+   旧版 3px 顶部色带已撤 ── */
 
 .appbar {
-  padding: 12px 16px 10px;
+  padding: 14px 16px 12px;
   background: var(--card);
+  background-image: linear-gradient(135deg, var(--accent-soft), transparent 62%);
   border-bottom: 1px solid var(--border);
-  border-top: 3px solid var(--accent);
 }
 
 .appbar h1 {
@@ -57,7 +65,7 @@ body {
 }
 
 .subtitle {
-  margin: 2px 0 0;
+  margin: 3px 0 0;
   font-size: 11px;
   color: var(--muted);
 }
@@ -68,22 +76,24 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden auto; /* 内容超高在面板内滚动，不撑出窗口 */
-  padding: 12px 14px 16px;
+  padding: 12px 12px 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
+/* 卡片：白面浮起（发丝描边 + 软投影），大圆角 */
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
 }
 
 /* 卡片标题：左侧中文名，右侧等宽字体的命令名（窄窗口自动换行） */
 .card h2 {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -96,31 +106,49 @@ body {
 }
 
 .card h2 code {
-  font-family: Consolas, "Courier New", monospace;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
   font-size: 10px;
   font-weight: 400;
   letter-spacing: 0;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--input);
 }
 
-/* ── 通用控件 ── */
+/* ── 通用控件：白面 chip 按钮；激活/主按钮 = 渐变 + 蓝光晕 ── */
 
 .btn {
   border: 1px solid var(--border);
   background: var(--card);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: 10px;
   padding: 5px 10px;
   font-size: 13px;
   font-family: inherit;
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.btn:hover { border-color: var(--accent); color: var(--accent); }
-.btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:hover { border-color: var(--border-strong); color: var(--accent); }
+.btn.on {
+  background-image: var(--accent-grad);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 2px 8px var(--accent-glow);
+}
 .btn.wide { width: 100%; }
 
-.btn-row { display: flex; gap: 8px; margin-top: 8px; }
-.btn-row .btn { flex: 1; font-size: 15px; padding: 4px 0; }
+.btn-row { display: flex; gap: 8px; margin-top: 10px; }
+.btn-row .btn { flex: 1; font-size: 15px; padding: 5px 0; }
+
+/* 播放/暂停 = 传输主按钮：渐变实心 + 光晕（两侧上/下首保持白面 chip） */
+#btn-playpause {
+  background-image: var(--accent-grad);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 3px 10px var(--accent-glow);
+}
+#btn-playpause:hover { color: #fff; filter: brightness(1.07); }
 
 .status-line { margin: 8px 0 0; font-size: 12px; color: var(--muted); word-break: break-all; }
 .status-line.is-error { color: var(--danger); }
@@ -141,29 +169,36 @@ body {
   accent-color: var(--accent); /* 原生滑块直接上主题色，无需自绘 */
 }
 
-.vol-pct { flex: none; width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+.vol-pct {
+  flex: none;
+  width: 40px;
+  text-align: right;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
 #btn-mute { flex: none; }
 
 /* ── 媒体卡片 ── */
 
-.media-body { display: flex; gap: 10px; align-items: center; }
+.media-body { display: flex; gap: 12px; align-items: center; }
 
 .media-cover, .media-cover-ph {
-  width: 56px;
-  height: 56px;
-  border-radius: 6px;
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
   flex: none;
 }
 
-.media-cover { object-fit: cover; }
+.media-cover { object-fit: cover; box-shadow: var(--shadow-card); }
 
 .media-cover-ph {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg);
-  color: var(--muted);
-  font-size: 22px;
+  background: var(--input);
+  color: var(--accent);
+  font-size: 24px;
 }
 
 .media-text { flex: 1; min-width: 0; }
@@ -187,9 +222,9 @@ body {
 
 .progress {
   height: 6px;
-  margin-top: 10px;
-  border-radius: 3px;
-  background: var(--border);
+  margin-top: 12px;
+  border-radius: 999px;
+  background: var(--input);
   overflow: hidden;
 }
 
@@ -197,8 +232,8 @@ body {
   display: block;
   height: 100%;
   width: 0;
-  background: var(--accent);
-  border-radius: 3px;
+  background-image: var(--accent-grad);
+  border-radius: 999px;
   transition: width 0.3s linear;
 }
 
@@ -213,13 +248,34 @@ body {
 
 /* ── 频谱卡片 ── */
 
-.seg { display: flex; gap: 6px; margin-bottom: 8px; }
-.seg .btn { flex: 1; }
+/* 来源切换 = 现代分段控件：灰底容器 + 渐变激活块 */
+.seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 10px;
+  background: var(--input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.seg .btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.seg .btn:hover { color: var(--text); }
+.seg .btn.on {
+  background-image: var(--accent-grad);
+  color: #fff;
+  box-shadow: 0 2px 8px var(--accent-glow);
+}
 
 #spec-canvas {
   display: block;
   width: 100%;
   height: 72px;
-  background: var(--bg);
-  border-radius: 6px;
+  background: var(--input);
+  border-radius: 12px;
 }
