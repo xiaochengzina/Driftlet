@@ -1,0 +1,303 @@
+/* power-tools —— 管理器同款现代材质：冷纸底 + 白色浮卡 + 软投影
+   （填充 + 内部滚动范式，与 toolbox 一致） */
+
+:root {
+  --accent: #0e75c3;
+  --accent-grad: linear-gradient(150deg, #1279c4, #0e68b4);
+  --accent-soft: rgba(14, 117, 195, 0.1);
+  --accent-glow: rgba(14, 117, 195, 0.25);
+  --bg: #f4f8fb;
+  --card: #ffffff;
+  --input: #eef4f9;
+  --text: #102a33;
+  --muted: #5d717c;
+  --border: rgba(14, 117, 195, 0.1);
+  --border-strong: rgba(14, 117, 195, 0.24);
+  --shadow-card: 0 1px 2px rgba(15, 60, 80, 0.05), 0 8px 22px rgba(15, 60, 80, 0.07);
+  --danger: #c2402f;
+  --danger-soft: rgba(194, 64, 47, 0.1);
+  --ok: #0e7a4f;
+  --ok-soft: rgba(14, 122, 79, 0.1);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden; /* 不允许窗口级滚动条 */
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent; /* 透明窗口：背景画在外壳上 */
+  user-select: none;
+}
+
+/* 输入框 / 文本域 / 结果区允许选中文字（输出可复制） */
+input, textarea, select, .result { user-select: text; }
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+/* ── 标题栏（拖动区的一部分）：hero 语言——白面 + 淡蓝晕染 + 底缘发丝线 ── */
+
+.appbar {
+  padding: 14px 16px 12px;
+  background: var(--card);
+  background-image: linear-gradient(135deg, var(--accent-soft), transparent 62%);
+  border-bottom: 1px solid var(--border);
+}
+
+.appbar-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.appbar h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 桥接状态徽标：软色胶囊（正常绿 / 桥缺失红） */
+.badge {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+.badge.missing {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.subtitle {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ── 面板（填充 + 内部滚动） ── */
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto; /* 内容超高在面板内滚动，不撑出窗口 */
+  padding: 12px 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 卡片：白面浮起（发丝描边 + 软投影），大圆角 */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card h3 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 卡片右上角的权限标签：高危红软底（本皮肤两条都是高危） */
+.perm {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.perm.high {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: transparent;
+}
+
+.perm.medium {
+  color: #9a6200;
+  background: #fff3d6;
+  border-color: transparent;
+}
+
+.note {
+  margin: 2px 0 6px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.note.warn {
+  color: #9a6200;
+  background: #fff7e8;
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+
+/* ── 控件：白面 chip 按钮（主按钮渐变 + 蓝光晕）；输入 = 灰底嵌入 + 焦点蓝环 ── */
+
+.btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.btn:hover {
+  border-color: var(--border-strong);
+  color: var(--accent);
+}
+
+.btn.primary {
+  background-image: var(--accent-grad);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 650;
+  box-shadow: 0 3px 10px var(--accent-glow);
+}
+
+.btn.primary:hover {
+  color: #fff;
+  filter: brightness(1.07);
+}
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.input-row {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.input-row input,
+.input-row select,
+textarea {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.input-row input[type="number"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.input-row select { flex: none; }
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.5;
+}
+
+.input-row input:focus,
+.input-row select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* __fs__ 直引的图片预览 */
+#fs-preview-img {
+  display: block;
+  max-width: 100%;
+  max-height: 140px;
+  margin: 8px auto 0;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  object-fit: contain;
+}
+
+/* [hidden] 防护：上方 display:block 会顶掉 hidden 属性（空 src 细条常驻、
+   裂图藏不住——web-view 同款事故），必须显式压住 */
+#fs-preview-img[hidden] {
+  display: none;
+}
+
+/* ── 结果区（灰底嵌入，内部滚动，不撑破卡片） ── */
+
+.result {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-family: "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.result.placeholder { color: var(--muted); }
+
+.result.error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: transparent;
+}

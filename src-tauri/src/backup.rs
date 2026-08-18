@@ -37,33 +37,66 @@ const MAX_FILES: usize = 5000;
 /// 导入 Phase 2/3 的 rename+copy 窗口期 skins/ 缺失或半拷贝，此刻并发
 /// 导出会产出不完整备份。
 pub fn export_backup(config_dir: &Path, skins_dir: &Path, dest: &Path, lang: &str) -> Result<(), String> {
-    let file = fs::File::create(dest)
-        .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
-    let mut zip = zip::ZipWriter::new(file);
-    let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    // 导出目标不得位于两个源目录内：add_dir 会把正在写入的 zip 自身包进去
+    //（自包含、体积失控、产物损坏）。canonicalize dest 的父目录做包含性判定
+    //（dest 尚不存在，比父目录）。
+    {
+        let parent = dest.parent().unwrap_or(Path::new("."));
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let parent_c = canon(parent);
+        for src in [config_dir, skins_dir] {
+            let src_c = canon(src);
+            if parent_c == src_c || parent_c.starts_with(&src_c) {
+                return Err(trf(lang, Key::ExportBackupFailed,
+                    &["destination must not be inside config/ or skins/"]));
+            }
+        }
+    }
+    // 先写临时文件再 rename 就位：导出失败不留半截 zip
+    let tmp = dest.with_extension("zip.tmp");
+    let result = (|| -> Result<(), String> {
+        let file = fs::File::create(&tmp)
+            .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    let manifest = serde_json::json!({
-        "format": BACKUP_FORMAT,
-        "app": "Driftlet",
-        "app_version": env!("CARGO_PKG_VERSION"),
-        "created_at": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-    });
-    let fail = |e: zip::result::ZipError| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]);
-    zip.start_file(MANIFEST_NAME, opts).map_err(fail)?;
-    zip.write_all(manifest.to_string().as_bytes())
-        .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
+        let manifest = serde_json::json!({
+            "format": BACKUP_FORMAT,
+            "app": "Driftlet",
+            "app_version": env!("CARGO_PKG_VERSION"),
+            "created_at": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        });
+        let fail = |e: zip::result::ZipError| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]);
+        zip.start_file(MANIFEST_NAME, opts).map_err(fail)?;
+        zip.write_all(manifest.to_string().as_bytes())
+            .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
 
-    add_dir(&mut zip, config_dir, "config", opts, lang)?;
-    add_dir(&mut zip, skins_dir, "skins", opts, lang)?;
-    zip.finish().map_err(fail)?;
-    Ok(())
+        add_dir(&mut zip, config_dir, "config", opts, lang)?;
+        add_dir(&mut zip, skins_dir, "skins", opts, lang)?;
+        zip.finish().map_err(fail)?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            fs::rename(&tmp, dest)
+                .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
 }
 
 /// Recursively add `base`'s files under the `<prefix>/` zip path.  Staged-
 /// replace leftovers (package installs, earlier failed imports) are skipped.
+/// junction/symlink 目录不跟随（reparse point 成环会无限递归撑爆磁盘，
+/// 指向外部的 junction 还会把 skins 之外的内容带进备份）；条目数/总字节
+/// 与导入侧同一套防御上限。
 fn add_dir(
     zip: &mut zip::ZipWriter<fs::File>,
     base: &Path,
@@ -76,6 +109,8 @@ fn add_dir(
     }
     let fail = |e: io::Error| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]);
     let mut stack = vec![base.to_path_buf()];
+    let mut files = 0usize;
+    let mut total: u64 = 0;
     while let Some(dir) = stack.pop() {
         for entry in fs::read_dir(&dir).map_err(fail)? {
             let entry = entry.map_err(fail)?;
@@ -84,15 +119,39 @@ fn add_dir(
             if name.starts_with(".staging-") || name.ends_with(".old") || name.ends_with(".import-old") {
                 continue;
             }
+            // reparse point（junction/symlink）不跟随：跳过整个目录/文件
+            let meta = fs::symlink_metadata(&path).map_err(fail)?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::fs::MetadataExt;
+                // FILE_ATTRIBUTE_REPARSE_POINT：junction 在 Windows 上不
+                // 被 is_symlink 标记，须按属性位判
+                if meta.file_attributes() & 0x400 != 0 {
+                    continue;
+                }
+            }
             let rel = path.strip_prefix(base).map_err(|e| e.to_string())?;
             let rel_slash = rel
                 .components()
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("/");
-            if path.is_dir() {
+            if meta.is_dir() {
                 stack.push(path);
                 continue;
+            }
+            files += 1;
+            total = total.saturating_add(meta.len());
+            if files > MAX_FILES {
+                return Err(trf(lang, Key::ExportBackupFailed,
+                    &[&format!("too many files (> {})", MAX_FILES)]));
+            }
+            if total > MAX_TOTAL_BYTES {
+                return Err(trf(lang, Key::ExportBackupFailed,
+                    &[&format!("backup too large (> {} bytes)", MAX_TOTAL_BYTES)]));
             }
             zip.start_file(format!("{}/{}", prefix, rel_slash), opts)
                 .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
@@ -296,6 +355,32 @@ fn import_old_sibling(dir: &Path) -> PathBuf {
         "{}.import-old",
         dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
     ))
+}
+
+/// 导入崩溃窗口的启动回滚：②就位阶段断电/崩溃后，可能只剩 `<name>.import-old`
+/// 而 `<name>` 缺失或残缺——数据目录「凭空消失」。启动时检测：<name>.import-old
+/// 存在且 <name> 不存在则 rename 回滚；两者都在则视为已成功完成，丢弃 .import-old。
+/// 返回回滚条数（日志用）。
+pub fn rollback_interrupted_import(config_dir: &Path, skins_dir: &Path) -> usize {
+    let mut rolled = 0;
+    for dir in [config_dir, skins_dir] {
+        let old = import_old_sibling(dir);
+        if !old.exists() {
+            continue;
+        }
+        if !dir.exists() {
+            match fs::rename(&old, dir) {
+                Ok(()) => {
+                    rolled += 1;
+                    log::warn!("import rollback: {:?} restored from interrupted import", dir);
+                }
+                Err(e) => log::error!("import rollback failed for {:?}: {}", dir, e),
+            }
+        } else {
+            let _ = fs::remove_dir_all(&old);
+        }
+    }
+    rolled
 }
 
 /// 备份里可能合法地缺 `skins/`（导出时一个皮肤都没装）——缺则建空目录

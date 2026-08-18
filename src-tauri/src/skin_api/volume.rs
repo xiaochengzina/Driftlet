@@ -50,7 +50,8 @@ pub fn get_volume() -> Result<VolumeInfo, String> {
 }
 
 pub fn set_volume(volume_pct: f32) -> Result<(), String> {
-    let scalar = (volume_pct / 100.0).clamp(0.0, 1.0);
+    // NaN 防线：NaN 穿透 clamp 直达 COM——非有限值按 0 处理
+    let scalar = if volume_pct.is_finite() { (volume_pct / 100.0).clamp(0.0, 1.0) } else { 0.0 };
     with_endpoint(|ep| unsafe {
         ep.SetMasterVolumeLevelScalar(scalar, std::ptr::null())
             .map_err(|e| e.to_string())

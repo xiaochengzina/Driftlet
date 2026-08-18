@@ -46,8 +46,10 @@ pub fn idle_ms() -> Result<u64, String> {
 // ─── Foreground window ───
 
 pub fn foreground_window() -> Option<ForegroundWindowInfo> {
+    use windows::Win32::Foundation::LPARAM;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+        GetForegroundWindow, GetWindowThreadProcessId, SendMessageTimeoutW,
+        SMTO_ABORTIFHUNG, WM_GETTEXT,
     };
 
     unsafe {
@@ -55,9 +57,22 @@ pub fn foreground_window() -> Option<ForegroundWindowInfo> {
         if hwnd.0.is_null() {
             return None;
         }
+        // GetWindowTextW 对假死（不泵消息）的第三方窗口会同步阻塞主线程
+        // 冻结宿主——改 SendMessageTimeoutW + SMTO_ABORTIFHUNG：300ms 不答
+        // 就放弃标题（进程名照常可读）。WM_GETTEXT 语义：wParam=缓冲区容量
+        //（字符数）、lParam=缓冲区指针，消息返回值（复制的长度）进 lpdwResult。
         let mut buf = [0u16; 512];
-        let len = GetWindowTextW(hwnd, &mut buf);
-        let title = String::from_utf16_lossy(&buf[..len as usize]);
+        let mut copied = 0usize;
+        let _ = SendMessageTimeoutW(
+            hwnd,
+            WM_GETTEXT,
+            windows::Win32::Foundation::WPARAM(512),
+            LPARAM(buf.as_mut_ptr() as isize),
+            SMTO_ABORTIFHUNG,
+            300,
+            Some(&mut copied),
+        );
+        let title = String::from_utf16_lossy(&buf[..copied.min(511)]);
 
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));

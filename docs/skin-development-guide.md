@@ -147,7 +147,7 @@ The `skin.json` file itself must not exceed **1 MB** (larger files are refused a
 | `id` | Required for packaging/distribution | Unique skin ID; rules below |
 | `name` | Yes | Skin name, shown in the manager's list and config panel |
 | `name_en` | No | English skin name (preferred in the English UI when `bilingual: true`; falls back to `name` if empty), see §4.5 |
-| `entry` | No | Entry HTML file name, default `index.html`; must be a **plain file name** — `..`, `/`, `\`, `:` are not allowed |
+| `entry` | No | Entry HTML file name, default `index.html`; must be a **plain file name** — `..`, `/`, `\`, `:` are not allowed. **Exception: an `http(s)://` URL = a web skin** (the window loads the site page directly, see §2.2) |
 | `author` | No | Author, shown on the card and the config panel |
 | `version` | No | Version number, e.g. `"1.0.0"`; update packages use it to decide upgrade/downgrade — strongly recommended to always set it |
 | `min_host_version` | No | Minimum host version, e.g. `"1.0.6"`; if the host is older, the install wizard warns that "some features may not work" (installation is NOT blocked). Runtime feature detection: see `hostVersion` in §5.1 |
@@ -155,7 +155,7 @@ The `skin.json` file itself must not exceed **1 MB** (larger files are refused a
 | `description_en` | No | English description (same selection rules as `name_en`) |
 | `bilingual` | No | Chinese/English bilingual declaration, default `false`; when `true`, the various `*_en` English strings take effect, see §4.5 |
 | `window` | No | Window defaults, see §2.2 |
-| `permissions` | No | Sensitive capability declarations (`registry` / `shell` / `system` / `clipboard` / `mic`), see §2.3 |
+| `permissions` | No | Sensitive capability declarations (`registry` / `shell` / `system` / `clipboard` / `mic` / `file_system` / `control`), see §2.3 |
 | `settings` | No | Custom settings declarations, see Chapter 4 |
 
 A skin's unique identifier (skin id) = the **`id` field** of `skin.json`:
@@ -175,8 +175,11 @@ A skin's unique identifier (skin id) = the **`id` field** of `skin.json`:
 | `resizable` | boolean | false | Whether the window edges/corners can initially be dragged to resize (minimum 60×40). While enabled, an animated yellow-and-black striped border hint is shown, and the outer 6px edges are the resize hot zone, taking precedence over `.drag-region` dragging. Users can toggle it anytime on the manager's "Window" tab; before enabling it, the skin should have a responsive layout per §3.3, otherwise content gets clipped as the window shrinks |
 | `zoom` | number | 1.0 | Default zoom (0.5 – 2.0): actual window = `width × zoom` × `height × zoom`; content is scaled by the same factor via WebView2 ZoomFactor — **lay the skin out at its base size and the platform handles the overall scaling, no adaptation needed**. Users can adjust it anytime on the manager's "Window" tab |
 | `opacity` | number | 1.0 | Initial opacity, 0.1 – 1.0 |
+| `refresh_seconds` | number | none | Web skins only (`entry` is a URL): auto-reload the page on an interval (e.g. 300 = every 5 minutes). The site login state lives in the WebView2 cookie jar, so reloads never log the user out |
 
-Except for `transparent`, which is fixed by the author, all of the above are **initial defaults** — later changes made by the user in the manager override them and are persisted.
+Except for `transparent`, which is fixed by the author, all of the above are **initial defaults** — later changes made by the user in the manager override them and are persisted. All values are normalized at load: width/height clamped to 1–10000 logical pixels, out-of-range/invalid `opacity` falls back into [0.1, 1.0], `zoom` is clamped to [0.5, 2.0], and `refresh_seconds` is capped at 24 hours — an extreme value in a skin package cannot turn the window into an abnormal form (e.g. an invisible topmost full-screen click eater).
+
+**Web skins** (`entry` is an `http(s)://` URL): the window loads the site page directly — cookies/login state persist in the WebView2 user data folder (log in once); the page gets no injected bridge (no `.drag-region` dragging, no host right-click menu, and no backend commands at all — command calls from a remote origin are blocked by the remote-origin guard anyway), while position/size/zoom/opacity remain adjustable on the manager's "Window" tab. In this form the site page fills the whole window and `transparent` is page-defined (transparent parts of the page show through to whatever is below; opaque parts stay as-is — there is no shell to give rounded corners). **When dragging / the right-click menu / bridge capabilities are needed, use the iframe-embedding route instead** (a local shell + `<iframe src>` around the target page, see `examples/kimi-quota` — provided the target site allows framing: no `X-Frame-Options` / `frame-ancestors` restriction; keep `transparent: true` on this route — only the area outside the shell's `border-radius` shows through, which is what makes the corners round).
 
 ### 2.3 Permission Declarations (permissions)
 
@@ -193,14 +196,16 @@ Before a skin can call "sensitive capability" backend commands (§5.3), it must 
 | `system` | High risk | `set_volume` / `set_mute` / `media_control` / `open_external` / `show_notification` (change system state: adjust volume, control media playback, open external links/files, send system notifications) |
 | `clipboard` | Medium risk | `read_clipboard_text` / `write_clipboard_text` (reading may expose sensitive content the user just copied) |
 | `mic` | Medium risk | `get_mic_spectrum` (microphone input — unlike system loopback, this is real audio capture and privacy-sensitive) |
+| `file_system` | High risk | `skin_read_any_file` / `skin_write_any_file` / `skin_list_any_dir` / `skin_create_any_dir` / `skin_delete_any_path` (read / write / list / create / delete at arbitrary absolute paths — beyond the skin-folder sandbox, the whole disk is reachable; UNC network paths are always rejected; failures reject with the raw system error) |
+| `control` | Medium risk | `skin_list_skins` / `skin_get_window_config` / `skin_set_window_config` / `skin_load` / `skin_unload` / `skin_reload` / `skin_hide` / `skin_show` (enumerate installed skins, read/modify any skin's window config, lifecycle and visibility — position, size, placement, lock, etc., other skins included) |
 
 "Risk" is the two-tier grading shown on the install wizard (see below) — display-only; backend enforcement remains a binary "declared / undeclared" check regardless of tier.
 
 Rules:
 
 - **Declare only the permissions you actually use**; unknown names are ignored.
-- Read-only system info commands (§5.2) and settings read/write commands (§5.4) need no declaration; neither does file read/write inside the skin folder (`skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file`) — the fs sandbox already confines every operation to the skin's own install folder (absolute paths and `..` rejected, canonicalize containment check, symlink-escape protection, `skin.json`/`settings.json*` read-only protection). The old `files` permission has been removed entirely; a leftover `"files"` declaration in an old skin is treated as an unknown name and ignored — harmless.
-- **Permission declarations are visible to users**: when installing/updating a skin, the install wizard lists every declared permission one by one, flagged in two risk tiers — `shell` and `system` as "High risk" (red warning badge), `registry`, `clipboard`, and `mic` as "Medium risk" (yellow warning badge); the removed `files` declaration is silently skipped and not shown. Declaring permissions you don't use lowers users' willingness to install.
+- Read-only system info commands (§5.2) and settings read/write commands (§5.4) need no declaration; neither does file read/write inside the skin folder (`skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file`) — the fs sandbox already confines every operation to the skin's own install folder (absolute paths and `..` rejected, canonicalize containment check, symlink-escape protection, `skin.json`/`settings.json*` read-only protection, and DOS device-name rejection (`CON`/`NUL`/`COM1-9`/`LPT1-9`, with or without an extension)). The old `files` permission has been removed entirely; a leftover `"files"` declaration in an old skin is treated as an unknown name and ignored — harmless.
+- **Permission declarations are visible to users**: when installing/updating a skin, the install wizard lists every declared permission one by one, flagged in two risk tiers — `shell`, `system`, and `file_system` as "High risk" (red warning badge), `registry`, `clipboard`, `mic`, and `control` as "Medium risk" (yellow warning badge); the removed `files` declaration is silently skipped and not shown. Declaring permissions you don't use lowers users' willingness to install.
 - From the user's perspective: a skin declaring `shell` is equivalent to being able to run local programs — state honestly on the release page which permissions the skin uses and what for.
 
 ---
@@ -283,8 +288,9 @@ Declare a `settings` array in `skin.json` and the manager's "Skin Settings" tab 
 | `group` | No | Group name; controls of the same group are collected into one card; groups are ordered by first appearance; unspecified ones go into an untitled card |
 | `group_en` | No | English group name (bilingual skins only) |
 | `default` | No | Default value; if omitted, a per-type fallback applies (false / 0 / "" / first option) |
+| `filters` | No | `file` control only: allowed extension list (no dots, e.g. `["png","jpg"]`); omitted/empty = unfiltered; backend whitelists to lowercase alphanumerics |
 
-### 4.2 Control Types (20 Total)
+### 4.2 Control Types (22 Total)
 
 | type | Control | Value format | Type-specific fields / notes |
 |------|------|--------|------------------|
@@ -303,8 +309,10 @@ Declare a `settings` array in `skin.json` and the manager's "Skin Settings" tab 
 | `datetime` | Date-time picker | `"YYYY-MM-DD HH:MM:SS"` | Second precision; empty string = unset; for countdown-target-style scenarios |
 | `password` | Password input | `"string"` | Masked display (with show/hide toggle), ≤256 characters, good for API keys. **The value is never injected into pages**; see §4.3 for how to read it |
 | `timerange` | Time range | `{ "start": "YYYY-MM-DD HH:MM:SS", "end": "..." }` | Second precision; empty string = unset |
-| `palette` | Color palette | `"#rrggbb"` or `"#rrggbbaa"` | Preset colors + custom color picking (the color panel has a built-in screen eyedropper) + opacity slider; `options` can customize the preset colors |
+| `palette` | Color palette | `"#rrggbb"` or `"#rrggbbaa"` | Preset colors + custom color picking (the color panel has a built-in screen eyedropper) + opacity slider; `options` can customize the preset colors (values must be `#hex` — invalid values are filtered out by the manager and not rendered) |
 | `font` | Font picker | `"Microsoft YaHei UI"` | Enumerates installed system fonts; empty string = default |
+| `file` | File picker | `"D:\\pics\\cat.png"` | Manager-hosted system dialog; value is an absolute path (≤1024 chars), empty string = unset; `filters` restricts extensions (no dots); the skin can reference the file via the `file_system` permission's `__fs__` endpoint (§5.3) |
+| `directory` | Folder picker | `"D:\\data"` | Same, picking a folder; `filters` ignored |
 | `tasklist` | Task list | `["item 1","item 2"]` | Users freely add/remove/edit |
 | `todolist` | To-do task list | `[{ "text": "...", "done": true }]` | Task rows with checkboxes; max 500 items, 200 characters per item (silently truncated beyond) |
 | `datetasklist` | Dated task list | `[{ "time": "YYYY-MM-DD HH:MM:SS", "text": "..." }]` | Each item carries a date-time; time may be empty |
@@ -330,7 +338,7 @@ document.addEventListener('desk-setting-changed', (e) => {
 });
 ```
 
-**The `password`-type special case (important)**: all skins share the same page origin, so values baked into the HTML in `__DESK_PP__.settings` could theoretically be read by other skins (§6.1). Therefore **password-type keys in the `settings` object are always empty strings**; the real value can only be fetched per window identity via the `skin_get_setting` command (§5.4):
+**The `password`-type special case (important)**: all skins share the same page origin, so values baked into the HTML in `__DESK_PP__.settings` could theoretically be read by other skins (§6.1). Therefore **password-type keys in the `settings` object are always empty strings at serve time**; the real value can only be fetched per window identity via the `skin_get_setting` command (§5.4). Runtime note: when the user saves that setting from the manager, the real value is eval-synced into the skin's own window's `settings` (the same trust domain — that window could already read it via `skin_get_setting`, so no privilege is crossed). Skins must still always read via `skin_get_setting` and never trust the baked copy:
 
 ```js
 let apiKey = '';
@@ -430,22 +438,31 @@ Injected by the app before the page loads; ready to use when skin scripts run. T
 | `get_volume` / `get_media_info` | — | Volume read / now playing |
 | `get_battery_info` / `get_idle_time` | — | Battery / input idle time |
 | `get_foreground_window_info` / `get_monitors` | — | Foreground window / monitors |
+| `get_system_theme` | — | Windows system light/dark theme (`"light"` / `"dark"`) |
 | `skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file` | — | Skin-folder file I/O (sandboxed) |
 | `skin_get_setting` / `skin_set_setting` | — | Read / write your own declared settings |
 | `skin_log` | — | Send an explicit host-log message (console output is forwarded automatically, §5.4) |
+| `skin_hide` / `skin_show` | self: free / `control` (others) | Hide / show a skin window (omit id = self) |
+| `skin_broadcast` | — | Inter-skin event broadcast (`desk-skin-message`, reaches all loaded skins incl. self) |
+| `http_request` | — | Arbitrary HTTP request (beyond CORS; pages already have fetch) |
 | `read_registry_value` | `registry` | Registry read-only |
 | `run_command` | `shell` | Run a command (normal privileges, hidden window) |
 | `set_volume` / `set_mute` / `media_control` / `open_external` / `show_notification` | `system` | Set volume / mute / media transport / open external target / toast notification |
 | `read_clipboard_text` / `write_clipboard_text` | `clipboard` | Clipboard read / write |
 | `get_mic_spectrum` | `mic` | Microphone spectrum |
+| `skin_read_any_file` / `skin_write_any_file` / `skin_list_any_dir` / `skin_create_any_dir` / `skin_delete_any_path` | `file_system` | Arbitrary-path file read / write / list / mkdir / delete (high risk) |
+| `skin_list_skins` | `control` | Enumerate installed skins (id/name/version/loaded/hidden) |
+| `skin_get_window_config` / `skin_set_window_config` | self: free / `control` (others) | Read / modify a skin's window config (omit id = self) |
+| `skin_load` / `skin_unload` / `skin_reload` | self: free / `control` (others) | Load / unload / reload a skin (omit id = self) |
 
 ### 5.1 Bridge Members
 
 | Member | Type | Description |
 |------|------|------|
-| `settings` | object | Currently effective setting values (key → value); `password`-type keys are always empty strings, see §4.3 |
+| `settings` | object | Currently effective setting values (key → value); `password`-type keys are always empty strings at serve time (after a manager-side save the real value is synced into this window — always read via `skin_get_setting`), see §4.3 |
 | `invoke(cmd, args?)` | function | Calls a backend command; returns a Promise (rejects on failure with a readable error message) |
 | `language` | string | The manager UI language (`"zh-CN"` / `"en"`); updated in real time when the manager switches language, with a `desk-language-changed` event dispatched (`e.detail.language`) — usage in §4.5 |
+| `theme` | string | The manager's current theme (`"light"` / `"dark"`; `auto` is resolved by the backend into a concrete value); updated in real time when the manager switches theme, with a `desk-theme-changed` event dispatched (`e.detail.theme`) — skins can follow day/night palettes with it |
 | `hostVersion` | string | Host version (e.g. `"1.0.6"`); for feature detection — when you rely on commands/controls introduced in a newer version, compare numeric segments and degrade gracefully |
 | `positionLocked` | boolean | Position lock state (used internally by the bridge; read-only reference) |
 | `resizable` | boolean | Border resize switch state (used internally by the bridge; read-only reference) |
@@ -658,6 +675,17 @@ const ms = await window.__DESK_PP__.invoke('get_monitors');
 
 Note that rect/work_area are **physical pixels**, differing from the logical pixels used in window config by a scale_factor. A secondary monitor's `rect.x/y` can be negative (virtual coordinates left of / above the primary monitor).
 
+#### `get_system_theme`
+
+Detects the **Windows system-wide** light/dark theme (the `AppsUseLightTheme` registry value under `HKCU\…\Themes\Personalize`):
+
+```js
+const sysTheme = await window.__DESK_PP__.invoke('get_system_theme');  // "light" / "dark"
+```
+
+- Distinct from the bridge's `theme` member (the **manager's** theme, which may not follow the system): use this to follow the Windows setting, and `theme` to follow the manager UI;
+- Read-only query with no change notifications — call it when needed, or refresh on a timer / `visibilitychange`.
+
 ### 5.3 Sensitive Capabilities (Require permissions in skin.json)
 
 See §2.3 for how to declare. Undeclared calls reject with an error like `Skin 'my-skin' has not declared the 'shell' permission`.
@@ -749,8 +777,9 @@ await window.__DESK_PP__.invoke('open_external', { target: 'D:\\docs\\report.pdf
 
 Allowed targets: `http(s)://`, `mailto:`, local absolute paths (files or folders). Explicitly rejected:
 
-- **Executables / types the system resolves as code or remote references** (`.exe` `.bat` `.cmd` `.ps1` `.vbs` `.vbe` `.js` `.jse` `.wsf` `.wsh` `.msi` `.msp` `.msc` `.scr` `.com` `.pif` `.cpl` `.lnk` `.hta` `.reg` `.dll` `.jar` `.url` `.search-ms` `.library-ms` `.application` `.appref-ms` `.diagcab` `.website`) — to run programs, use `run_command` with the `shell` permission, so users get a correct expectation of capabilities; the last six (Explorer search/library files, ClickOnce, diagnostic packages, etc.) can indirectly point at remote shares — same NTLM-leak surface as UNC paths, so they are rejected too;
+- **Executables / types the system resolves as code or remote references** (`.exe` `.bat` `.cmd` `.ps1` `.vbs` `.vbe` `.js` `.jse` `.wsf` `.wsh` `.msi` `.msp` `.msc` `.scr` `.com` `.pif` `.cpl` `.lnk` `.hta` `.reg` `.dll` `.jar` `.url` `.search-ms` `.library-ms` `.application` `.appref-ms` `.diagcab` `.website` `.chm` `.settingcontent-ms` `.scf` `.hlp` `.wsc` `.sct`) — to run programs, use `run_command` with the `shell` permission, so users get a correct expectation of capabilities; the last six (Explorer search/library files, ClickOnce, diagnostic packages, etc.) can indirectly point at remote shares — same NTLM-leak surface as UNC paths, so they are rejected too;
 - **UNC paths** (`\\host\share` form; accessing one triggers an SMB connection);
+- **Path components with trailing dots/spaces** (Windows normalization strips them before executing — `"RUN.EXE."` and `"RUN.EXE "` are the same file as `"RUN.EXE"`; always rejected);
 - relative paths and schemes like `file:` / `javascript:`;
 - nonexistent targets and open failures return the same error, indistinguishable.
 
@@ -776,6 +805,76 @@ const { bands, peak } = await window.__DESK_PP__.invoke('get_mic_spectrum', { ba
 ```
 
 Rejects when there is no microphone device (or desktop-app microphone access is disabled in the system's privacy settings); lazy start, auto-release after 30 idle seconds — same as loopback.
+
+#### Arbitrary-Path File Access (Permission `file_system`, High Risk)
+
+```js
+const text = await window.__DESK_PP__.invoke('skin_read_any_file', { path: 'D:\\notes\\todo.txt' });
+await window.__DESK_PP__.invoke('skin_write_any_file', { path: 'D:\\notes\\todo.txt', data: 'hello' });
+// with binary: true, payloads are base64 (read ≤32MB / write ≤16MB)
+
+// List / create / delete
+const entries = await window.__DESK_PP__.invoke('skin_list_any_dir', { path: 'D:\\notes' });
+// → [{ name, is_dir, size }], directories first (same shape as the sandboxed skin_list_dir)
+await window.__DESK_PP__.invoke('skin_create_any_dir', { path: 'D:\\notes\\archive' });  // multi-level, existing dir counts as success
+await window.__DESK_PP__.invoke('skin_delete_any_path', { path: 'D:\\notes\\todo.txt' });
+// directories: empty-only by default; a whole tree needs explicit recursive: true
+await window.__DESK_PP__.invoke('skin_delete_any_path', { path: 'D:\\notes\\archive', recursive: true });
+```
+
+- **Absolute paths only** — relative paths are rejected (there is no working directory to resolve them against); **UNC network paths are always rejected** (`\\host\share` access triggers SMB connections and NTLM outbound — same rationale as `open_external` rejecting UNC);
+- Unlike the permission-free `skin_read_file` sandbox: these five have **no directory boundary** — the whole disk is reachable, so use them only when genuinely needed;
+- Failures reject with the raw system error (file not found, access denied, …) without wrapping — a skin may surface it to the user as-is;
+- Missing parent directories are created automatically on write (to create an empty directory use `skin_create_any_dir`);
+- Deletion is irreversible: a directory tree requires explicit `recursive: true` (so one command can't wipe a subtree by accident);
+- **Display references go through the `__fs__` endpoint**: a skin declaring `file_system` can reference external files by URL without touching JS memory (base64 is for data processing; images/video belong here)——
+
+```html
+<img src="http://skin.localhost/__fs__?path=D%3A%5Cphotos%5Ccat.png">
+```
+(`path` is a percent-encoded absolute path; driftlet.js's `fileUrl(path)` builds it for you. Skins without `file_system` always get 404 from this endpoint.)
+
+#### Skin Window Config (Permission `control`, Medium Risk)
+
+Read/modify **any** skin's (including your own) window configuration — the same set the manager's "Window" tab edits:
+
+```js
+// Enumeration entry: get all installed skins first (id/name/version/author/loaded/hidden)
+const list = await window.__DESK_PP__.invoke('skin_list_skins');
+
+const cfg = await window.__DESK_PP__.invoke('skin_get_window_config', { skinId: 'pomodoro' });
+// → { loaded, opacity, always_on_top, on_desktop, click_through, position_locked,
+//     resizable, zoom, edge_snap, snap_gap, x, y, width, height }
+// Omitting skinId (or passing empty) reads yourself: permission-free
+await window.__DESK_PP__.invoke('skin_get_window_config', {});
+
+await window.__DESK_PP__.invoke('skin_set_window_config', {
+  skinId: 'pomodoro',
+  patch: { opacity: 0.9, x: 100, y: 80 },   // include only the keys you change
+});
+// Omitting skinId writes yourself: **all keys are permission-free** (your own
+// window is yours to adjust)
+await window.__DESK_PP__.invoke('skin_set_window_config', { patch: { opacity: 0.6 } });
+```
+
+- **Omitted skinId = yourself**: the bridge never reveals a skin its own id, so self-operations don't need a hardcoded id (same convention as the two visibility commands) — acting on yourself is **fully permission-free** (same rule as self visibility);
+- `patch` updates per key; an unknown key or a value of the wrong type rejects the **whole patch** — never half-applied;
+- Supported keys: `opacity` (0.1–1.0) / `placement` (`"top"` | `"desktop"`, the two-state level) / `click_through` / `position_locked` / `resizable` / `zoom` (0.5–2.0) / `edge_snap` / `snap_gap` / `x`, `y` / `width`, `height` (position and size are logical pixels; width/height are the visible, zoom-applied size);
+- `x`/`y` and `width`/`height` may be given one-sided — the missing side takes the current configured value; when `zoom` and `width`/`height` are in the same patch, `zoom` is always applied first;
+- `opacity` / `x,y` / `width,height` / `position_locked` / `resizable` require the target skin to be **loaded** (the runtime operations need a window) and reject "skin not loaded" otherwise; the other keys persist when unloaded and take effect on the next window creation;
+- Changes land through the same implementations as the manager's commands (persist + live-apply), fully equivalent to acting in the manager panel; a skin's custom `settings` values are out of scope (that's §5.4 settings read/write — a skin can only change keys it declared itself);
+- **The target skin receives a `desk-window-config-changed` event** (detail = `{ key, value }`; manager-panel changes dispatch it too — both paths share the same landing point). Position/size changes from dragging / border-resizing are not dispatched (the skin dragged it itself — it knows).
+
+The same permission also covers the **three lifecycle commands** (`skin_load` / `skin_unload` / `skin_reload`) and the **two visibility commands** (`skin_hide` / `skin_show`) — all accept an omitted skinId meaning yourself (permission-free; see §5.4 for visibility):
+
+```js
+await window.__DESK_PP__.invoke('skin_load', { skinId: 'pomodoro' });
+await window.__DESK_PP__.invoke('skin_unload', { skinId: 'pomodoro' });
+await window.__DESK_PP__.invoke('skin_reload', { skinId: 'pomodoro' });
+```
+
+- When the target is **yourself** (a skin unloading/reloading itself): permission-free, and the command is fire-and-forget — the calling window is destroyed right after, so the return value is unreliable (same mechanism as the right-click menu's Reload/Unload);
+- Load/unload/reload all emit the usual `skin-loaded` / `skin-unloaded` events, so the manager's list and config page stay in sync.
 
 ### 5.4 Settings Read/Write Commands (No Permission Needed)
 
@@ -816,6 +915,60 @@ await window.__DESK_PP__.invoke('skin_log', { level: 'warn', message: 'API respo
 - while the log window is closed, messages stay in the backend only — zero frontend overhead;
 - no permission declaration needed (messages never leave the local log buffer); the backend only identifies the caller via its window identity.
 
+#### `skin_hide` / `skin_show` — Hiding and Showing Skin Windows
+
+```js
+await window.__DESK_PP__.invoke('skin_hide', {});                     // hide yourself (free)
+await window.__DESK_PP__.invoke('skin_show', {});                     // show yourself (free)
+await window.__DESK_PP__.invoke('skin_hide', { skinId: 'pomodoro' });  // hide another skin (needs control)
+await window.__DESK_PP__.invoke('skin_show', { skinId: 'pomodoro' });  // show another skin (needs control)
+```
+
+- Omitting `skinId` (or passing your own id) acts on yourself: **permission-free** (only your own visibility — the "dismiss after reading" / "reappear on schedule" patterns);
+- Targeting another skin requires the **`control` medium-risk permission** (changing others' visibility, same tier as window config / lifecycle);
+- `skin_show` only shows — it does **not** steal focus (reappearing must not interrupt the user); an unloaded target rejects "skin not loaded";
+- the tray checkbox and the manager's "Hidden" badge keep working through the same `sync_tray_toggle_item` funnel; the user-side recall paths (global hotkey / tray checkbox) always remain available.
+
+#### `skin_broadcast` — Inter-Skin Event Broadcast
+
+Broadcast a custom event to **all loaded skins** (including yourself) for cross-skin data flows:
+
+```js
+// Send
+await window.__DESK_PP__.invoke('skin_broadcast', { channel: 'media-state', payload: { playing: true } });
+
+// Receive
+document.addEventListener('desk-skin-message', (e) => {
+  const { channel, from, payload } = e.detail;   // from = sender skin id
+  if (channel === 'media-state') { /* … */ }
+});
+```
+
+- `channel` is 1–64 chars; `payload` is any JSON value (≤16KB serialized);
+- you also receive your own broadcasts (filter by `from` when needed);
+- it only delivers DOM events and touches no host state, hence permission-free; a skin being unloaded won't receive (its window is gone from the registry).
+
+#### `http_request` — Arbitrary HTTP Requests (Permission-Free)
+
+Goes beyond the page `fetch`'s CORS limits — any http(s) URL, custom headers, text/binary payloads. Rationale for being free: pages already have the `fetch` channel (a `no-cors` POST can already send data out), so a separate gate would only stop the honest and add display noise:
+
+```js
+const res = await window.__DESK_PP__.invoke('http_request', {
+  url: 'https://api.example.com/data',
+  method: 'GET',                 // default GET; GET/POST/PUT/PATCH/DELETE/HEAD
+  headers: { 'Accept': 'application/json' },
+  // body: '...',                // optional payload; with binary: true it is base64-decoded before sending
+  // timeoutMs: 15000,           // default 15s, clamped 1–60s
+  // binary: true,               // binary channel: request body sent as base64, response body returned as base64
+});
+// → { status, body, headers, truncated }; body truncated at 4MB (truncated=true)
+```
+
+- **HTTP error statuses do not reject**: 4xx/5xx return `status` and `body` as usual (error-page bodies are often useful); only transport failures (DNS, connection, timeout) reject;
+- **Local/internal addresses are always rejected (SSRF guard)**: `localhost` hostnames and loopback/link-local/private/unspecified/broadcast IPs (127.x, `::1`, 10.x, 172.16–31, 192.168.x, 169.254.x, 0.0.0.0, …) cannot be requested — permission-free does not mean the internal network is readable; redirects are followed at most 3 times;
+- `binary: true` is for binary content like images/fonts — the text channel lossy-replaces invalid UTF-8 (binary data would be corrupted);
+- response headers come back in `headers` (only the first value of a repeated header is kept) — `Content-Type` etc.
+
 ### 5.5 Call Boundary (Commands Skins Can't Reach)
 
 `__DESK_PP__.invoke` is technically a straight pass-through, but **the backend gates every command by the calling window's identity**:
@@ -844,7 +997,7 @@ Driftlet's design premise: **a skin is third-party, network-capable local code**
 | Permission declarations | Sensitive capabilities (§5.3) must be declared in skin.json and are **shown to the user one by one at install time** (flagged in two risk tiers: `shell`/`system` high risk, `registry`/`clipboard`/`mic` medium risk); undeclared means rejected |
 | File sandbox | File read/write is confined to the skin's own folder (`..`, absolute paths, colon path segments, and symlink escapes rejected; 32MB/16MB read/write caps); `skin.json` and the user's `settings.json` are read-only to every skin — the sandbox itself is the boundary, so file read/write needs no permission declaration |
 | Settings isolation | `settings.json` is never served over `skin://` (including 8.3 short names, NTFS streams, and other variants); a skin's setting values are unreachable by other skins |
-| Password protection | `password`-type setting values are never injected into any page (always empty strings in `__DESK_PP__.settings`); only the owning skin window can read them via `skin_get_setting` |
+| Password protection | `password`-type setting values are never injected at serve time (always empty strings in the baked `__DESK_PP__.settings`); only the owning skin window can read them via `skin_get_setting`; a manager-side save is synced into that same window (same domain, no privilege crossed) |
 | Package install hardening | `.dskin` extraction guards against path traversal (zip-slip), caps the total by actual extracted bytes (anti zip-bomb), limits file count, and rolls back on staging failure |
 
 ### 6.2 What Skins Can Do (Unrestricted)
@@ -950,10 +1103,10 @@ Go through these one by one before packaging:
 - [ ] No opaque background covering the desktop under transparency
 - [ ] Drag areas use `.drag-region`; no `-webkit-app-region: drag`
 - [ ] Verified in the manager by shrinking the window to half and doubling it: content adapts fully — no clipping, no window-level scrollbars (§3.3)
-- [ ] If `settings` is declared: `key`s all unique, types correct (one of the 20), `default`s match their types
+- [ ] If `settings` is declared: `key`s all unique, types correct (one of the 22), `default`s match their types
 - [ ] If `"bilingual": true` is declared: `group_en` is set for every control in a group (avoids split groups in the English UI), and every field that needs bilingual has its `*_en` (§4.5)
 - [ ] Setting reads have fallbacks (`?.` + `??`), and `desk-setting-changed` is listened to for live application
-- [ ] `password`-type values are read via `skin_get_setting`, not relying on values in `__DESK_PP__.settings` (always empty strings)
+- [ ] `password`-type values are read via `skin_get_setting`, not relying on values in `__DESK_PP__.settings` (always empty strings at serve time; a manager-side save syncs them into this window at runtime — never trust the baked copy)
 - [ ] Dynamic content is rendered via `textContent` or escaped; no user-editable values spliced raw into `innerHTML` (§6.3)
 - [ ] If sensitive APIs are used: `permissions` declares only what's actually used (§2.3), and the declaration list shown in the install wizard is one you can stand behind
 - [ ] Bridge-less scenarios (opened in a plain browser) don't throw (`?.` defense, §7.2)
@@ -965,16 +1118,18 @@ Go through these one by one before packaging:
 
 ## 10. Example Skins
 
-The repo ships five example skins. `controls-demo` is the reference implementation of the settings system and page conventions; `sys-monitor` / `media-hub` / `toolbox` together cover all backend commands callable by skins (§5.2–§5.4) and are the reference for API usage; `deepseek-balance` is the reference for networked query skins. Strongly recommended to read their code before starting:
+The repo ships seven example skins. `controls-demo` is the reference implementation of the settings system and page conventions; `sys-monitor` / `media-hub` / `toolbox` together cover all backend commands callable by skins (§5.2–§5.4) and are the reference for API usage; `deepseek-balance` is the reference for networked query skins; `power-tools` demonstrates the `file_system` (high risk) and `control` (medium risk) permissions; `web-view` is the reference for iframe-embedded web skins (zero permissions). Strongly recommended to read their code before starting:
 
 | Skin | What it demonstrates |
 |------|----------|
-| `examples/controls-demo` | All 20 setting control types + groups + descriptions + Chinese/English bilingual (§4.5), HTML/CSS/JS split with relative-path references, the manager's modern material (cool paper background + floating white cards + soft shadows; three light background tints: cool paper / warm white / mist blue), the fill + internal scroll paradigm, the schema read via `fetch('skin.json')` on a relative path with control labels/groups/options rendered per the bridge language, `desk-language-changed` driving the UI language to follow the manager instantly (§4.5), setting values live-applied in the demo area (accent color / progress bar / status dot / font / background tint / panel density / stepper-driven ticker interval), `password`-type values read via `skin_get_setting`, and rendering entirely with DOM APIs / `textContent` |
+| `examples/controls-demo` | All 22 setting control types + groups + descriptions + Chinese/English bilingual (§4.5), HTML/CSS/JS split with relative-path references, the manager's modern material (cool paper background + floating white cards + soft shadows; three light background tints: cool paper / warm white / mist blue), the fill + internal scroll paradigm, the schema read via `fetch('skin.json')` on a relative path with control labels/groups/options rendered per the bridge language, `desk-language-changed` driving the UI language to follow the manager instantly (§4.5), setting values live-applied in the demo area (accent color / progress bar / status dot / font / background tint / panel density / stepper-driven ticker interval), `password`-type values read via `skin_get_setting`, and rendering entirely with DOM APIs / `textContent` |
 | `examples/sys-monitor` | The full §5.2 read-only system-info set: CPU (total bar + per-thread mini bars) / GPU / memory / disks (incl. per-volume space) / network (rates + local IPs) / OS / top-5 processes (sortable by CPU or memory) / battery / idle time / foreground window / monitors; rate readings poll every 1s (first call is a zero baseline), static info reads once at startup, polling pauses while the page is hidden. **Zero permission declarations** |
 | `examples/media-hub` | Volume read/set/mute, SMTC media info (cover / progress / status) and playback control (play_pause/next/previous), dual-source spectrum from system loopback and microphone (live canvas bars + peak line, paused while hidden, device auto-released ~30s after polling stops), toast notifications; permissions `system` + `mic` |
 | `examples/toolbox` | Clipboard read/write, skin-directory file write/read/list/delete, read-only registry (preset + custom keys), command execution (preset `ver`/`ipconfig` + custom, showing code/stdout/stderr), opening links (including a rejected `.exe` target demo), `skin_get_setting` / `skin_set_setting` (the only read channel for `password` values, writing settings back, syncing manager-side edits via `desk-setting-changed`); permissions `registry` / `shell` / `clipboard` / `system` |
 | `examples/deepseek-balance` | Reference for networked skins: direct `fetch` of an external REST API (DeepSeek balance query — the server returns CORS allow headers, §3.4), the API key stored in a `password` setting and read via `skin_get_setting` (§4.3), the official whale logo (icon region cropped out of the wordmark SVG, inlined with `currentColor` so it tints with the theme), scheduled auto-queries (configurable interval) + pause while hidden / catch-up query on becoming visible + a manual refresh button, a configurable low-balance warning line (amber figure + badge), a Windows notification on dropping below the line (edge-triggered, re-arms after recovery), one-click top-up page via `open_external`, OK / low-balance / query-failed / unconfigured status badge, live-applied accent color and topped-up-balance toggle (granted balance shown only when present), Chinese/English bilingual; permission `system` |
+| `examples/power-tools` | Demo of the two high-risk permissions: arbitrary absolute-path file read/write (`skin_read_any_file` / `skin_write_any_file` — failures reject with the raw system error; binary via base64), and reading/patching any skin's window config (`skin_get_window_config` / `skin_set_window_config` — whole-patch validation, one-sided position/size merging, zoom before size); permissions `file_system` (high-risk red) + `control` (medium-risk yellow) |
+| `examples/web-view` | Reference for iframe-embedded web skins (zero permissions): a local shell (drag-bar title strip + refresh button + status dot) embedding any site page in an iframe — the site URL is a setting (switching it in the manager swaps the page live), the bridge is fully functional (dragging / right-click menu / settings), cookies are shared with the WebView2 user-data folder (persist after one login), timed reload by reassigning the same src (cross-origin frames can't touch contentWindow), pause while hidden / catch-up on visible, and a guidance empty state when unconfigured; requires the target site to allow framing (no `X-Frame-Options` / `frame-ancestors` restriction) |
 
-The five skins `controls-demo` / `sys-monitor` / `media-hub` / `toolbox` / `deepseek-balance` also follow: bilingual UI that follows the manager language, dynamic content rendered exclusively via `textContent` / DOM APIs, no crashes when the bridge is missing (plain-browser preview), and rejected-command error text displayed inline in the corresponding card.
+The seven skins `controls-demo` / `sys-monitor` / `media-hub` / `toolbox` / `deepseek-balance` / `power-tools` / `web-view` also follow: bilingual UI that follows the manager language, dynamic content rendered exclusively via `textContent` / DOM APIs, no crashes when the bridge is missing (plain-browser preview), and rejected-command error text displayed inline in the corresponding card.
 
-`controls-demo` and `sys-monitor` declare no `permissions` — every capability they use is permission-free.
+`controls-demo`, `sys-monitor`, and `web-view` declare no `permissions` — every capability they use is permission-free.

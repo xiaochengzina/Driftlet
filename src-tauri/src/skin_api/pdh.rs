@@ -94,22 +94,27 @@ impl PdhMultiCounter {
             if (first != PDH_MORE_DATA && first != 0) || size == 0 {
                 return out;
             }
-            let mut buf = vec![0u8; size as usize];
+            // 类型化缓冲：Vec<u8> 的对齐是 1，强转成 PDH_FMT_COUNTERVALUE_ITEM_W
+            //（需对齐 8）是书面 UB——按元素类型分配（对齐天然正确），条目数
+            // 按字节数换算
+            let item_size = std::mem::size_of::<PDH_FMT_COUNTERVALUE_ITEM_W>();
+            let mut buf = vec![PDH_FMT_COUNTERVALUE_ITEM_W::default(); size as usize / item_size + 1];
+            let mut byte_size = (buf.len() * item_size) as u32;
             if PdhGetFormattedCounterArrayW(
                 self.counter,
                 PDH_FMT_DOUBLE,
-                &mut size,
+                &mut byte_size,
                 &mut count,
-                Some(buf.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W),
+                Some(buf.as_mut_ptr()),
             ) != 0
             {
                 return out;
             }
-            let items = std::slice::from_raw_parts(
-                buf.as_ptr() as *const PDH_FMT_COUNTERVALUE_ITEM_W,
-                count as usize,
-            );
-            for item in items {
+            // 返回条目数必须落在缓冲内（防 API 写越界后我们读越界）
+            if count as usize > buf.len() {
+                return out;
+            }
+            for item in &buf[..count as usize] {
                 let name = String::from_utf16_lossy(item.szName.as_wide());
                 out.push((name, item.FmtValue.Anonymous.doubleValue, item.FmtValue.CStatus));
             }

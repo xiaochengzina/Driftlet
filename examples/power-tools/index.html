@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!-- 资源一律相对路径引用（照抄 controls-demo 的约定），无任何外部网络资源 -->
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 外壳即拖动区：按住空白处即可拖动窗口；内部交互元素不受影响 -->
+  <div class="shell drag-region">
+    <header class="appbar">
+      <div class="appbar-top">
+        <h1 data-i18n="title">…</h1>
+        <span class="badge" id="bridge-badge"></span>
+      </div>
+      <p class="subtitle" data-i18n="subtitle"></p>
+    </header>
+
+    <!-- 填充 + 内部滚动范式：内容超高时在面板内滚动，不撑出窗口 -->
+    <main class="panel" id="panel">
+
+      <!-- 任意路径文件读写：read_any_file / write_any_file（file_system） -->
+      <section class="card">
+        <h2><span data-i18n="cardFs"></span><span class="perm high">file_system</span></h2>
+        <p class="note warn" data-i18n="fsWarn"></p>
+        <div class="input-row">
+          <input type="text" id="fs-path" data-i18n-placeholder="fsPathPlaceholder">
+        </div>
+        <textarea id="fs-content" rows="4" data-i18n-placeholder="fsContentPlaceholder"></textarea>
+        <div class="btn-row">
+          <button class="btn" id="btn-fs-read" data-i18n="btnFsRead"></button>
+          <button class="btn" id="btn-fs-write" data-i18n="btnFsWrite"></button>
+          <button class="btn" id="btn-fs-read-bin" data-i18n="btnFsReadBin"></button>
+          <button class="btn" id="btn-fs-list" data-i18n="btnFsList"></button>
+          <button class="btn" id="btn-fs-preview" data-i18n="btnFsPreview"></button>
+        </div>
+        <img id="fs-preview-img" alt="" hidden>
+        <pre class="result" id="fs-result"></pre>
+      </section>
+
+      <!-- 皮肤窗口配置：skin_get_window_config / skin_set_window_config（control） -->
+      <section class="card">
+        <h2><span data-i18n="cardCtl"></span><span class="perm medium">control</span></h2>
+        <p class="note" data-i18n="ctlNote"></p>
+        <div class="input-row">
+          <input type="text" id="ctl-target" data-i18n-placeholder="ctlTargetPlaceholder">
+          <button class="btn" id="btn-ctl-get" data-i18n="btnCtlGet"></button>
+        </div>
+        <h3 data-i18n="ctlPatchLabel"></h3>
+        <div class="input-row">
+          <input type="number" id="ctl-opacity" min="0.1" max="1" step="0.05" data-i18n-placeholder="ctlOpacity">
+          <input type="number" id="ctl-zoom" min="0.5" max="2" step="0.1" data-i18n-placeholder="ctlZoom">
+        </div>
+        <div class="input-row">
+          <input type="number" id="ctl-x" step="1" data-i18n-placeholder="ctlX">
+          <input type="number" id="ctl-y" step="1" data-i18n-placeholder="ctlY">
+          <select id="ctl-placement">
+            <option value="" data-i18n="ctlPlacementKeep"></option>
+            <option value="top" data-i18n="ctlPlacementTop"></option>
+            <option value="desktop" data-i18n="ctlPlacementDesktop"></option>
+          </select>
+        </div>
+        <div class="btn-row">
+          <button class="btn primary" id="btn-ctl-apply" data-i18n="btnCtlApply"></button>
+        </div>
+        <pre class="result" id="ctl-result"></pre>
+      </section>
+
+    </main>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

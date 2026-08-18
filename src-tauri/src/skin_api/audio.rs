@@ -76,6 +76,13 @@ pub fn spectrum(bands: usize, source: Source) -> Result<Spectrum, String> {
         if shared.alive.load(Ordering::Relaxed) {
             return Err(err);
         }
+        // 重建决策与 spawn 放在 slot 锁内：并发 spectrum 调用都看到
+        // 「死+错」时会双双重建（两个采集线程抢同一设备）。等锁期间可能
+        // 已被另一调用重建过——锁内复查
+        let _slot_guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if shared.alive.load(Ordering::Relaxed) {
+            return Err(err);
+        }
         *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = None;
         // 残留的可能是线程死亡前的旧样本，一并清掉再重建
         shared.samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -124,6 +131,13 @@ impl Drop for AliveReset {
             if err.is_none() {
                 *err = Some("capture thread panicked".to_string());
             }
+        }
+        // COM 套间配对释放：initialize_mta 后永不 CoUninitialize 会泄漏
+        // 本线程的套间（线程退出前必须配对；本线程是专属采集线程，套间
+        // 初始化者只有我们自己，配对不会误伤他人计数）
+        #[cfg(target_os = "windows")]
+        unsafe {
+            windows::Win32::System::Com::CoUninitialize();
         }
     }
 }

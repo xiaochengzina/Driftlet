@@ -60,6 +60,13 @@ pub struct AppState {
     /// would capture a half-swapped skins/).
     /// tokio Mutex：guard 是 Send，可以持有跨过 .await（装完还要 reload）。
     pub install_lock: tauri::async_runtime::Mutex<()>,
+    /// Serializes the skin lifecycle commands (load/unload/reload/reset 与
+    /// skin_api 的 skin_load/skin_unload/skin_reload/hotreload 触发）：
+    /// load/unload 的「查存在→注册」非原子，并发交错会产生 registry 与
+    /// loaded_skins 状态分叉。锁序约定：lifecycle_lock → install_lock →
+    /// settings_lock（install 路径只持 install_lock 不调生命周期 impl，
+    /// 无反向路径）。
+    pub lifecycle_lock: tauri::async_runtime::Mutex<()>,
     /// Serializes load-modify-save on a skin folder's `settings.json`, which
     /// has two writers: the manager (`set_skin_custom_setting`) and the skin
     /// itself (`skin_api::skin_set_setting`).  std Mutex is fine — both
@@ -111,7 +118,7 @@ pub fn run() {
                 *app.state::<AppState>().pending_package.lock()
                     .unwrap_or_else(|e| e.into_inner()) = Some(path.clone());
                 tray::show_manager_window(app);
-                let _ = app.emit("open-skin-package", path);
+                let _ = app.emit_to("main", "open-skin-package", path);
             }
         }))
         .plugin(tauri_plugin_autostart::init(
@@ -170,6 +177,10 @@ pub fn run() {
             // One-time migration of a config left by older versions in %APPDATA%.
             migrate_legacy_config(&app_data_dir, &config_dir, &skins_dir);
 
+            // 导入崩溃窗口回滚：上次备份导入在「新内容就位」阶段断电/崩溃时，
+            // 可能只剩 <name>.import-old 而数据目录缺失——启动即把旧数据挪回来
+            crate::backup::rollback_interrupted_import(&config_dir, &skins_dir);
+
             // 同步开发期示例皮肤（release 构建在函数内直接返回）
             copy_example_skins(&skins_dir);
 
@@ -223,6 +234,7 @@ pub fn run() {
                 main_thread_id,
                 pending_package: Mutex::new(pending_package.clone()),
                 install_lock: tauri::async_runtime::Mutex::new(()),
+                lifecycle_lock: tauri::async_runtime::Mutex::new(()),
                 settings_lock: Mutex::new(()),
                 language: Mutex::new(language),
                 toggle_item: Mutex::new(None),
@@ -372,7 +384,7 @@ pub fn run() {
                         if state.exiting.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
                         }
-                        let windows = state.registry.all_hwnds();
+                        let skin_ids = state.registry.loaded_ids();
                         let h2 = h.clone();
                         let _ = h.run_on_main_thread(move || {
                             // 管理器窗同样自愈：它只有建窗后约 6 秒的创建
@@ -382,20 +394,28 @@ pub fn run() {
                                 factory::disable_default_context_menu(&window);
                                 factory::disable_browser_accelerator_keys(&window);
                             }
-                            for (skin_id, hwnd) in &windows {
-                                factory::ensure_frameless_subclass(*hwnd);
-                                factory::force_clean_skin_window_by_hwnd(*hwnd);
-                                // Keep WebView2's default context menu and
-                                // browser accelerator keys disabled
-                                // (self-healing; the creation-time retry in
-                                // factory only covers startup).
-                                if let Some(window) = h2.get_webview_window(
-                                    &factory::skin_window_label(skin_id),
-                                ) {
+                            for skin_id in &skin_ids {
+                                // HWND 必须在主线程闭包内按 label 现取——
+                                // 定时器线程快照与主线程使用之间窗口可能
+                                // 销毁、HWND 被系统回收复用，用快照句柄做
+                                // subclass/PostMessage 会作用到无关窗口
+                                let label = factory::skin_window_label(skin_id);
+                                if let Some(window) = h2.get_webview_window(&label) {
+                                    if let Ok(hwnd) = window.hwnd() {
+                                        factory::ensure_frameless_subclass(hwnd.0 as isize);
+                                        factory::force_clean_skin_window_by_hwnd(hwnd.0 as isize);
+                                    }
+                                    // Keep WebView2's default context menu and
+                                    // browser accelerator keys disabled
+                                    // (self-healing; the creation-time retry in
+                                    // factory only covers startup).
                                     factory::disable_default_context_menu(&window);
                                     factory::disable_browser_accelerator_keys(&window);
                                 }
                             }
+                            // 同 tick 顺带救回完全出屏的皮肤（拔屏/DPI 拓扑
+                            // 变化最迟 5 秒自愈；部分出屏不动，见 factory）
+                            factory::rescue_offscreen_skins(&h2);
                         });
                     }
                 });
@@ -426,6 +446,7 @@ pub fn run() {
             commands::set_skin_edge_snap,
             commands::set_skin_snap_gap,
             commands::set_skin_position,
+            commands::bring_skin_onscreen,
             commands::show_skin_context_menu,
             commands::set_skin_size,
             commands::set_skin_custom_setting,
@@ -446,6 +467,7 @@ pub fn run() {
             commands::open_release_page,
             commands::take_hotkey_error,
             commands::open_skins_folder,
+            commands::pick_path,
             commands::open_skin_folder,
             commands::list_system_fonts,
             commands::capture_skin_preview,
@@ -487,8 +509,24 @@ pub fn run() {
             skin_api::get_idle_time,
             skin_api::get_foreground_window_info,
             skin_api::get_monitors,
+            skin_api::get_system_theme,
             skin_api::skin_log,
             skin_api::skin_console_log,
+            skin_api::skin_read_any_file,
+            skin_api::skin_write_any_file,
+            skin_api::skin_list_any_dir,
+            skin_api::skin_create_any_dir,
+            skin_api::skin_delete_any_path,
+            skin_api::skin_get_window_config,
+            skin_api::skin_set_window_config,
+            skin_api::skin_load,
+            skin_api::skin_unload,
+            skin_api::skin_reload,
+            skin_api::skin_list_skins,
+            skin_api::http_request,
+            skin_api::skin_broadcast,
+            skin_api::skin_hide,
+            skin_api::skin_show,
         ])
         .run({
             // NOTE(driftlet): never let Tauri hand windows a runtime icon.
@@ -943,7 +981,6 @@ pub(crate) fn apply_native_frame(hwnd_val: isize) -> bool {
 /// （日志窗反复开关不重复建、不泄漏）。
 #[cfg(target_os = "windows")]
 pub(crate) fn apply_window_icon(hwnd_val: isize) {
-    use std::sync::OnceLock;
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -953,8 +990,11 @@ pub(crate) fn apply_window_icon(hwnd_val: isize) {
 
     /// 打包进二进制的多尺寸 .ico（与 exe 资源图标同一份文件）
     const ICO: &[u8] = include_bytes!("../icons/icon.ico");
-    // (small, big) 两枚 HICON 的句柄值，建一次全进程复用
-    static ICONS: OnceLock<Option<(usize, usize)>> = OnceLock::new();
+    // (small, big) 两枚 HICON 的句柄值，按 DPI 分档缓存——OnceLock 按首次
+    // 调用窗的 DPI 建后永久缓存，DPI 变更（跨屏拖动/系统改缩放）后图标
+    // 尺寸档失配
+    static ICONS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u32, Option<(usize, usize)>>>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
     /// 从 .ico 目录里挑最贴合 (cx, cy) 的条目建 HICON。
     /// 目录自己解析：LookupIconIdFromDirectoryEx 的返回值是「资源 ID」语义——
@@ -991,18 +1031,21 @@ pub(crate) fn apply_window_icon(hwnd_val: isize) {
         unsafe { CreateIconFromResourceEx(image, true, 0x00030000, cx, cy, LR_DEFAULTCOLOR).ok() }
     }
 
-    let icons = ICONS.get_or_init(|| {
-        let dpi = unsafe { GetDpiForWindow(HWND(hwnd_val as *mut _)) };
-        let small = load_entry(
-            unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) },
-            unsafe { GetSystemMetricsForDpi(SM_CYSMICON, dpi) },
-        );
-        let big = load_entry(
-            unsafe { GetSystemMetricsForDpi(SM_CXICON, dpi) },
-            unsafe { GetSystemMetricsForDpi(SM_CYICON, dpi) },
-        );
-        small.zip(big).map(|(s, b)| (s.0 as usize, b.0 as usize))
-    });
+    let dpi = unsafe { GetDpiForWindow(HWND(hwnd_val as *mut _)) };
+    let icons = {
+        let mut map = ICONS.lock().unwrap_or_else(|e| e.into_inner());
+        *map.entry(dpi).or_insert_with(|| {
+            let small = load_entry(
+                unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) },
+                unsafe { GetSystemMetricsForDpi(SM_CYSMICON, dpi) },
+            );
+            let big = load_entry(
+                unsafe { GetSystemMetricsForDpi(SM_CXICON, dpi) },
+                unsafe { GetSystemMetricsForDpi(SM_CYICON, dpi) },
+            );
+            small.zip(big).map(|(s, b)| (s.0 as usize, b.0 as usize))
+        })
+    };
     let Some(&(small, big)) = icons.as_ref() else {
         log::warn!("apply_window_icon: failed to create HICONs from icon.ico");
         return;

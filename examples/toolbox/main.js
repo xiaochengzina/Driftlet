@@ -5,7 +5,7 @@
  *
  * 每张卡片对应一组后端命令（权限标在卡片标题右侧）：
  *   剪贴板  read_clipboard_text / write_clipboard_text（clipboard）
- *   文件    skin_write_file / skin_read_file / skin_list_dir / skin_delete_file（files，仅限皮肤目录）
+ *   文件    skin_write_file / skin_read_file / skin_list_dir / skin_delete_file（免权限，仅限皮肤目录）
  *   注册表  read_registry_value（registry，只读）
  *   命令    run_command（shell：普通权限、隐藏窗口、超时杀进程）
  *   外链    open_external（system；.exe 等可执行目标会被拒绝——有专门的演示按钮）
@@ -88,6 +88,7 @@ const I18N = {
     resTokenEmpty: '未设置（空串）——请到管理器「皮肤设置」页填写后重试',
     resTokenChanged: '管理器侧已修改 api_token，点击「经命令读取 api_token」查看新状态',
     resSaved: (key) => `已保存 ${key}（写成功不会向自己回派事件，本地即最新）`,
+    resSavedTruncated: (key) => `已保存 ${key}，超出后端上限的部分已截断（≤500 条、≤200 字符/条）`,
     resTasksEmpty: '（暂无待办）',
   },
   en: {
@@ -155,6 +156,7 @@ const I18N = {
     resTokenEmpty: 'Not set (empty) — fill it in on the manager settings page and retry',
     resTokenChanged: 'api_token was changed manager-side; click "Read api_token via command" to re-check',
     resSaved: (key) => `Saved ${key} (no event is dispatched back on success — local state is already current)`,
+    resSavedTruncated: (key) => `Saved ${key}; content beyond the backend limits was truncated (≤500 items, ≤200 chars each)`,
     resTasksEmpty: '(no tasks)',
   },
 };
@@ -356,14 +358,30 @@ async function onRunCommand(command, args, timeoutMs) {
 function onRunCustom() {
   const command = document.getElementById('cmd-name').value.trim();
   const argsRaw = document.getElementById('cmd-args').value.trim();
-  const args = argsRaw ? argsRaw.split(/\s+/) : [];
-  const timeoutRaw = Number(document.getElementById('cmd-timeout').value);
-  // timeoutMs：默认 30000，上限 120000
-  const timeoutMs = Math.max(1, Math.min(120000, Number.isFinite(timeoutRaw) ? timeoutRaw : 30000));
+  const args = splitArgs(argsRaw);
+  const timeoutStr = document.getElementById('cmd-timeout').value.trim();
+  // timeoutMs：默认 30000，上限 120000；空串/0/极小值按默认处理——
+  // Number('')===0 且 Number.isFinite(0)===true，直接走 clamp 会落成 1ms
+  //（后端下限抬到 100ms），任何命令必超时被杀
+  const timeoutRaw = timeoutStr === '' ? NaN : Number(timeoutStr);
+  const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw >= 1000
+    ? Math.min(120000, timeoutRaw)
+    : 30000;
   onRunCommand(command, args, timeoutMs);
 }
 
 /* ── 打开链接/文件（权限 system） ─────────────────────────── */
+
+/** 参数拆分支持引号："a b" 或 'a b' 整段为一个参数（此前纯空白拆分会把
+    含空格的引号参数拆碎）。 */
+function splitArgs(s) {
+  if (!s) return [];
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(s))) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}
 
 async function onOpenExternal(target) {
   if (!needBridge('ext-result')) return;
@@ -465,8 +483,16 @@ function renderTasks() {
 async function saveTasks() {
   if (!canInvoke()) return;
   try {
+    // 与后端约束一致的本地截断（200 字符/条、500 条）——超限时本地同步
+    // 截断并明示，避免「提示已保存但持久值被后端静默截断」的不一致
+    const before = tasks.length;
+    tasks = tasks.slice(0, 500).map((it) =>
+      typeof it?.text === 'string' && it.text.length > 200
+        ? { ...it, text: it.text.slice(0, 200) }
+        : it);
     await window.__DESK_PP__.invoke('skin_set_setting', { key: 'tasks', value: tasks });
-    showResult('settings-result', t('resSaved', 'tasks'));
+    showResult('settings-result',
+      before !== tasks.length ? t('resSavedTruncated', 'tasks') : t('resSaved', 'tasks'));
   } catch (err) {
     // 校验失败（如单条超 200 字符被静默截断之外的硬错误）显示在结果区
     showError('settings-result', err);
@@ -506,7 +532,10 @@ document.addEventListener('desk-setting-changed', (e) => {
   if (!key) return;
   settings[key] = value; // 桥也会同步，双保险
   if (key === 'note') {
-    document.getElementById('note-input').value = value || '';
+    // 焦点保护：用户正在文本框里编辑时不冲掉进行中的内容
+    const noteEl = document.getElementById('note-input');
+    if (document.activeElement === noteEl) return;
+    noteEl.value = value || '';
   } else if (key === 'tasks') {
     tasks = normalizeTasks(value);
     renderTasks();

@@ -76,10 +76,13 @@ pub fn note_self_write(path: &Path) {
     map.insert(normalize_watch_path(path), Instant::now());
 }
 
-/// 命中未过期登记则消耗之并返回 true（过期登记顺手清除，视为未命中）。
-fn take_recent_self_write(path: &Path) -> bool {
-    let mut map = RECENT_SELF_WRITES.lock().unwrap_or_else(|e| e.into_inner());
-    match map.remove(&normalize_watch_path(path)) {
+/// 命中未过期登记返回 true（过期登记顺手清除，视为未命中）。**命中不删除**
+/// ——一次 std::fs::write 会产生多个 notify 事件（创建/写/改属性），消耗式
+/// 命中只挡第一个，其余照触发自重载（正中该机制要防的 toolbox 存 todo.json
+/// 场景）；TTL 判有效由 note_self_write 的 retain 负责过期清理。
+fn hit_recent_self_write(path: &Path) -> bool {
+    let map = RECENT_SELF_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    match map.get(&normalize_watch_path(path)) {
         Some(t) => t.elapsed() < SELF_WRITE_TTL,
         None => false,
     }
@@ -106,11 +109,23 @@ pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
         let skins_dir = app.state::<AppState>().skins_dir.clone();
 
-        let (tx, rx) = mpsc::channel();
+        // 有界通道：事件风暴下无界 mpsc 内存无上限；满则丢弃（热重载是开发
+        // 便利路径，去抖语义容忍合并，丢事件最坏结果是少触发一次重载）
+        let (tx, rx) = mpsc::sync_channel::<notify::Event>(4096);
+        let watch_broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let broken_flag = watch_broken.clone();
         let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
             move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(event) = res {
-                    let _ = tx.send(event);
+                match res {
+                    Ok(event) => {
+                        let _ = tx.try_send(event);
+                    }
+                    Err(e) => {
+                        // 监视根被替换（备份导入把 skins/ rename+删）等错误
+                        // 事件不得静默丢弃——置标让主循环尝试重建
+                        broken_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                        log::warn!("hotreload: watcher error event: {}", e);
+                    }
                 }
             },
         ) {
@@ -129,13 +144,34 @@ pub fn start(app: AppHandle) {
         // Debounce: remember the last event time per skin folder; a folder
         // that has been quiet for DEBOUNCE_MS gets its skin reloaded once.
         let mut pending: HashMap<PathBuf, Instant> = HashMap::new();
+        let mut last_rewatch_attempt = Instant::now() - Duration::from_secs(60);
         loop {
+            // 监视根替换自愈（备份导入把 skins/ rename 成 .import-old 再删，
+            // Windows 监视句柄跟随被删对象、新建 skins/ 不再被监视）：错误
+            // 事件置标后，根目录恢复存在即重建 watch（1s 节流重试）
+            if watch_broken.swap(false, std::sync::atomic::Ordering::Relaxed)
+                && last_rewatch_attempt.elapsed() > Duration::from_secs(1)
+            {
+                last_rewatch_attempt = Instant::now();
+                if skins_dir.exists() {
+                    let _ = watcher.unwatch(&skins_dir);
+                    match watcher.watch(&skins_dir, RecursiveMode::Recursive) {
+                        Ok(()) => log::info!("hotreload: re-watching {:?} after watcher error", skins_dir),
+                        Err(e) => {
+                            watch_broken.store(true, std::sync::atomic::Ordering::Relaxed);
+                            log::warn!("hotreload: re-watch failed: {}", e);
+                        }
+                    }
+                } else {
+                    watch_broken.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(event) => {
                     for path in event.paths {
                         // 先查自写登记（皮肤 API 自写，任意文件名），
                         // 再查固定名清单
-                        if take_recent_self_write(&path) || is_self_write(&path) {
+                        if hit_recent_self_write(&path) || is_self_write(&path) {
                             continue;
                         }
                         if let Some(folder) = skin_folder(&skins_dir, &path) {
@@ -189,7 +225,12 @@ fn reload_skin_in_folder(app: &AppHandle, folder: &Path) {
     log::info!("hotreload: reloading '{}'", id);
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::commands::reload_skin_impl(handle, id.clone()).await {
+        // 生命周期互斥（与管理器 reload 同一把锁；热重载也要避开安装
+        // 三段式替换窗口——锁序 lifecycle → install）
+        let state = handle.state::<AppState>();
+        let _a = state.lifecycle_lock.lock().await;
+        let _b = state.install_lock.lock().await;
+        if let Err(e) = crate::commands::reload_skin_impl(handle.clone(), id.clone()).await {
             log::warn!("hotreload: failed to reload '{}': {}", id, e);
         }
     });
@@ -213,16 +254,17 @@ mod tests {
     }
 
     #[test]
-    fn recent_self_write_is_consumed_once() {
+    fn recent_self_write_hits_until_ttl() {
         let p = Path::new(r"C:\skins\clock\todo.json");
-        assert!(!take_recent_self_write(p));
+        assert!(!hit_recent_self_write(p));
         note_self_write(p);
-        assert!(take_recent_self_write(p));
-        // 登记被消耗：同一路径第二次不再命中
-        assert!(!take_recent_self_write(p));
+        assert!(hit_recent_self_write(p));
+        // TTL 内重复命中（一次写产生多个 notify 事件，全部要挡——消耗式
+        // 命中只挡第一个，其余照触发自重载）
+        assert!(hit_recent_self_write(p));
         // canonicalize 的 \\?\ 前缀与 notify 事件路径等价命中
         note_self_write(Path::new(r"\\?\C:\skins\clock\data.json"));
-        assert!(take_recent_self_write(Path::new(r"C:\skins\clock\data.json")));
+        assert!(hit_recent_self_write(Path::new(r"C:\skins\clock\data.json")));
     }
 
     #[test]

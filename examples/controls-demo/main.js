@@ -19,6 +19,7 @@
 const I18N = {
   'zh-CN': {
     subtitle: (n) => `演示全部 ${n} 种设置控件 · 界面语言跟随管理器`,
+    subtitleFallback: '演示全部设置控件 · 界面语言跟随管理器',
     ticker: (n, sec) => `数字步进驱动：每 ${sec} 秒跳一次 · 已跳 ${n} 次`,
     fallbackName: '控件演示',
     on: '开',
@@ -31,6 +32,7 @@ const I18N = {
   },
   en: {
     subtitle: (n) => `Demo of all ${n} settings controls · UI language follows the manager`,
+    subtitleFallback: 'Demo of all settings controls · UI language follows the manager',
     ticker: (n, sec) => `Driven by the stepper: ticks every ${sec}s · ${n} ticks so far`,
     fallbackName: 'Controls Demo',
     on: 'On',
@@ -102,7 +104,9 @@ function applySettings() {
   // 标题 = title 设置值；空值回退皮肤名（按当前语言）
   document.getElementById('skin-title').textContent =
     s.title || pickLang(schema?.name, schema?.name_en) || t('fallbackName');
-  document.getElementById('subtitle').textContent = t('subtitle', defs.length || 20);
+  // schema 拉取失败（defs 空）时不得报假数字（曾经写死 20，实际 22）
+  document.getElementById('subtitle').textContent =
+    defs.length ? t('subtitle', defs.length) : t('subtitleFallback');
   if (titleDef) document.getElementById('skin-title').title = pickLang(titleDef.description, titleDef.description_en);
 
   // 主题色（palette）：校验格式后应用，防非法值进 style

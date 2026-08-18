@@ -40,8 +40,8 @@ pub struct SkinManifest {
     pub entry: String,
     #[serde(default)]
     pub window: WindowDefaults,
-    /// 敏感能力声明（"registry" / "shell" / "system" / "clipboard" / "mic"，
-    /// 对应 skin_api 的 PERM_* 常量）。皮肤调用对应的后端命令前
+    /// 敏感能力声明（"registry" / "shell" / "system" / "clipboard" / "mic" /
+    /// "file_system" / "control"，对应 skin_api 的 PERM_* 常量）。皮肤调用对应的后端命令前
     /// 必须在此声明，否则后端拒绝并返回 PermissionDenied。
     /// 未知名一律忽略；只读系统信息命令、皮肤自身目录内的文件读写
     /// （沙箱隔离）不需要声明。
@@ -106,6 +106,10 @@ pub enum SkinSettingKind {
     Password,
     /// 日期任务列表，值 = [{"time": "YYYY-MM-DD HH:MM:SS", "text": "..."}]
     DateTaskList,
+    /// 文件选择器（管理器弹系统打开对话框），值 = 绝对路径字符串，空串 = 未选
+    File,
+    /// 文件夹选择器，值 = 绝对路径字符串，空串 = 未选
+    Directory,
 }
 
 /// A custom setting declared by the skin author in skin.json "settings".
@@ -144,6 +148,10 @@ pub struct SkinSettingDef {
     /// Select / multiselect / radio / palette settings only.
     #[serde(default)]
     pub options: Vec<SkinSettingOption>,
+    /// file 选择器专用：允许的扩展名列表（不含点，如 ["png","jpg"]）；
+    /// 空数组 = 不过滤。directory 与其他控件忽略此字段
+    #[serde(default)]
+    pub filters: Vec<String>,
 }
 
 fn default_entry() -> String {
@@ -172,6 +180,17 @@ pub struct WindowDefaults {
     /// 缩放。「窗口」页可覆盖。默认必须回 1.0——落 0.0 会把窗口乘没。
     #[serde(default = "default_zoom")]
     pub zoom: f64,
+    /// 网页皮肤（entry 为 http(s) URL）的自动刷新间隔（秒）；0/缺省 = 不自动
+    /// 刷新。仅网页皮肤有意义（本地皮肤的内容刷新走右键/热重载）。
+    #[serde(default)]
+    pub refresh_seconds: Option<u32>,
+}
+
+/// entry 是否是网页皮肤入口（http/https URL）：网页皮肤的窗口直接加载
+/// 站点页面，不走 skin:// 协议与桥注入。
+pub(crate) fn is_url_entry(entry: &str) -> bool {
+    let e = entry.trim_start();
+    e.starts_with("https://") || e.starts_with("http://")
 }
 
 fn default_width() -> u32 { 300 }
@@ -203,6 +222,9 @@ pub struct SkinInfo {
     /// skin.json 声明的中英双语开关：决定前端是否启用 *_en 文案
     pub bilingual: bool,
     pub loaded: bool,
+    /// 已加载但窗口当前不可见（全局快捷键/托盘/Alt+F4 隐藏）——真实窗口
+    /// 状态（IsWindowVisible），不是「按没按过热键」的簿记
+    pub hidden: bool,
     /// Absolute path to preview image (preview.png / preview.jpg) if present
     pub preview: Option<String>,
 }
@@ -223,6 +245,10 @@ pub struct SkinDetail {
     pub bilingual: bool,
     pub directory: String,
     pub loaded: bool,
+    /// 同 SkinInfo.hidden：已加载但窗口当前不可见（真实窗口状态）
+    pub hidden: bool,
+    /// skin.json 声明的敏感权限（原样透传，前端按分级展示）
+    pub permissions: Vec<String>,
     pub config: SkinRuntimeConfig,
     /// Custom settings schema declared in skin.json
     pub settings_schema: Vec<SkinSettingDef>,

@@ -1,0 +1,25 @@
+{
+  "id": "web-view",
+  "name": "网页内嵌",
+  "name_en": "Web View",
+  "version": "1.0.1",
+  "author": "Driftlet",
+  "description": "通用网页皮肤：把任意站点页面嵌进桌面挂件（本地外壳带拖动条与刷新按钮；站点地址在皮肤设置里改；登录态 cookie 持久化，定时自动刷新）",
+  "description_en": "Generic web skin: embed any site page as a desktop widget (local shell with drag bar and refresh button; the site URL is a setting; login cookies persist; scheduled auto-refresh)",
+  "bilingual": true,
+  "entry": "index.html",
+  "window": {
+    "width": 420,
+    "height": 560,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0
+  },
+  "permissions": [],
+  "settings": [
+    { "key": "site_url", "type": "text", "label": "站点地址", "label_en": "Site URL", "group": "站点", "group_en": "Site", "description": "要内嵌的页面地址（http/https）；目标站须允许被嵌（无 X-Frame-Options / frame-ancestors 限制）", "description_en": "The page URL to embed (http/https); the site must allow framing (no X-Frame-Options / frame-ancestors)", "default": "" },
+    { "key": "refresh_min", "type": "stepper", "label": "刷新间隔（分钟）", "label_en": "Refresh interval (min)", "group": "站点", "group_en": "Site", "description": "默认 5 分钟；页面隐藏时暂停，恢复可见立即补刷", "description_en": "Default 5 minutes; pauses while hidden and catches up on becoming visible", "default": 5, "min": 1, "max": 60, "step": 1 }
+  ]
+}

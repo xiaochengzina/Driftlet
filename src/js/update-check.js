@@ -61,10 +61,13 @@ function showUpdateDialog(result) {
     if (!stop) return;
     try {
       await API.setUpdateCheck(false);
+      showDisabledNotice();
     } catch (err) {
+      // 关闭失败时弹错误而非「已关闭」告知（沉默失败还报成功最误导）
       console.error('setUpdateCheck failed:', err);
+      const { default: showToast } = await import('./toast.js');
+      showToast(t('common.setFailed') + String(err), 'error');
     }
-    showDisabledNotice();
   }
   const unbindEsc = bindEsc(cancel);
 

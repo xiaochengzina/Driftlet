@@ -1,5 +1,5 @@
 //! Skin-facing backend APIs: read-only system information plus the
-//! permission-gated capabilities.  Five permissions, each gating its own
+//! permission-gated capabilities.  Seven permissions, each gating its own
 //! command set:
 //!
 //!   * `registry`  — read_registry_value
@@ -8,9 +8,14 @@
 //!                   show_notification
 //!   * `clipboard` — read_clipboard_text / write_clipboard_text
 //!   * `mic`       — get_mic_spectrum
+//!   * `file_system` — skin_read_any_file / skin_write_any_file（任意绝对路径，高危）
+//!   * `control`   — skin_list_skins / skin_get_window_config /
+//!                   skin_set_window_config / skin_load / skin_unload /
+//!                   skin_reload / skin_hide / skin_show（作用于自己免权限）
 //!
-//! （皮肤自身目录内的文件读写不需要权限——fs.rs 的沙箱即边界；曾有过的
-//! `files` 权限已整体取消。）
+//! （皮肤自身目录内的文件读写不需要权限——fs.rs 的沙箱即边界；`http_request`
+//! 亦免权限——页面本有 fetch 通道，设闸挡不住有心者；曾有过的 `files`
+//! 权限已整体取消，该名字永不复活。）
 //!
 //! Skins call these through `window.__DESK_PP__.invoke` — the bridge is a
 //! raw passthrough, so every command registered here is skin-callable.
@@ -160,6 +165,13 @@ pub const PERM_CLIPBOARD: &str = "clipboard";
 /// Microphone input — eavesdropping risk, unlike the loopback spectrum
 /// (which only hears what the machine itself plays).
 pub const PERM_MIC: &str = "mic";
+/// Arbitrary-path file read/write (read_any_file / write_any_file) — goes
+/// past the fs.rs skin-directory sandbox to the whole disk, hence high risk.
+pub const PERM_FILE_SYSTEM: &str = "file_system";
+/// Skin window-config control (skin_get_window_config /
+/// skin_set_window_config) — reads and modifies ANY skin's window config
+/// (position/size/placement/lock/…, other skins included).
+pub const PERM_CONTROL: &str = "control";
 
 /// Extract the calling skin from its window label ("skin-<id>"), resolved
 /// against a fresh directory scan so an uninstalled skin fails fast.
@@ -620,12 +632,16 @@ pub fn get_network_info() -> NetworkInfo {
 
 /// async：DXGI 枚举 + PDH 采样 + 建 D3D12 设备（UMA 判定）都是重负载，
 /// 不跑主线程——同 get_cpu_info / get_disks_info 的写法，逻辑不变。
+/// 同步重活挪 spawn_blocking（DXGI/D3D12 全同步阻塞 async worker，
+/// 高频轮询会停满 worker 池）。
 #[tauri::command]
 pub async fn get_gpu_info(app: AppHandle) -> Result<Vec<GpuInfo>, String> {
     #[cfg(target_os = "windows")]
     {
         let _ = &app; // used only by the non-Windows arm
-        Ok(gpu::collect())
+        tauri::async_runtime::spawn_blocking(gpu::collect)
+            .await
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -721,6 +737,29 @@ pub fn get_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
     {
         let _ = &app;
         Ok(status::monitors())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(windows_only(&app))
+    }
+}
+
+/// 检测 Windows 系统级浅色/深色主题（HKCU\…\Themes\Personalize 的
+/// AppsUseLightTheme：1 浅 0 深），返回 "light" / "dark"。只读系统信息，
+/// 免权限（与 §5.2 其他只读命令同组，无身份门槛）。系统主题变化不做
+/// 推送——皮肤在需要时调用，或配合定时轮询/窗口可见事件刷新。
+#[tauri::command]
+pub fn get_system_theme(app: AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = &app;
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let light = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            .and_then(|k| k.get_value::<u32, _>("AppsUseLightTheme"))
+            .unwrap_or(1); // 读不到按浅色兜底（Windows 默认主题为浅）
+        Ok(if light == 0 { "dark".to_string() } else { "light".to_string() })
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1124,19 +1163,35 @@ fn is_open_target_allowed(target: &str) -> bool {
     if !path.is_absolute() {
         return false;
     }
+    // 尾点/尾空格绕过：Windows 路径规范化剥掉分量尾部的点与空格
+    //（"RUN.EXE." 落盘即 "RUN.EXE"），而 Path::extension() 在剥前看——
+    // "RUN.EXE." 的扩展名是 Some("")、"RUN.EXE " 是 Some("exe ")，均绕过
+    // 黑名单。分量尾点/尾空格一律拒绝（fs.rs 沙箱同款防护，此路径曾漏）。
+    for c in path.components() {
+        if let std::path::Component::Normal(s) = c {
+            match s.to_str() {
+                Some(s) if s.ends_with('.') || s.ends_with(' ') => return false,
+                _ => {}
+            }
+        }
+    }
     !is_blocked_executable(path)
 }
 
 /// 可直接执行/被系统当代码解析、或能间接触发远程连接（NTLM 外泄面）的
 /// 扩展名黑名单（大小写不敏感）。
 fn is_blocked_executable(path: &std::path::Path) -> bool {
-    const BLOCKED: [&str; 29] = [
+    const BLOCKED: [&str; 35] = [
         "exe", "bat", "cmd", "ps1", "vbs", "vbe", "js", "jse", "wsf", "wsh",
         "msi", "msp", "scr", "com", "pif", "cpl", "lnk", "hta", "reg", "dll",
         "msc", "jar", "url",
         // 间接远程连接面：Explorer 搜索/库可指向远程共享（NTLM 哈希外泄）、
         // ClickOnce 激活、msdt 诊断包、Internet 快捷方式变体
         "search-ms", "library-ms", "application", "appref-ms", "diagcab", "website",
+        // 补充：.chm（hh.exe ActiveX 执行）、.settingcontent-ms（CVE-2018-8414
+        // 控制面板项加载）、.scf（命令执行 + NTLM 外泄）；.hlp 已随 Win10 移除、
+        // .wsc/.sct 需脚本宿主注册表键在，但同为可执行内容一并拒
+        "chm", "settingcontent-ms", "scf", "hlp", "wsc", "sct",
     ];
     path.extension()
         .and_then(|e| e.to_str())
@@ -1216,7 +1271,7 @@ pub fn ensure_notification_identity() {
 }
 
 #[tauri::command]
-pub fn show_notification(
+pub async fn show_notification(
     app: AppHandle,
     window: tauri::WebviewWindow,
     title: String,
@@ -1227,8 +1282,15 @@ pub fn show_notification(
     require_perm(&state, &window, PERM_SYSTEM)?;
     #[cfg(target_os = "windows")]
     {
-        notify::show(&title, body.as_deref().unwrap_or(""))
-            .map_err(|e| trf(&lang, Key::NotificationFailed, &[&e]))
+        // COM + 写盘 IO 不堵 async worker（同步版曾在主线程 IPC 上下文
+        // 跑，同样问题域）
+        let outer_lang = lang.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            notify::show(&title, body.as_deref().unwrap_or(""))
+        })
+        .await
+        .map_err(|e| trf(&outer_lang, Key::TaskFailed, &[&e.to_string()]))?
+        .map_err(|e| trf(&outer_lang, Key::NotificationFailed, &[&e]))
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1237,10 +1299,749 @@ pub fn show_notification(
     }
 }
 
+// ─── 任意路径文件读写（permission: file_system —— 高危）───
+//
+// 与 fs.rs 的沙箱命令（skin_read_file 等，免权限、限皮肤自身目录）不同：
+// 这两条接受任意**绝对路径**，整盘可读可写。错误一律透传系统错误文案
+// （皮肤需要知道真实失败原因）；相对路径拒绝（没有可参照的工作目录）。
+
+fn any_absolute_path(path: &str) -> Result<std::path::PathBuf, String> {
+    let trimmed = path.trim();
+    // UNC 一律拒绝（与 open_external 同口径）：访问会触发 SMB 连接与
+    // NTLM 认证外发（哈希外泄面）
+    if trimmed.starts_with("\\\\") || trimmed.starts_with("//") {
+        return Err(format!("UNC paths are not allowed: {}", trimmed));
+    }
+    let p = std::path::PathBuf::from(trimmed);
+    if !p.is_absolute() {
+        return Err(format!("path must be absolute: {}", trimmed));
+    }
+    // 前缀分量再兜一道 UNC/VerbatimUNC（双前缀形态之外的写法）
+    #[cfg(target_os = "windows")]
+    if let Some(std::path::Component::Prefix(prefix)) = p.components().next() {
+        use std::path::Prefix;
+        if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..)) {
+            return Err(format!("UNC paths are not allowed: {}", trimmed));
+        }
+    }
+    Ok(p)
+}
+
+#[tauri::command]
+pub async fn skin_read_any_file(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    path: String,
+    binary: Option<bool>,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_FILE_SYSTEM)?;
+    let p = any_absolute_path(&path)?;
+    let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err(format!("not a regular file: {}", path));
+    }
+    if meta.len() > fs::MAX_READ_BYTES {
+        return Err(format!("file too large: {} bytes (max {})", meta.len(), fs::MAX_READ_BYTES));
+    }
+    // TOCTOU 防线：metadata 检查后文件可能被换大——按上限+1 流式读，
+    // 超限即拒，不做无界整文件分配
+    let mut buf = Vec::new();
+    {
+        use std::io::Read;
+        std::fs::File::open(&p)
+            .map_err(|e| e.to_string())?
+            .take(fs::MAX_READ_BYTES + 1)
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+    }
+    if buf.len() as u64 > fs::MAX_READ_BYTES {
+        return Err(format!("file too large: > {} bytes (max {})", fs::MAX_READ_BYTES, fs::MAX_READ_BYTES));
+    }
+    let bytes = buf;
+    if binary.unwrap_or(false) {
+        use base64::Engine;
+        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    } else {
+        String::from_utf8(bytes).map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+pub fn skin_write_any_file(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    path: String,
+    data: String,
+    binary: Option<bool>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_FILE_SYSTEM)?;
+    let bytes = if binary.unwrap_or(false) {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|e| e.to_string())?
+    } else {
+        data.into_bytes()
+    };
+    if bytes.len() > fs::MAX_WRITE_BYTES {
+        return Err(format!("data too large: {} bytes (max {})", bytes.len(), fs::MAX_WRITE_BYTES));
+    }
+    let p = any_absolute_path(&path)?;
+    // 与沙箱版一致：缺失的父目录一并创建
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&p, bytes).map_err(|e| e.to_string())
+}
+
+/// 列任意目录（与沙箱版 skin_list_dir 同款 DirEntry 结构；目录项排前、
+/// 名称小写排序）。
+#[tauri::command]
+pub fn skin_list_any_dir(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    path: String,
+) -> Result<Vec<fs::DirEntry>, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_FILE_SYSTEM)?;
+    let p = any_absolute_path(&path)?;
+    let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
+    if !meta.is_dir() {
+        return Err(format!("not a directory: {}", path));
+    }
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&p).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let md = entry.metadata().map_err(|e| e.to_string())?;
+        out.push(fs::DirEntry {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            is_dir: md.is_dir(),
+            size: if md.is_dir() { 0 } else { md.len() },
+        });
+    }
+    out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Ok(out)
+}
+
+/// 建任意目录（含多级，已存在视为成功）。
+#[tauri::command]
+pub fn skin_create_any_dir(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    path: String,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_FILE_SYSTEM)?;
+    let p = any_absolute_path(&path)?;
+    std::fs::create_dir_all(&p).map_err(|e| e.to_string())
+}
+
+/// 删任意路径：文件直接删；目录默认只删空目录，整棵目录树须显式
+/// recursive: true（防一条命令误删一片——写权限同层但删除不可逆，
+/// 多要一个开关）。
+#[tauri::command]
+pub fn skin_delete_any_path(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    path: String,
+    recursive: Option<bool>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_FILE_SYSTEM)?;
+    let p = any_absolute_path(&path)?;
+    let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+        if recursive.unwrap_or(false) {
+            std::fs::remove_dir_all(&p).map_err(|e| e.to_string())
+        } else {
+            std::fs::remove_dir(&p).map_err(|e| e.to_string())
+        }
+    } else {
+        std::fs::remove_file(&p).map_err(|e| e.to_string())
+    }
+}
+
+// ─── 皮肤窗口配置项控制（permission: control —— 中危）───
+//
+// 读取/修改任意皮肤（含自己）的窗口配置项。修改逐项分发到管理器命令的
+// 进程内实现（commands::set_skin_*_impl），语义与面板操作完全一致——
+// 只读读取与运行态应用、持久化、钳制全走同一条路径，不另抄一份。
+
+/// 窗口配置项读取结果（与 get_skin_detail 同款有效值口径：
+/// resizable/zoom 取 None 时回退 skin.json 默认；宽高 = 基础尺寸 × 有效 zoom）
+#[derive(Debug, Clone, Serialize)]
+pub struct SkinWindowConfigInfo {
+    pub loaded: bool,
+    pub opacity: f64,
+    pub always_on_top: bool,
+    pub on_desktop: bool,
+    pub click_through: bool,
+    pub position_locked: bool,
+    pub resizable: bool,
+    pub zoom: f64,
+    pub edge_snap: bool,
+    pub snap_gap: u32,
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[tauri::command]
+pub fn skin_get_window_config(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    skin_id: Option<String>,
+) -> Result<SkinWindowConfigInfo, String> {
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let skin_id = resolve_control_target(&state, &window, skin_id)?;
+    let skins = crate::skin::loader::scan_skins_directory(&state.skins_dir);
+    let skin = skins
+        .iter()
+        .find(|s| s.id == skin_id)
+        .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
+    let loaded = state.registry.is_loaded(&skin_id);
+    let mut cfg = {
+        let app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        app_config
+            .skin_settings
+            .get(&skin_id)
+            .cloned()
+            .unwrap_or_else(|| crate::skin::types::SkinRuntimeConfig::from_manifest(&skin.manifest))
+    };
+    let resizable = cfg.resizable.unwrap_or(skin.manifest.window.resizable);
+    let zoom = crate::commands::clamp_zoom(cfg.zoom.unwrap_or(skin.manifest.window.zoom));
+    cfg.width = ((cfg.width as f64) * zoom).round() as u32;
+    cfg.height = ((cfg.height as f64) * zoom).round() as u32;
+    Ok(SkinWindowConfigInfo {
+        loaded,
+        opacity: cfg.opacity,
+        always_on_top: cfg.always_on_top,
+        on_desktop: cfg.on_desktop,
+        click_through: cfg.click_through,
+        position_locked: cfg.position_locked,
+        resizable,
+        zoom,
+        edge_snap: cfg.edge_snap,
+        snap_gap: cfg.snap_gap,
+        x: cfg.x,
+        y: cfg.y,
+        width: cfg.width,
+        height: cfg.height,
+    })
+}
+
+/// 修改窗口配置项（patch 按键逐项应用）。**先全量校验再动手**——未知键或
+/// 值类型不对时整个 patch 拒绝，不留改了一半的配置。
+/// 支持的键与类型：opacity(0.1–1.0) / placement("top"|"desktop") /
+/// click_through(bool) / position_locked(bool) / resizable(bool) /
+/// zoom(0.5–2.0) / edge_snap(bool) / snap_gap(uint) / x,y(int，逻辑像素) /
+/// width,height(uint，所见实际尺寸)。
+/// 权限：省略 skinId（或空串/传自己 id）= 改自己，**免权限**——全键放开
+///（自己的窗口自己调，与显隐自己免权限同例）；指定其他皮肤一律 control。
+/// 注意：opacity / x,y / width,height / position_locked / resizable 五项
+/// 要求目标皮肤已加载（运行态 eval/几何操作需要窗口），未加载时报
+/// SkinNotLoaded；其余键未加载时仅持久化，下次建窗生效。
+/// 应用顺序固定为 zoom → size → position → 其余（size 持久化要按新 zoom 折算）。
+#[tauri::command]
+pub fn skin_set_window_config(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    skin_id: Option<String>,
+    patch: serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let skin_id = resolve_control_target(&state, &window, skin_id)?;
+
+    // ── 第一遍：解析 + 校验（任何一项不合法，整个 patch 不落地）──
+    enum Op {
+        Zoom(f64),
+        Size(u32, u32),
+        Position(i32, i32),
+        Opacity(f64),
+        Placement(String),
+        ClickThrough(bool),
+        PositionLocked(bool),
+        Resizable(bool),
+        EdgeSnap(bool),
+        SnapGap(u32),
+    }
+    const KEYS: &str = "opacity/placement/click_through/position_locked/resizable/zoom/edge_snap/snap_gap/x/y/width/height";
+    let mut ops: Vec<Op> = Vec::new();
+    let mut pos: (Option<i32>, Option<i32>) = (None, None);
+    let mut size: (Option<u32>, Option<u32>) = (None, None);
+    for (key, value) in &patch {
+        let bad = || format!("invalid value for '{}': {} (支持 {})", key, value, KEYS);
+        match key.as_str() {
+            "opacity" => ops.push(Op::Opacity(value.as_f64().ok_or_else(bad)?)),
+            "placement" => {
+                let v = value.as_str().ok_or_else(bad)?;
+                if v != "top" && v != "desktop" {
+                    return Err(bad());
+                }
+                ops.push(Op::Placement(v.to_string()));
+            }
+            "click_through" => ops.push(Op::ClickThrough(value.as_bool().ok_or_else(bad)?)),
+            "position_locked" => ops.push(Op::PositionLocked(value.as_bool().ok_or_else(bad)?)),
+            "resizable" => ops.push(Op::Resizable(value.as_bool().ok_or_else(bad)?)),
+            "zoom" => ops.push(Op::Zoom(value.as_f64().ok_or_else(bad)?)),
+            "edge_snap" => ops.push(Op::EdgeSnap(value.as_bool().ok_or_else(bad)?)),
+            // 截断回绕防护：超大 JSON 数字在 impl 的 clamp 之前先 as 截断
+            // 会静默回绕（4294967296_u64 as u32 = 0）——try_from 越界报错
+            "snap_gap" => ops.push(Op::SnapGap(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?)),
+            "x" => pos.0 = Some(i32::try_from(value.as_i64().ok_or_else(bad)?).map_err(|_| bad())?),
+            "y" => pos.1 = Some(i32::try_from(value.as_i64().ok_or_else(bad)?).map_err(|_| bad())?),
+            "width" => size.0 = Some(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?),
+            "height" => size.1 = Some(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?),
+            other => return Err(format!("unknown config key: '{}' (支持 {})", other, KEYS)),
+        }
+    }
+    // x/y、width/height 合并成单次调用；缺的一边取**当前实际几何**（已加载
+    // 时读窗口现场——回退持久化基础尺寸会在 zoom≠1 时被 impl 再除一次
+    // zoom 双重缩小；位置回退 (0,0) 会把窗口跳去左上角）。未加载时回退
+    // 持久化值（size/position 的 impl 本就要求已加载，此分支是兜底）。
+    if pos.0.is_some() || pos.1.is_some() {
+        let (cx, cy) = current_geometry(&state, &skin_id).0;
+        ops.push(Op::Position(pos.0.unwrap_or(cx), pos.1.unwrap_or(cy)));
+    }
+    if size.0.is_some() || size.1.is_some() {
+        let (cw, ch) = current_geometry(&state, &skin_id).1;
+        ops.push(Op::Size(size.0.unwrap_or(cw), size.1.unwrap_or(ch)));
+    }
+
+    // ── 第二遍：按固定顺序应用（zoom 先于 size，其余按声明顺序）──
+    ops.sort_by_key(|op| match op {
+        Op::Zoom(_) => 0,
+        Op::Size(_, _) => 1,
+        Op::Position(_, _) => 2,
+        _ => 3,
+    });
+    for op in ops {
+        match op {
+            Op::Zoom(v) => crate::commands::set_skin_zoom_impl(&app, &skin_id, v)?,
+            Op::Size(w, h) => crate::commands::set_skin_size_impl(&app, &skin_id, w, h)?,
+            Op::Position(x, y) => crate::commands::set_skin_position_impl(&app, &skin_id, x, y)?,
+            Op::Opacity(v) => crate::commands::set_skin_opacity_impl(&app, &skin_id, v)?,
+            Op::Placement(v) => crate::commands::set_skin_placement_impl(&app, &skin_id, &v)?,
+            Op::ClickThrough(v) => crate::commands::set_skin_click_through_impl(&app, &skin_id, v)?,
+            Op::PositionLocked(v) => crate::commands::set_skin_position_locked_impl(&app, &skin_id, v)?,
+            Op::Resizable(v) => crate::commands::set_skin_resizable_impl(&app, &skin_id, v)?,
+            Op::EdgeSnap(v) => crate::commands::set_skin_edge_snap_impl(&app, &skin_id, v)?,
+            Op::SnapGap(v) => crate::commands::set_skin_snap_gap_impl(&app, &skin_id, v)?,
+        }
+    }
+    log::info!("Skin window config patched: {} keys={:?} (by skin {})", skin_id, patch.keys().collect::<Vec<_>>(), window.label());
+    Ok(())
+}
+
+// ─── 皮肤生命周期控制（自己免权限 / 他人 control 中危）───
+//
+// 加载/卸载/重载任意皮肤。skinId 省略/空串/传自己 id = 作用于自己，免权限
+//（resolve_control_target 统一收敛——与窗口配置/显隐同一约定）；指定他人
+// 过 control 门。目标是自己时走 fire-and-forget——动作会销毁发起调用的
+// webview 自身，await 会让 wry 把 invoke 响应投递到死窗口（与皮肤右键
+// 菜单的刷新/卸载同一教训），此时返回值不可依赖。
+
+#[tauri::command]
+pub async fn skin_load(app: AppHandle, window: tauri::WebviewWindow, skin_id: Option<String>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let target = resolve_control_target(&state, &window, skin_id)?;
+    // 生命周期互斥（与 load_skin 命令同一把锁；锁序 lifecycle → install）。
+    // guard 借用 state（借用自 app），impl 调用用 app.clone() 防 move 冲突
+    let _a = state.lifecycle_lock.lock().await;
+    let _b = state.install_lock.lock().await;
+    crate::commands::load_skin_impl(app.clone(), target).await
+}
+
+#[tauri::command]
+pub async fn skin_unload(app: AppHandle, window: tauri::WebviewWindow, skin_id: Option<String>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let target = resolve_control_target(&state, &window, skin_id)?;
+    if is_caller(&window, &target) {
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let _a = state.lifecycle_lock.lock().await;
+            let _b = state.install_lock.lock().await;
+            let _ = crate::commands::unload_skin_impl(app.clone(), target).await;
+        });
+        return Ok(());
+    }
+    let _a = state.lifecycle_lock.lock().await;
+    let _b = state.install_lock.lock().await;
+    crate::commands::unload_skin_impl(app.clone(), target).await
+}
+
+#[tauri::command]
+pub async fn skin_reload(app: AppHandle, window: tauri::WebviewWindow, skin_id: Option<String>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let target = resolve_control_target(&state, &window, skin_id)?;
+    if is_caller(&window, &target) {
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let _a = state.lifecycle_lock.lock().await;
+            let _b = state.install_lock.lock().await;
+            let _ = crate::commands::reload_skin_impl(app.clone(), target).await;
+        });
+        return Ok(());
+    }
+    let _a = state.lifecycle_lock.lock().await;
+    let _b = state.install_lock.lock().await;
+    crate::commands::reload_skin_impl(app.clone(), target).await
+}
+
+/// 目标是否是发起调用的皮肤自己（label 前缀反查；caller_skin 已验过身份）
+fn is_caller(window: &tauri::WebviewWindow, target: &str) -> bool {
+    window.label().strip_prefix("skin-") == Some(target)
+}
+
+// ─── 皮肤清单（permission: control —— 中危）───
+//
+// control 权限的入口命令：没有它，跨皮肤操作只能靠猜 id。返回全部已安装
+// 皮肤的 id/名称/版本/作者与加载态（loaded + hidden）——control 皮肤
+// 属于受信管理员角色，名称与加载态不构成额外隐私面。
+
+/// skin_list_skins 的条目结构
+#[derive(Debug, Clone, Serialize)]
+pub struct SkinListEntry {
+    pub id: String,
+    pub name: String,
+    pub name_en: Option<String>,
+    pub version: Option<String>,
+    pub author: Option<String>,
+    pub loaded: bool,
+    pub hidden: bool,
+}
+
+#[tauri::command]
+pub fn skin_list_skins(app: AppHandle, window: tauri::WebviewWindow) -> Result<Vec<SkinListEntry>, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_CONTROL)?;
+    let skins = crate::skin::loader::scan_skins_directory(&state.skins_dir);
+    Ok(skins
+        .into_iter()
+        .map(|s| SkinListEntry {
+            loaded: state.registry.is_loaded(&s.id),
+            hidden: state
+                .registry
+                .get(&s.id)
+                .map(|w| !w.is_visible().unwrap_or(true))
+                .unwrap_or(false),
+            id: s.id,
+            name: s.manifest.name,
+            name_en: s.manifest.name_en,
+            version: s.manifest.version,
+            author: s.manifest.author,
+        })
+        .collect())
+}
+
+// ─── 通用 HTTP 请求（免权限）───
+//
+// 突破页面 fetch 的 CORS 限制：任意 http(s) URL、自定义头、文本/二进制负载。
+// 免权限的理由：皮肤页面本就有 fetch 通道（no-cors POST 已能外发数据），
+// 单独设闸挡不住有心者，只做展示噪音；身份仍经 caller_skin 校验（未安装的
+// 皮肤快速失败）。阻塞式 ureq/rustls（与更新检测同栈）放 spawn_blocking。
+// HTTP 错误状态（4xx/5xx）不 reject——状态码与响应体照返（皮肤常需要
+// 错误页内容）；网络层失败才 reject。响应体截断 4MB。binary: true 时请求体
+// 按 base64 解码发送、响应体按 base64 返回（图片/字体等二进制内容不被
+// UTF-8 替换字符毁损），响应头一并回传（Content-Type 等）。
+
+/// SSRF 防线：localhost 主机名与环回/链路本地/私有/未指定/广播 IP 字面量
+/// 一律拒绝（http_request 免权限，但这块内容页面 fetch 因 CORS 够不到，
+/// 构成实质能力增量）。
+fn is_private_host(url: &str) -> bool {
+    let Ok(u) = url.parse::<tauri::Url>() else {
+        return true; // 解析失败按拒绝处理
+    };
+    let host = u.host_str().unwrap_or("").to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") {
+        return true;
+    }
+    // IPv6 字面量在 URL 里带方括号（http://[::1]/x → host_str 可能带 []）——剥掉再解析
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    match bare.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => {
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast()
+        }
+        Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback() || v6.is_unspecified(),
+        Err(_) => false, // 域名放行（DNS 解析到内网的残余面不在本层）
+    }
+}
+
+/// http_request 的返回结构
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpResponseInfo {
+    pub status: u16,
+    /// 文本响应体（binary: true 时为 base64）
+    pub body: String,
+    /// 响应头（同名多头只保留首个值）
+    pub headers: serde_json::Map<String, serde_json::Value>,
+    /// 响应体是否因超 4MB 被截断
+    pub truncated: bool,
+}
+
+#[tauri::command]
+pub async fn http_request(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    url: String,
+    method: Option<String>,
+    headers: Option<serde_json::Map<String, serde_json::Value>>,
+    body: Option<String>,
+    timeout_ms: Option<u64>,
+    binary: Option<bool>,
+) -> Result<HttpResponseInfo, String> {
+    let state = app.state::<AppState>();
+    caller_skin(&state, &window)?;
+
+    let url = url.trim().to_string();
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err(format!("only http(s) URLs are allowed: {}", url));
+    }
+    // SSRF 防线：免权限不等于能读内网——localhost/环回/链路本地/私有网段的
+    // 响应体一律不给出（页面 fetch 受 CORS 本就够不到这些内容，「免权限
+    // 因为 fetch 已有通道」的论证不覆盖这一增量）。
+    if is_private_host(&url) {
+        return Err(format!("requests to local/private addresses are not allowed: {}", url));
+    }
+    let method = method.unwrap_or_else(|| "GET".into()).trim().to_ascii_uppercase();
+    if !["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].contains(&method.as_str()) {
+        return Err(format!("unsupported method: {}", method));
+    }
+    let timeout = timeout_ms.unwrap_or(15000).clamp(1000, 60000);
+    let headers: Vec<(String, String)> = headers
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k, v.as_str().map(String::from).unwrap_or_else(|| v.to_string())))
+        .collect();
+    let binary = binary.unwrap_or(false);
+    // binary: 请求体是 base64；文本：原样 UTF-8 发送
+    let body_bytes = match (body, binary) {
+        (Some(b), true) => {
+            use base64::Engine;
+            Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(b)
+                    .map_err(|e| format!("request body is not valid base64: {}", e))?,
+            )
+        }
+        (Some(b), false) => Some(b.into_bytes()),
+        (None, _) => None,
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        // 重定向上限 3（默认 10——跟穿到内网的跳板面收窄；SSRF 主机段在
+        // 发起前已拦，重定向目标段由 ureq 逐跳同规则校验不到的残面接受此
+        // 代价上限）
+        let agent = ureq::AgentBuilder::new().redirects(3).build();
+        let mut req = agent.request(&method, &url)
+            .set("User-Agent", concat!("Driftlet/", env!("CARGO_PKG_VERSION")))
+            .timeout(std::time::Duration::from_millis(timeout));
+        for (k, v) in &headers {
+            req = req.set(k, v);
+        }
+        let result = match &body_bytes {
+            Some(b) => req.send_bytes(b),
+            None => req.call(),
+        };
+        // HTTP 错误状态照返（ureq 把 4xx/5xx 归入 Err::Status，拆出来当正常响应）
+        let resp = match result {
+            Ok(r) => r,
+            Err(ureq::Error::Status(_, r)) => r,
+            Err(e) => return Err(e.to_string()),
+        };
+        let status = resp.status();
+        // 响应头收集（同名多头只取首个值——Set-Cookie 这类场景皮肤自行斟酌）
+        let mut resp_headers = serde_json::Map::new();
+        for name in resp.headers_names() {
+            if let Some(v) = resp.header(&name) {
+                resp_headers.insert(name, serde_json::Value::String(v.to_string()));
+            }
+        }
+        const CAP: u64 = 4 * 1024 * 1024;
+        let mut buf = Vec::new();
+        use std::io::Read;
+        resp.into_reader()
+            .take(CAP + 1)
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+        let truncated = buf.len() as u64 > CAP;
+        if truncated {
+            buf.truncate(CAP as usize);
+        }
+        let body = if binary {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(&buf)
+        } else {
+            // 文本通道：非法 UTF-8 以替换字符兜底（二进制请用 binary: true）
+            String::from_utf8_lossy(&buf).into_owned()
+        };
+        Ok(HttpResponseInfo {
+            status,
+            body,
+            headers: resp_headers,
+            truncated,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ─── 皮肤间事件总线（免权限）───
+//
+// 向所有已加载皮肤窗口（含自己）广播一条自定义 DOM 事件
+// `desk-skin-message`：detail = { channel, from, payload }。只投递事件、
+// 皮肤自行选择监听，不读写任何宿主状态，故免权限（与 skin_log 同属本机
+// 内存面）。channel 1–64 字符；payload 序列化后上限 16KB 防滥用。
+
+#[tauri::command]
+pub fn skin_broadcast(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    channel: String,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let caller_id = caller_skin(&state, &window)?.id;
+    let channel = channel.trim();
+    if channel.is_empty() || channel.len() > 64 {
+        return Err("channel must be 1–64 characters".into());
+    }
+    let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    if payload_json.len() > 16 * 1024 {
+        return Err("payload too large (max 16KB)".into());
+    }
+    let detail = serde_json::json!({
+        "channel": channel,
+        "from": caller_id,
+        "payload": payload,
+    });
+    let script = format!(
+        r#"document.dispatchEvent(new CustomEvent('desk-skin-message',{{detail:{}}}));"#,
+        serde_json::to_string(&detail).map_err(|e| e.to_string())?
+    );
+    for id in state.registry.loaded_ids() {
+        if let Some(win) = state.registry.get(&id) {
+            let _ = win.eval(&script);
+        }
+    }
+    Ok(())
+}
+
+// ─── 皮肤窗口显隐（自己免权限 / 他人 control 中危）───
+//
+// 隐藏/显示任意已加载皮肤的窗口。省略 skinId（或传自己 id）= 作用于自己
+// ——免权限（仅自身可见性，无害路径，通知式皮肤的「看完即消失」）；
+// 指定其他皮肤 = `control` 中危门（显隐他者窗口与窗口配置/生命周期同层）。
+// 显隐变化同步走 hotkey::sync_tray_toggle_item 漏斗（托盘勾选与管理器
+// 「已隐藏」徽标随之刷新）；用户侧唤回通道（全局热键/托盘勾选）始终兜底。
+
+#[tauri::command]
+pub fn skin_hide(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    skin_id: Option<String>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let target = resolve_control_target(&state, &window, skin_id)?;
+    let win = state
+        .registry
+        .get(&target)
+        .ok_or_else(|| tr(&state.lang(), Key::SkinNotLoaded).to_string())?;
+    win.hide().map_err(|e| e.to_string())?;
+    crate::hotkey::sync_tray_toggle_item(&app);
+    Ok(())
+}
+
+/// skin_show：skin_hide 的配对。只显示**不抢焦点**（再现不应打断用户
+/// 当前操作）。
+#[tauri::command]
+pub fn skin_show(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    skin_id: Option<String>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let target = resolve_control_target(&state, &window, skin_id)?;
+    let win = state
+        .registry
+        .get(&target)
+        .ok_or_else(|| tr(&state.lang(), Key::SkinNotLoaded).to_string())?;
+    win.show().map_err(|e| e.to_string())?;
+    crate::hotkey::sync_tray_toggle_item(&app);
+    Ok(())
+}
+
+/// control 组命令的统一目标解析：省略/空串/传自己 id = 自己（免权限）；
+/// 指定他人 = control 中危门。皮肤经桥拿不到自己的 id，「省略即自己」
+/// 让自操作免于硬编码 id。返回目标皮肤 id。
+fn resolve_control_target(
+    state: &AppState,
+    window: &tauri::WebviewWindow,
+    skin_id: Option<String>,
+) -> Result<String, String> {
+    let caller = caller_skin(state, window)?;
+    let target = skin_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| caller.id.clone());
+    if target != caller.id {
+        require_perm(state, window, PERM_CONTROL)?;
+    }
+    Ok(target)
+}
+
+/// 皮肤窗口的当前实际几何（逻辑像素）：已加载时读窗口现场；未加载回退
+/// 持久化配置（size/position 的 impl 本就要求已加载，回退分支是兜底）。
+/// 供单边 patch 合并用——缺边补另一边，不得偏离现场。
+fn current_geometry(state: &AppState, skin_id: &str) -> ((i32, i32), (u32, u32)) {
+    if let Some(w) = state.registry.get(skin_id) {
+        let sf = w.scale_factor().unwrap_or(1.0);
+        let pos = w
+            .outer_position()
+            .map(|p| (((p.x as f64) / sf).round() as i32, ((p.y as f64) / sf).round() as i32))
+            .unwrap_or((0, 0));
+        let size = w
+            .outer_size()
+            .map(|s| (((s.width as f64) / sf).round() as u32, ((s.height as f64) / sf).round() as u32))
+            .unwrap_or((300, 200));
+        return (pos, size);
+    }
+    let app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = app_config.skin_settings.get(skin_id);
+    (
+        (
+            entry.and_then(|e| e.x).unwrap_or(0),
+            entry.and_then(|e| e.y).unwrap_or(0),
+        ),
+        (
+            entry.map(|e| e.width).unwrap_or(300),
+            entry.map(|e| e.height).unwrap_or(200),
+        ),
+    )
+}
+
 // ─── Hardware probe (manual) ───
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn private_hosts_blocked() {
+        assert!(super::is_private_host("http://127.0.0.1/x"));
+        assert!(super::is_private_host("http://localhost/x"));
+        assert!(super::is_private_host("http://[::1]/x"));
+        assert!(super::is_private_host("http://10.1.2.3/x"));
+        assert!(super::is_private_host("http://172.16.0.1/x"));
+        assert!(super::is_private_host("http://192.168.1.1/x"));
+        assert!(super::is_private_host("http://169.254.169.254/latest/meta-data"));
+        assert!(super::is_private_host("http://0.0.0.0/x"));
+        assert!(!super::is_private_host("https://example.com/x"));
+        assert!(!super::is_private_host("https://8.8.8.8/x"));
+    }
+
     #[test]
     fn open_target_validation() {
         assert!(super::is_open_target_allowed("https://example.com"));
@@ -1261,6 +2062,13 @@ mod tests {
         // UNC 路径（两种前缀）一律拒绝
         assert!(!super::is_open_target_allowed("\\\\server\\share\\doc.pdf"));
         assert!(!super::is_open_target_allowed("//server/share/doc.pdf"));
+        // 尾点/尾空格绕过（Windows 规范化剥尾部后真执行）
+        assert!(!super::is_open_target_allowed("C:\\tools\\RUN.EXE."));
+        assert!(!super::is_open_target_allowed("C:\\tools\\RUN.EXE "));
+        // 补入的可解析为代码的类型
+        assert!(!super::is_open_target_allowed("C:\\tools\\help.chm"));
+        assert!(!super::is_open_target_allowed("C:\\tools\\x.SettingContent-ms"));
+        assert!(!super::is_open_target_allowed("C:\\tools\\x.scf"));
     }
 
     #[test]

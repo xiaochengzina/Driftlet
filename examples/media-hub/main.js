@@ -169,12 +169,16 @@ function renderVolume() {
 }
 
 /** 回读真实音量状态（启动时 + 每次写操作后） */
+let volGen = 0; // 音量回读代际：只让最新一次响应落地（连续操作并发的旧响应不得覆盖）
 async function refreshVolume() {
+  const gen = ++volGen;
   try {
     const v = await call('get_volume');
+    if (gen !== volGen) return;
     volState = { pct: Math.round(Number(v?.volume_pct) || 0), muted: !!v?.muted };
     volErr = '';
   } catch (err) {
+    if (gen !== volGen) return;
     volErr = String(err);
   }
   renderVolume();
@@ -252,12 +256,16 @@ async function pollMedia() {
   renderMedia();
 }
 
+let mediaGen = 0; // 媒体操作防重入：连点时反馈区只由最新一次落地决定
 async function sendMediaControl(action) {
+  const gen = ++mediaGen;
   try {
     const ok = await call('media_control', { action });
+    if (gen !== mediaGen) return;
     feedbackToken = ok ? 'accepted' : 'notAccepted';
     feedbackErr = '';
   } catch (err) {
+    if (gen !== mediaGen) return;
     feedbackToken = '';
     feedbackErr = String(err); // 例如：无播放会话 / 未声明 system 权限
   }
@@ -329,12 +337,15 @@ async function specTick() {
   if (document.hidden || specBusy) return;
   specBusy = true;
   const cmd = specSource === 'mic' ? 'get_mic_spectrum' : 'get_audio_spectrum';
+  const srcAtStart = specSource; // 切源竞态：在途旧源响应不得覆盖刚清零的数据
   try {
     const r = await call(cmd, { bands: 24 });
+    if (srcAtStart !== specSource) return; // 已切源——本次响应丢弃
     lastBands = Array.isArray(r?.bands) && r.bands.length ? r.bands : lastBands;
     lastPeak = Math.max(0, Math.min(1, Number(r?.peak) || 0));
     specErr = '';
   } catch (err) {
+    if (srcAtStart !== specSource) return;
     // 例如：未声明 mic 权限 / 无麦克风设备 / 系统隐私设置禁用了麦克风
     specErr = String(err);
     lastBands = new Array(24).fill(0); // 出错时柱条归零，不停格在旧数据

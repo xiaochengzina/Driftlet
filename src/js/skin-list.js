@@ -42,12 +42,13 @@ export default class SkinList {
       }
       this._lastVersions = new Map(skins.map(s => [s.id, s.version]));
       this.skins = skins;
+      this.render();
+      return true;
     } catch (err) {
-      this.skins = [];
+      // 失败保留旧列表（置空会让「数据还在」的列表误显「还没有皮肤」空态）
       this.showToast(t('list.loadFailed') + String(err), 'error');
+      return false;
     }
-    this.render();
-    return this.skins;
   }
 
   select(skinId) {
@@ -142,8 +143,10 @@ export default class SkinList {
 
   renderCard(skin) {
     const selected = skin.id === this.selectedId ? ' selected' : '';
-    const statusClass = skin.loaded ? 'loaded' : 'unloaded';
-    const statusText = skin.loaded ? t('common.running') : t('common.unloaded');
+    // 状态三档：未加载（灰）/ 已加载但窗口不可见 = 已隐藏（黄）/ 运行中（绿）。
+    // hidden 由后端按真实窗口可见性（is_visible）下发，不是热键簿记
+    const statusClass = !skin.loaded ? 'unloaded' : skin.hidden ? 'hidden' : 'loaded';
+    const statusText = !skin.loaded ? t('common.unloaded') : skin.hidden ? t('common.hidden') : t('common.running');
     const deleteTitle = skin.loaded ? t('list.unloadBeforeDelete') : t('common.deleteSkin');
     const deleteDisabled = skin.loaded ? ' disabled' : '';
 

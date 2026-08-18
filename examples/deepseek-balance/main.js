@@ -82,6 +82,7 @@ let isAvailable = true;   // 最近一次成功的 is_available
 let lastError = '';       // 最近一次失败的本地化文案（成功时清空）
 let lastUpdated = null;   // 最近一次成功的时间（Date）
 let loading = false;
+let inflightCtrl = null;  // 在飞请求的 AbortController（换 Key 时掐断，见 fetchBalance）
 let pollTimer = null;
 let wasLow = false;       // 上一次成功查询时是否处于低余额（通知边沿触发用）
 
@@ -110,18 +111,24 @@ async function fetchBalance() {
   loading = true;
   render();
 
+  // 换 Key 竞态防护：fetch 开始时锁定当次 Key，落地前校验 Key 未变才写
+  // 状态（旧 Key 的在飞响应不得覆盖清空态）；Key 变更时由事件处理器直接
+  // abort 在飞请求（见 desk-setting-changed 里的 apiKey 分支）。
+  const fetchKey = apiKey;
   const ctrl = new AbortController();
+  inflightCtrl = ctrl;
   const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
     const res = await fetch(API_URL, {
       method: 'GET',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json' },
+      headers: { 'Authorization': `Bearer ${fetchKey}`, 'Accept': 'application/json' },
       signal: ctrl.signal,
       cache: 'no-store',
     });
     if (res.status === 401 || res.status === 403) throw new Error(t('errAuth'));
     if (!res.ok) throw new Error(t('errHttp', res.status));
     const data = await res.json();
+    if (fetchKey !== apiKey) return; // Key 已在飞行中换掉——不落地
     balanceInfos = Array.isArray(data?.balance_infos) ? data.balance_infos : [];
     isAvailable = data?.is_available !== false;
     lastError = '';
@@ -136,6 +143,7 @@ async function fetchBalance() {
     else lastError = err?.message || t('errNetwork');
   } finally {
     clearTimeout(timer);
+    if (inflightCtrl === ctrl) inflightCtrl = null;
     loading = false;
     render();
   }
@@ -175,6 +183,9 @@ function sendLowNotification() {
 
 function schedule() {
   if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+  // 隐藏暂停不得被「设置变更 → schedule() 重建定时器」绕过——隐藏时
+  // 直接不起定时器（恢复可见时 visibilitychange 会补查并重建）
+  if (document.hidden) return;
   pollTimer = setInterval(fetchBalance, intervalMinutes() * 60000);
 }
 
@@ -354,6 +365,9 @@ function bindEvents() {
     settings[key] = value;
     if (key === 'api_key') {
       apiKey = value || '';
+      // 换/删 Key 时直接掐断在飞的旧 Key 请求（其落地已被 fetchKey 校验挡住，
+      // abort 只是让它早点释放）
+      inflightCtrl?.abort();
       balanceInfos = null;
       lastError = '';
       lastUpdated = null;

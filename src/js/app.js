@@ -32,6 +32,8 @@ class App {
     this._loadStateTimers = new Map();
     // 侧栏搜索行展开态（收起是默认态；有查询词时强制展开，见 bindSearch）
     this.searchOpen = false;
+    // 拖放安装队列：多包逐个进安装引导（引导页关闭后继续下一个）
+    this._installQueue = [];
     window.__app = this;
     this.init();
   }
@@ -97,6 +99,15 @@ class App {
     listen('skin-unloaded', async (event) => {
       await this.skinList.refresh();
       await this.onLoadStateChange(event.payload);
+    });
+    // 皮肤可见性变化（全局热键 / 托盘勾选 / Alt+F4 降级隐藏，后端
+    // sync_tray_toggle_item 漏斗发出）：刷新列表与配置页徽标——
+    // hidden 状态以后端真实窗口可见性为准，不靠前端热键簿记
+    listen('skins-visibility-changed', async () => {
+      await this.skinList.refresh();
+      if (this.skinEditor.skinId) {
+        await this.skinEditor.load(this.skinEditor.skinId);
+      }
     });
   }
 
@@ -176,6 +187,13 @@ class App {
             </div>
           </div>
         </main>
+      </div>
+      <!-- 拖放安装的悬停反馈遮罩（拖入窗口时 .show，drop/leave 摘除） -->
+      <div class="drop-mask" id="drop-mask">
+        <div class="drop-mask-inner">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg>
+          <span>${t('app.dropHint')}</span>
+        </div>
       </div>`;
   }
 
@@ -193,7 +211,8 @@ class App {
       if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'f') return;
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (document.getElementById('settings-overlay')) return;
+      // 任意弹层开着都不聚焦幕后（此前只查设置页，确认框/安装向导漏）
+      if (document.querySelector('#settings-overlay, .confirm-overlay, .wizard-overlay')) return;
       const box = document.getElementById('skin-search');
       if (!box) return;
       e.preventDefault();
@@ -204,6 +223,24 @@ class App {
     document.addEventListener('pointermove', () => setHoverEnabled(true), { capture: true });
     document.addEventListener('visibilitychange', () => { if (document.hidden) setHoverEnabled(false); });
     win.onFocusChanged(({ payload: focused }) => { if (!focused) setHoverEnabled(false); });
+
+    // 拖放安装 .dskin：窗口级 onDragDropEvent 拿真实路径（HTML5 drop 在
+    // WebView2 拿不到全路径）；HTML5 两侧 preventDefault 防止 WebView2
+    // 把拖入的文件当导航目标就地打开。与「+ 添加皮肤」/双击同一安装链路
+    win.onDragDropEvent((event) => {
+      const mask = document.getElementById('drop-mask');
+      const p = event.payload;
+      if (p.type === 'enter' || p.type === 'over') {
+        mask?.classList.add('show');
+      } else if (p.type === 'leave') {
+        mask?.classList.remove('show');
+      } else if (p.type === 'drop') {
+        mask?.classList.remove('show');
+        this.handleDroppedPackages(p.paths);
+      }
+    });
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', (e) => e.preventDefault());
 
     // 最大化/还原时切换图标（按钮随外壳重建，按 id 现查）
     win.onResized(async () => {
@@ -275,8 +312,10 @@ class App {
     if (refreshBtn) {
       refreshBtn.onclick = async () => {
         this.showToast(t('app.refreshing'), 'info');
-        await this.skinList.refresh();
-        this.showToast(t('app.refreshed'), 'info');
+        // refresh 返回成败（失败时其内部已弹错误 toast——再弹「已刷新」是
+        // 矛盾双 toast）
+        const ok = await this.skinList.refresh();
+        if (ok) this.showToast(t('app.refreshed'), 'info');
       };
     }
 
@@ -370,12 +409,32 @@ class App {
     this.wizard.open(packagePath);
   }
 
-  // 安装引导页关闭后：刷新皮肤库；若编辑器正开着该皮肤则同步刷新
+  // 拖放安装：过滤出 .dskin 进队列（多包逐个开引导页；引导页开着时
+  // 入队不打断当前流程，onWizardClose 里 drain 继续）。非 .dskin 明确拒绝
+  handleDroppedPackages(paths) {
+    const pkgs = (paths || []).filter(p => /\.dskin$/i.test(p));
+    if (pkgs.length === 0) {
+      this.showToast(t('app.dropInvalid'), 'error');
+      return;
+    }
+    this._installQueue.push(...pkgs);
+    this._drainInstallQueue();
+  }
+
+  _drainInstallQueue() {
+    if (this.wizard?.overlay) return; // 引导页开着，等它关闭
+    const next = this._installQueue.shift();
+    if (next) this.wizard.open(next);
+  }
+
+  // 安装引导页关闭后：刷新皮肤库；若编辑器正开着该皮肤则同步刷新；
+  // 队列里还有拖入的包则继续下一个
   async onWizardClose(result) {
     await this.skinList.refresh();
     if (result?.skinId && this.skinEditor.skinId === result.skinId) {
       await this.skinEditor.load(result.skinId);
     }
+    this._drainInstallQueue();
   }
 
   async onSkinSelect(skinId) {
@@ -390,10 +449,11 @@ class App {
   // 自己发起的）都会 emit skin-loaded / skin-unloaded（commands.rs），
   // 列表按钮不再直连 editor.load，避免两路并发双调。
   // 删除选中的皮肤走 onSelect(null) → onSkinSelect → editor.clear()
-  // reload 路径（层级「置顶→正常」/重新加载/热重载）会连发 unloaded +
-  // loaded 两个事件，按皮肤各自 80ms 合并为一次刷新（否则整页连着重绘
-  // 两遍；计时器必须按皮肤分键——「全部重载」连发多皮肤事件，共享一个
-  // 计时器会让先到的皮肤刷新被后到者挤掉）
+  // reload 路径（重新加载/热重载）会连发 unloaded + loaded 两个事件，
+  // 按皮肤各自 80ms 合并为一次刷新（否则整页连着重绘两遍；计时器必须
+  // 按皮肤分键——「全部重载」连发多皮肤事件，共享一个计时器会让先到的
+  // 皮肤刷新被后到者挤掉）。层级原位翻转（置顶↔正常）不再 reload、
+  // 不发这两个事件，面板选中态由点击处理就地迁移
   onLoadStateChange(skinId) {
     clearTimeout(this._loadStateTimers.get(skinId));
     this._loadStateTimers.set(skinId, setTimeout(() => {

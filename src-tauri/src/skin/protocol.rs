@@ -31,6 +31,13 @@ pub fn handle_skin_request<R: tauri::Runtime>(
 
     let uri = request.uri();
     let relative_path = decode_uri_path(uri.path());
+
+    // 保留端点 __fs__：任意绝对路径文件直出（file_system 权限门）——
+    // 皮肤 id 只允许小写字母/数字/中划线，永不与 __fs__ 撞名。
+    if relative_path == "__fs__" {
+        return handle_fs_reference(&ctx, uri.query());
+    }
+
     let Some(canonical_file_path) = resolve_skin_file(&skins_dir, &relative_path) else {
         return not_found();
     };
@@ -54,7 +61,8 @@ pub fn handle_skin_request<R: tauri::Runtime>(
         let resizable = parse_resizable(uri.query());
         let settings_json = baked_settings_json(&skins_dir, &relative_path);
         let language = state.lang();
-        let injected = inject_bridge(html, opacity, locked, resizable, &settings_json, &language);
+        let theme = crate::commands::current_theme(&state);
+        let injected = inject_bridge(html, opacity, locked, resizable, &settings_json, &language, &theme);
         (Cow::Owned(injected.into_bytes()), "text/html")
     } else {
         let mime = guess_mime(&canonical_file_path);
@@ -128,6 +136,78 @@ fn is_settings_file_name(file_name: &str) -> bool {
     let name = file_name.to_ascii_lowercase();
     name == crate::skin::settings::SETTINGS_FILENAME
         || name.starts_with(&format!("{}.", crate::skin::settings::SETTINGS_FILENAME))
+}
+
+// ─── __fs__ 端点（file_system 权限门的任意路径直出）───
+//
+// 让页面用 URL 直接引用皮肤目录外的文件（<img src>、CSS url()、<video>）：
+// `http://skin.localhost/__fs__?path=<percent 编码的绝对路径>`。命令通道
+// （skin_read_any_file）走 JS 内存收发 base64，展示型引用（尤其媒体）用
+// URL 直出才不经过 JS、可由浏览器流式加载与缓存。
+// 安全门：身份取自 UriSchemeContext 的 webview label（可信 IPC 通道——
+// Referer 可被页面伪造，绝不用）；必须是声明了 file_system 的皮肤窗口；
+// 目标须为绝对路径且是存在的普通文件。此端点不碰 resolve_skin_file 的
+// 沙箱逻辑——它的边界就是「声明了 file_system 的皮肤可读整盘」，与命令
+// 通道 skin_read_any_file 完全同义。
+
+fn handle_fs_reference<R: tauri::Runtime>(
+    ctx: &tauri::UriSchemeContext<'_, R>,
+    query: Option<&str>,
+) -> http::Response<Cow<'static, [u8]>> {
+    let state = match ctx.app_handle().try_state::<crate::AppState>() {
+        Some(state) => state,
+        None => return not_found(),
+    };
+    let Some(skin_id) = ctx.webview_label().strip_prefix("skin-") else {
+        return not_found();
+    };
+    // 与 require_perm 同语义：重扫目录按 manifest 校验权限声明
+    let granted = crate::skin::loader::scan_skins_directory(&state.skins_dir)
+        .into_iter()
+        .find(|s| s.id == skin_id)
+        .map(|s| {
+            s.manifest
+                .permissions
+                .iter()
+                .any(|p| p == crate::skin_api::PERM_FILE_SYSTEM)
+        })
+        .unwrap_or(false);
+    if !granted {
+        return not_found();
+    }
+
+    let Some(file_path) = parse_fs_query(query) else {
+        return not_found();
+    };
+    let bytes = match std::fs::read(&file_path) {
+        Ok(b) => b,
+        Err(_) => return not_found(),
+    };
+    let mime = guess_mime(&file_path);
+    http::Response::builder()
+        .status(http::StatusCode::OK)
+        .header(http::header::CONTENT_TYPE, mime)
+        .header(http::header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(Cow::Owned(bytes))
+        .unwrap_or_else(|_| internal_server_error("failed to build response"))
+}
+
+/// 解析 __fs__ 端点的查询串：path 参数（percent 编码）必须是存在的普通
+/// 文件的绝对路径。抽成纯函数以便测试钉住这条安全不变量。
+fn parse_fs_query(query: Option<&str>) -> Option<PathBuf> {
+    let query = query?;
+    for pair in query.split('&') {
+        if let Some(v) = pair.strip_prefix("path=") {
+            let decoded = percent_encoding::percent_decode_str(v)
+                .decode_utf8_lossy()
+                .into_owned();
+            let p = PathBuf::from(&decoded);
+            if p.is_absolute() && p.is_file() {
+                return p.canonicalize().ok();
+            }
+        }
+    }
+    None
 }
 
 /// Merge the skin's declared setting defaults with the persisted overrides
@@ -213,7 +293,7 @@ fn parse_query_flag(query: Option<&str>, key: &str) -> bool {
     })
 }
 
-fn inject_bridge(html: String, opacity: f64, locked: bool, resizable: bool, settings_json: &str, language: &str) -> String {
+fn inject_bridge(html: String, opacity: f64, locked: bool, resizable: bool, settings_json: &str, language: &str, theme: &str) -> String {
     // Lock state is baked into the injected bridge at serve time: window
     // recreation (reload / on-desktop toggle) used to restore only the
     // cursor CSS via a racy eval and lose __DESK_PP__.positionLocked,
@@ -235,6 +315,10 @@ fn inject_bridge(html: String, opacity: f64, locked: bool, resizable: bool, sett
     // 态同理，必须在 serve 时烘焙而非创建后 eval，防竞态）。运行时切换由
     // set_language 命令 eval 更新并派发 desk-language-changed 事件。
     let language_json = serde_json::to_string(language).unwrap_or_else(|_| "\"zh-CN\"".into());
+    // 当前生效主题烘焙进桥（auto 已在后端折算成具体 light/dark）：皮肤据此
+    // 跟随管理器昼夜配色。运行时切换由 set_theme 命令 eval 更新并派发
+    // desk-theme-changed 事件。
+    let theme_json = serde_json::to_string(theme).unwrap_or_else(|_| "\"light\"".into());
     // 宿主版本烘焙进桥：皮肤据此做能力探测（新控件/新命令在老宿主上自行降级），
     // 与 min_host_version 的安装期提示互补。版本号不随运行期变化，无需事件同步。
     let host_version_json =
@@ -255,6 +339,7 @@ window.__DESK_PP__={{
   positionLocked: {locked},
   resizable: {resizable},
   language: {language_json},
+  theme: {theme_json},
   hostVersion: {host_version_json},
   // 约定：password 类型设置项的值在此恒为空串——skin:// 对所有皮肤同源，
   // 烘焙值可被任意皮肤读取；password 值需经 skin_get_setting 命令获取
@@ -509,11 +594,20 @@ window.driftlet=window.__DESK_PP__;
 </script>"#
     );
 
-    if let Some(pos) = html.find("</head>") {
+    // 大小写敏感定位修复：HTML 标签可大写（</HEAD>）。不 to_lowercase()
+    //（非 ASCII 字符小写化会改变字节长度，索引会漂——insert_str 落在非
+    // 字符边界即 panic）；按 ASCII 大小写不敏感窗口在原文上定位（多字节
+    // UTF-8 的字节全 ≥0x80，窗口起点必落在 ASCII 字节上，索引安全）。
+    let find_ci = |needle: &str| {
+        let h = html.as_bytes();
+        let n = needle.as_bytes();
+        h.windows(n.len()).position(|w| w.eq_ignore_ascii_case(n))
+    };
+    if let Some(pos) = find_ci("</head>") {
         let mut out = html;
         out.insert_str(pos, &bridge);
         out
-    } else if let Some(pos) = html.find("<body>") {
+    } else if let Some(pos) = find_ci("<body>") {
         let mut out = html;
         out.insert_str(pos + "<body>".len(), &format!("<head>{}</head>", bridge));
         out
@@ -671,16 +765,44 @@ mod tests {
     }
 
     #[test]
+    fn fs_query_requires_existing_absolute_file() {
+        // 存在的绝对路径文件放行
+        let dir = std::env::temp_dir().join(format!("driftlet-fsref-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("pic.png");
+        std::fs::write(&file, b"x").unwrap();
+        let abs = file.to_string_lossy().replace('\\', "/");
+        let q = format!("path={}", percent_encoding::utf8_percent_encode(&abs, percent_encoding::NON_ALPHANUMERIC));
+        assert!(parse_fs_query(Some(&q)).is_some(), "存在的绝对路径文件应放行");
+        // 非绝对路径 / 不存在 / 目录 / 缺参数一律拒
+        assert!(parse_fs_query(Some("path=notes%2Ftodo.txt")).is_none());
+        assert!(parse_fs_query(Some("path=D%3A%2Fno-such-driftlet.xyz")).is_none());
+        let dir_q = format!("path={}", percent_encoding::utf8_percent_encode(&dir.to_string_lossy().replace('\\', "/"), percent_encoding::NON_ALPHANUMERIC));
+        assert!(parse_fs_query(Some(&dir_q)).is_none(), "目录不放行");
+        assert!(parse_fs_query(None).is_none());
+        assert!(parse_fs_query(Some("other=x")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn bridge_bakes_language() {
-        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN");
+        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN", "light");
         assert!(out.contains(r#"language: "zh-CN""#), "桥必须烘焙管理器语言");
-        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "en");
+        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "en", "dark");
         assert!(out.contains(r#"language: "en""#));
     }
 
     #[test]
+    fn bridge_bakes_theme() {
+        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN", "dark");
+        assert!(out.contains(r#"theme: "dark""#), "桥必须烘焙当前生效主题");
+        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN", "light");
+        assert!(out.contains(r#"theme: "light""#));
+    }
+
+    #[test]
     fn bridge_hooks_console_forwarding() {
-        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN");
+        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN", "light");
         assert!(out.contains("skin_console_log"), "桥必须注入 console 转发 hook");
         assert!(out.contains("unhandledrejection"), "桥必须捕获未处理 rejection");
         assert!(out.contains("open_skin_devtools"), "桥必须注入 DevTools 快捷键 hook");

@@ -71,7 +71,10 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 追加一条日志。任何线程可调；锁只持极短（一次入队），emit 在锁外。
+/// 追加一条日志。任何线程可调；锁只持极短（一次入队）。
+/// 事件合批：皮肤高频调 skin_log 时逐条 emit 会把日志窗口打成 IPC 事件
+/// 风暴——100ms 窗口内合并为一批发出（事件名不变，payload 由单条改为
+/// 数组；前端兼容两种形状）。
 pub fn push(level: LogLevel, source: impl Into<String>, message: impl Into<String>) {
     let mut msg: String = message.into();
     if msg.chars().count() > MAX_MESSAGE_CHARS {
@@ -93,12 +96,42 @@ pub fn push(level: LogLevel, source: impl Into<String>, message: impl Into<Strin
     }
     // 窗口不存在时 get_webview_window 返回 None，直接不 emit ——
     // 「不开窗口不推前端」的内存约定就落在这一行。
-    if let Some(app) = APP.get() {
-        if app.get_webview_window("log").is_some() {
-            let _ = app.emit_to("log", "app-log-added", &entry);
+    if APP.get().is_none() {
+        return;
+    }
+    let spawn_flush = {
+        let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+        pending.0.push(entry);
+        if pending.1 {
+            false
+        } else {
+            pending.1 = true;
+            true
         }
+    };
+    if spawn_flush {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let batch = {
+                let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+                pending.1 = false;
+                std::mem::take(&mut pending.0)
+            };
+            if batch.is_empty() {
+                return;
+            }
+            if let Some(app) = APP.get() {
+                if app.get_webview_window("log").is_some() {
+                    let _ = app.emit_to("log", "app-log-added", &batch);
+                }
+            }
+        });
     }
 }
+
+/// 事件合批缓冲：(待发条目, flush 线程已排期)。约 100ms 一批。
+static PENDING: std::sync::LazyLock<Mutex<(Vec<LogEntry>, bool)>> =
+    std::sync::LazyLock::new(|| Mutex::new((Vec::new(), false)));
 
 pub fn entries() -> Vec<LogEntry> {
     BUF.lock()

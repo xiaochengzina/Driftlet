@@ -67,12 +67,23 @@ const API = {
     return invoke('set_skin_position', { skinId, x, y });
   },
 
+  // 复位到屏幕内：完全出屏才移动，返回是否发生了移动（布尔）
+  bringOnscreen(skinId) {
+    return invoke('bring_skin_onscreen', { skinId });
+  },
+
   setSize(skinId, width, height) {
     return invoke('set_skin_size', { skinId, width, height });
   },
 
   setSkinCustomSetting(skinId, key, value) {
     return invoke('set_skin_custom_setting', { skinId, key, value });
+  },
+
+  // 皮肤设置页 file/directory 控件：管理器弹系统选择器；mode = 'file' | 'directory'，
+  // filters 为扩展名列表（不含点，仅 file 用）；取消返回 null
+  pickPath(mode, filters) {
+    return invoke('pick_path', { mode, filters: filters && filters.length ? filters : null });
   },
 
   // 重置皮肤全部持久化数据（窗口配置 + 自定义设置），恢复 skin.json 默认值

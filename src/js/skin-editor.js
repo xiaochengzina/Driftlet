@@ -14,6 +14,7 @@ import showToast from './toast.js';
 import { listen } from '@tauri-apps/api/event';
 import { t, getLang } from './i18n.js';
 import { esc, escAttr, dispName, confirmDialog } from './dom.js';
+import { renderPermChipsHTML } from './perms.js';
 
 // 调色板缺省预设色（skin.json 未声明 options 时）
 // 12 个：与取色器、吸管同一行放下
@@ -98,6 +99,8 @@ export default class SkinEditor {
         if (gen !== this._gen) return;
         this.systemFonts = fonts;
       } catch {
+        // 失败也要过代际校验：旧代际的失败不得把新一代的 systemFonts 清成 []
+        if (gen !== this._gen) return;
         this.systemFonts = [];
       }
     } else {
@@ -109,36 +112,53 @@ export default class SkinEditor {
     // The backend already persists the position on every Moved event
     // (debounced) — here we only refresh the X/Y inputs.
     // 每个 await listen 后都要过代际校验：过期一代拿到的解绑句柄立即调用，
-    // 不得赋给 this.unlisten*——否则会被新一代覆盖，监听器永久泄漏
-    const unlistenMoved = await listen('skin-moved', (event) => {
-      const { skinId: movedId, x, y } = event.payload;
-      if (movedId === this.skinId) {
-        this._updatePositionDisplay(x, y);
-      }
-    });
-    if (gen !== this._gen) { unlistenMoved(); return; }
-    this.unlistenMoved = unlistenMoved;
+    // 不得赋给 this.unlisten*——否则会被新一代覆盖，监听器永久泄漏。
+    // listen 本身失败（IPC 异常）不得让 load 整体 reject：监听器缺失仅
+    // 损失实时刷新，页面照常可用
+    let unlistenMoved = null;
+    try {
+      unlistenMoved = await listen('skin-moved', (event) => {
+        const { skinId: movedId, x, y } = event.payload;
+        if (movedId === this.skinId) {
+          this._updatePositionDisplay(x, y);
+        }
+      });
+    } catch { /* 监听注册失败不阻断 */ }
+    if (unlistenMoved) {
+      if (gen !== this._gen) { unlistenMoved(); return; }
+      this.unlistenMoved = unlistenMoved;
+    }
 
     // Border-drag resize: backend persists (debounced) — refresh W/H inputs.
-    const unlistenResized = await listen('skin-resized', (event) => {
-      const { skinId: resizedId, width, height } = event.payload;
-      if (resizedId === this.skinId) {
-        this._updateSizeDisplay(width, height);
-      }
-    });
-    if (gen !== this._gen) { unlistenResized(); return; }
-    this.unlistenResized = unlistenResized;
+    let unlistenResized = null;
+    try {
+      unlistenResized = await listen('skin-resized', (event) => {
+        const { skinId: resizedId, width, height } = event.payload;
+        if (resizedId === this.skinId) {
+          this._updateSizeDisplay(width, height);
+        }
+      });
+    } catch { /* 监听注册失败不阻断 */ }
+    if (unlistenResized) {
+      if (gen !== this._gen) { unlistenResized(); return; }
+      this.unlistenResized = unlistenResized;
+    }
 
     // Skin-originated setting writes (skin_set_setting): backend persists —
     // here we only refresh the affected control in the open custom page.
-    const unlistenSetting = await listen('skin-setting-changed', (event) => {
-      const { skinId, key, value } = event.payload;
-      if (skinId !== this.skinId || !this.detail) return;
-      (this.detail.settings_values = this.detail.settings_values || {})[key] = value;
-      this._syncCustomControl(key, value);
-    });
-    if (gen !== this._gen) { unlistenSetting(); return; }
-    this.unlistenSetting = unlistenSetting;
+    let unlistenSetting = null;
+    try {
+      unlistenSetting = await listen('skin-setting-changed', (event) => {
+        const { skinId, key, value } = event.payload;
+        if (skinId !== this.skinId || !this.detail) return;
+        (this.detail.settings_values = this.detail.settings_values || {})[key] = value;
+        this._syncCustomControl(key, value);
+      });
+    } catch { /* 监听注册失败不阻断 */ }
+    if (unlistenSetting) {
+      if (gen !== this._gen) { unlistenSetting(); return; }
+      this.unlistenSetting = unlistenSetting;
+    }
   }
 
   clear() {
@@ -177,16 +197,17 @@ export default class SkinEditor {
   _updatePositionDisplay(x, y) {
     const elX = this.container.querySelector('#cfg-posx');
     const elY = this.container.querySelector('#cfg-posy');
-    if (elX) elX.value = x;
-    if (elY) elY.value = y;
+    // 焦点保护：用户正在编辑该输入框时不冲掉进行中的内容
+    if (elX && document.activeElement !== elX) elX.value = x;
+    if (elY && document.activeElement !== elY) elY.value = y;
   }
 
   // Update W/H fields in the config panel without re-rendering
   _updateSizeDisplay(width, height) {
     const elW = this.container.querySelector('#cfg-width');
     const elH = this.container.querySelector('#cfg-height');
-    if (elW) elW.value = width;
-    if (elH) elH.value = height;
+    if (elW && document.activeElement !== elW) elW.value = width;
+    if (elH && document.activeElement !== elH) elH.value = height;
   }
 
   // Reflect a skin-originated setting write (skin_set_setting → backend
@@ -257,8 +278,10 @@ export default class SkinEditor {
           <div class="cfg-header-main">
             <h2>${esc(dispName(d))}</h2>
             <div class="subtitle">${[d.author ? t('editor.byAuthor') + esc(d.author) : '', d.version ? `v${esc(d.version)}` : ''].filter(Boolean).join(' · ')}</div>
+            <!-- 权限名称胶囊（perms.js 单一口源）：只列名称，颜色分级 -->
+            ${renderPermChipsHTML(d.permissions)}
           </div>
-          <span class="status-badge ${d.loaded ? 'loaded' : 'unloaded'}"><span class="status-dot"></span>${d.loaded ? t('common.running') : t('common.unloaded')}</span>
+          <span class="status-badge ${!d.loaded ? 'unloaded' : d.hidden ? 'hidden' : 'loaded'}"><span class="status-dot"></span>${!d.loaded ? t('common.unloaded') : d.hidden ? t('common.hidden') : t('common.running')}</span>
         </div>
 
         ${hasCustom ? `
@@ -410,6 +433,7 @@ export default class SkinEditor {
             }
             ${d.loaded ? `<button class="action-btn" id="btn-reload">${t('editor.reload')}</button>` : ''}
             ${d.loaded ? `<button class="action-btn" id="btn-capture">${t('editor.capture')}</button>` : ''}
+            ${d.loaded ? `<button class="action-btn" id="btn-onscreen">${t('editor.bringOnscreen')}</button>` : ''}
             <button class="action-btn" id="btn-openfolder">${t('editor.openFolder')}</button>
             <button class="action-btn danger" id="btn-reset">${t('editor.resetData')}</button>
             ${!d.loaded ? `<button class="action-btn danger" id="btn-delete">${t('common.deleteSkin')}</button>` : ''}
@@ -545,6 +569,19 @@ export default class SkinEditor {
               </button>
             </div></div>`;
           break;
+        // 文件/文件夹选择器：只读输入框显示路径 + 浏览（系统对话框由管理器
+        // 后端弹——皮肤拿不到窗口句柄）+ 清除；值 = 绝对路径，空串 = 未选
+        case 'file':
+        case 'directory':
+          row = `<div class="form-row">${labelCell}
+            <div class="cfg-pick" data-key="${key}" data-mode="${def.type === 'directory' ? 'directory' : 'file'}"
+              data-filters="${escAttr(JSON.stringify(def.filters || []))}">
+              <input type="text" class="cfg-input cfg-pick-path" readonly
+                value="${escAttr(String(value ?? ''))}" title="${escAttr(String(value ?? ''))}" placeholder="${t('editor.pickEmpty')}">
+              <button type="button" class="cfg-pick-btn">${t('editor.browse')}</button>
+              <button type="button" class="cfg-pick-clear" title="${t('editor.clearPath')}">×</button>
+            </div></div>`;
+          break;
         case 'select':
           row = `<div class="form-row">${labelCell}
             <select class="cfg-custom cfg-select" data-key="${key}" data-type="select">
@@ -587,9 +624,14 @@ export default class SkinEditor {
             </div></div>`;
           break;
         case 'palette': {
-          const swatches = (def.options || []).length
+          // 预设色值白名单校验：皮肤包 option 值会进 style 属性（管理器窗口
+          // 是独立信任域）——escAttr 只防属性逃逸，防不了 `;` 追加声明
+          // （任意 CSS 注入 / url() 外发请求）。非 #hex 值直接丢弃
+          const SAFE_COLOR = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?([0-9a-fA-F]{2})?$/;
+          const swatches = ((def.options || []).length
             ? def.options
-            : DEFAULT_PALETTE.map(c => ({ value: c, label: null }));
+            : DEFAULT_PALETTE.map(c => ({ value: c, label: null }))
+          ).filter(o => SAFE_COLOR.test(String(o.value)));
           // 值格式 #rrggbb 或 #rrggbbaa（带透明度）
           const { rgb, alpha } = parseHexColor(String(value || '#ffffff'));
           row = `<div class="form-row form-row-block">${labelCell}
@@ -740,10 +782,11 @@ export default class SkinEditor {
         .catch(err => this.showToast(String(err), 'error'));
     });
 
-    // 窗口放置双态（置顶/正常）：分段按钮二选一。成功就地把选中态迁到
-    // 被点按钮（整页 load 会重播面板入场动画，肉眼可见的闪；点当前档位
-    // 也由此变纯 no-op）；失败才整页 load 回滚（防停在非法态）。
-    // 成功静默：选中态迁移即是反馈
+    // 窗口放置双态（置顶/正常）：分段按钮二选一，后端两个方向都是原位
+    // 翻转（不重建窗口、不打断皮肤运行时状态），也不发 loaded/unloaded
+    // 事件。成功就地把选中态迁到被点按钮（整页 load 会重播面板入场动画，
+    // 肉眼可见的闪；点当前档位也由此变纯 no-op）；失败才整页 load 回滚
+    //（防停在非法态）。成功静默：选中态迁移即是反馈
     const bindPlacement = (id, placement) => {
       const btn = this.container.querySelector(id);
       if (!btn) return;
@@ -873,13 +916,18 @@ export default class SkinEditor {
         this.showToast(String(err), 'error');
       }
     });
-    this.container.querySelector('#btn-reload')?.addEventListener('click', async () => {
+    this.container.querySelector('#btn-reload')?.addEventListener('click', async (e) => {
+      // 防连点（与 load/unload 按钮同款约定）
+      e.currentTarget.disabled = true;
       try {
         await API.reloadSkin(this.skinId);
         this.showToast(t('editor.reloaded'), 'success');
         await this.load(this.skinId);
         await window.__app?.skinList?.refresh();
-      } catch (err) { this.showToast(String(err), 'error'); }
+      } catch (err) {
+        this.showToast(String(err), 'error');
+        e.currentTarget.disabled = false;
+      }
     });
     this.container.querySelector('#btn-capture')?.addEventListener('click', () => {
       this.showToast(t('editor.capturing'), 'info');
@@ -893,6 +941,11 @@ export default class SkinEditor {
           }
         })
         .catch(err => this.showToast(t('editor.captureFailed') + String(err), 'error'));
+    });
+    this.container.querySelector('#btn-onscreen')?.addEventListener('click', () => {
+      API.bringOnscreen(this.skinId)
+        .then((moved) => this.showToast(t(moved ? 'editor.broughtBack' : 'editor.alreadyOnscreen'), moved ? 'success' : 'info'))
+        .catch(err => this.showToast(String(err), 'error'));
     });
     this.container.querySelector('#btn-openfolder')?.addEventListener('click', () => {
       API.openSkinFolder(this.skinId)
@@ -941,10 +994,13 @@ export default class SkinEditor {
 
   // 保存单个自定义设置；成功静默（控件态已是反馈），失败时重新 load 回滚控件显示
   saveCustomSetting(key, value) {
-    return API.setSkinCustomSetting(this.skinId, key, value)
+    const skinId = this.skinId;
+    return API.setSkinCustomSetting(skinId, key, value)
       .catch(err => {
         this.showToast(String(err), 'error');
-        this.load(this.skinId);
+        // skinId 可能已被 clear() 置空（页面切换后迟到失败）——空态页不得
+        // 被刷成「加载失败」页
+        if (this.skinId) this.load(this.skinId);
       });
   }
 
@@ -985,6 +1041,30 @@ export default class SkinEditor {
       });
     });
 
+    // 文件/文件夹选择器：浏览 → 管理器后端弹系统对话框 → 选中即保存；
+    // 清除 → 置空串保存。取消选择不做任何事（控件保持原值）
+    this.container.querySelectorAll('.cfg-pick').forEach(pick => {
+      const key = pick.dataset.key;
+      const input = pick.querySelector('.cfg-pick-path');
+      let filters = [];
+      try { filters = JSON.parse(pick.dataset.filters || '[]'); } catch { /* 防御 */ }
+      pick.querySelector('.cfg-pick-btn')?.addEventListener('click', async () => {
+        try {
+          const path = await API.pickPath(pick.dataset.mode, filters);
+          if (path) {
+            input.value = path;
+            this.saveCustomSetting(key, path);
+          }
+        } catch (err) {
+          this.showToast(String(err), 'error');
+        }
+      });
+      pick.querySelector('.cfg-pick-clear')?.addEventListener('click', () => {
+        input.value = '';
+        this.saveCustomSetting(key, '');
+      });
+    });
+
     // 滑动条：拖动中只更新显示，松手才保存
     this.container.querySelectorAll('.cfg-custom-slider').forEach(el => {
       const display = el.closest('.slider-row')?.querySelector('.slider-value');
@@ -1008,7 +1088,14 @@ export default class SkinEditor {
       const min = group.dataset.min === '' ? null : parseFloat(group.dataset.min);
       const max = group.dataset.max === '' ? null : parseFloat(group.dataset.max);
       const step = parseFloat(group.dataset.step) || 1;
-      const decimals = (group.dataset.step.split('.')[1] || '').length;
+      // 小数位推导要认指数记数法（step "1e-7" 按 split('.') 算得 0，
+      // toFixed(0) 把每次步进都抹回整数——步进静默卡死）
+      const decimals = (() => {
+        const s = group.dataset.step;
+        const m = /e-(\d+)$/i.exec(s);
+        if (m) return Number(m[1]);
+        return (s.split('.')[1] || '').length;
+      })();
       const sync = (n) => {
         valEl.textContent = String(n);
         decBtn.disabled = min !== null && n <= min;
@@ -1208,7 +1295,12 @@ export default class SkinEditor {
     const elX = this.container.querySelector('#' + idX);
     const elY = this.container.querySelector('#' + idY);
     const handler = () => {
-      onChange(parseInt(elX?.value) || 0, parseInt(elY?.value) || 0);
+      // 清空失焦不得兜底成 0——用户删掉内容只是还没输完，写成 0 会把
+      // 皮肤移到 (0,0)/尺寸设 0（snapgap 处理器对 NaN 是 return，此处曾漏）
+      const x = parseInt(elX?.value, 10);
+      const y = parseInt(elY?.value, 10);
+      if (Number.isNaN(x) || Number.isNaN(y)) return;
+      onChange(x, y);
     };
     elX?.addEventListener('change', handler);
     elY?.addEventListener('change', handler);

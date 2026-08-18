@@ -115,8 +115,8 @@ export default class Settings {
               <div class="hint">${t('settings.languageHint')}</div>
             </div>
             <div class="theme-options">
-              <button class="theme-btn lang-btn ${getLang() === 'zh-CN' ? 'active' : ''}" data-lang="zh-CN">${t('settings.langZh')}</button>
-              <button class="theme-btn lang-btn ${getLang() === 'en' ? 'active' : ''}" data-lang="en">${t('settings.langEn')}</button>
+              <button class="theme-btn ${getLang() === 'zh-CN' ? 'active' : ''}" data-lang="zh-CN">${t('settings.langZh')}</button>
+              <button class="theme-btn ${getLang() === 'en' ? 'active' : ''}" data-lang="en">${t('settings.langEn')}</button>
             </div>
           </div>
         </div>
@@ -197,8 +197,11 @@ export default class Settings {
     };
 
     // Theme buttons
+    let themeBusy = false;
     overlay.querySelectorAll('.theme-btn[data-theme]').forEach(btn => {
       btn.onclick = async () => {
+        if (themeBusy) return; // 连点串行化：UI 态由最后 resolve 者定、后端由最后落盘写定，会分叉
+        themeBusy = true;
         const theme = btn.dataset.theme;
         try {
           await API.setTheme(theme);
@@ -209,6 +212,8 @@ export default class Settings {
           showToast(t('settings.themeSwitched', { theme: btn.textContent }), 'success');
         } catch (err) {
           showToast(t('common.setFailed') + String(err), 'error');
+        } finally {
+          themeBusy = false;
         }
       };
     });
@@ -331,10 +336,12 @@ export default class Settings {
         onCancel: () => { importBtn.disabled = false; },
         onConfirm: async () => {
           // 确认后文件选择器仍在交互，按钮保持禁用直至导入流程结束
+          let keepDisabled = false;
           try {
             const done = await API.importConfig();
             if (done) {
               showToast(t('settings.backupImported'), 'success');
+              keepDisabled = true; // 成功即 reload：800ms 窗口内不得二次提交导入
               setTimeout(() => location.reload(), 800);
             } else {
               showToast(t('common.canceled'), 'info');
@@ -342,7 +349,7 @@ export default class Settings {
           } catch (err) {
             showToast(t('common.setFailed') + String(err), 'error');
           } finally {
-            importBtn.disabled = false;
+            if (!keepDisabled) importBtn.disabled = false;
           }
         },
       });

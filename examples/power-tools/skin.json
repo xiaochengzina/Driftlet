@@ -1,0 +1,22 @@
+{
+  "id": "power-tools",
+  "name": "高危能力演示",
+  "name_en": "Power Tools",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description": "任意路径文件读写 + 任意皮肤窗口配置控制（file_system 高危 / control 中危两个权限的演示）",
+  "description_en": "Arbitrary-path file access + cross-skin window-config control (demo of the file_system high-risk / control medium-risk permissions)",
+  "bilingual": true,
+  "entry": "index.html",
+  "window": {
+    "width": 360,
+    "height": 540,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0
+  },
+  "permissions": ["file_system", "control"],
+  "settings": []
+}

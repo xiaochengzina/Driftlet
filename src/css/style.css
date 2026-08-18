@@ -26,7 +26,6 @@
 
   /* 辅助色 = logo 海浪蓝：深水 #0e75c3（浅浪 #2da0db 的深色端），白底 4.8:1 */
   --accent: #0e75c3;
-  --accent-hover: #0a63a8;
   --accent-soft: rgba(14, 117, 195, 0.1);
   /* 空态中心氛围光（比 --accent-soft 弱一档：只提亮、不成光斑） */
   --empty-glow: rgba(14, 117, 195, 0.05);
@@ -52,9 +51,11 @@
   --danger-btn-hover: #a93425;
   /* danger 按钮/徽标上的文字与图标色 */
   --danger-ink: #fff;
-  /* 中危警示黄（权限分级等），白底对比度 ≥ 4.5:1 */
+  /* 中危警示黄（权限分级、隐藏态徽标等），白底对比度 ≥ 4.5:1 */
   --warning: #a16207;
   --warning-soft: rgba(161, 98, 7, 0.1);
+  /* 状态徽标描边（.status-badge.hidden 信号灯 hairline） */
+  --warning-ring: rgba(161, 98, 7, 0.35);
   --success: #0e7a4f;
   --success-soft: rgba(14, 122, 79, 0.1);
   /* 状态徽标描边（.status-badge.loaded 等信号灯 hairline） */
@@ -111,7 +112,6 @@
 
   /* 天空蓝 azure（去青光）：柔暗底上的唯一色相来源 */
   --accent: #63b8e6;
-  --accent-hover: #85c9ec;
   --accent-soft: rgba(99, 184, 230, 0.14);
   --accent-select: var(--accent);
   --accent-select-soft: rgba(99, 184, 230, 0.12);
@@ -133,6 +133,7 @@
   /* 中危警示黄（权限分级等） */
   --warning: #e0b04f;
   --warning-soft: rgba(224, 176, 79, 0.14);
+  --warning-ring: rgba(224, 176, 79, 0.35);
   --success: #46c48d;
   --success-soft: rgba(70, 196, 141, 0.14);
   --success-ring: rgba(70, 196, 141, 0.35);
@@ -705,6 +706,17 @@ body.hover-ok .skin-card:hover {
   box-shadow: 0 0 6px currentColor;
 }
 
+/* 已隐藏（已加载但窗口不可见）：黄灯徽标，与 loaded 同款 hairline + 光点 */
+.status-badge.hidden {
+  border-color: var(--warning-ring);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.status-badge.hidden .status-dot {
+  box-shadow: 0 0 6px currentColor;
+}
+
 .status-badge.unloaded {
   border-color: var(--border);
   color: var(--text-faint);
@@ -782,6 +794,50 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   background-image: none;
   border-color: var(--danger-btn);
   color: var(--danger-ink);
+}
+
+/* 页眉卡内的权限名称胶囊：只列名称、颜色分级（高危红/中危黄/未知灰），
+   无图标无说明——详细描述留在安装引导页（perms.js 单一口源） */
+.perm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.perm-chips:empty {
+  display: none;
+}
+
+.perm-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.perm-chip.high {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: transparent;
+}
+
+.perm-chip.medium {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: transparent;
+}
+
+/* 未声明权限时的中性说明行（不成胶囊） */
+.perm-chips-none {
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 /* ── 主面板 ── */
@@ -900,6 +956,7 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
 }
 
 .config-panel h2 {
+  overflow-wrap: anywhere;
   font-size: 21px;
   font-weight: 700;
   font-family: var(--font-display);
@@ -907,6 +964,7 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
 }
 
 .config-panel .subtitle {
+  overflow-wrap: anywhere;
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--text-secondary);
@@ -1203,6 +1261,8 @@ html[lang="en"] .config-section h3 .sec-en {
 .cfg-input[type="password"],
 .cfg-select {
   width: 160px;
+  /* 收缩下限 = 标称宽度：窄行不再被压到 160 以下（与路径选择器同例） */
+  min-width: 160px;
 }
 
 /* 中文环境的原生日期时间控件约需 205px（与 .dt-time 一致），
@@ -1376,6 +1436,9 @@ body.hover-ok .cfg-step-btn:not(:disabled):hover {
 }
 
 .cfg-step-val {
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   min-width: 36px;
   display: flex;
   align-items: center;
@@ -1475,7 +1538,7 @@ body.hover-ok .cfg-swatch:not(:disabled):hover {
   display: flex;
   align-items: center;
   flex: 0 1 auto;
-  min-width: 0;
+  min-width: 160px;
   width: 160px;
 }
 
@@ -1505,6 +1568,65 @@ body.hover-ok .cfg-swatch:not(:disabled):hover {
 body.hover-ok .cfg-pw-toggle:not(:disabled):hover {
   color: var(--text-primary);
   background: var(--accent-soft);
+}
+
+/* 文件/文件夹选择器（皮肤设置页 file/directory 控件）：只读路径输入 +
+   浏览按钮 + 清除按钮，同一行内铺满。flex 基准必须非 0（basis 0 的项在
+   行内没有剩余空间时不参与收缩，长说明会把按钮挤出卡片右缘）；
+   路径框下限 160px——与其它文字输入控件（cfg-input width 160px）一致 */
+.cfg-pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 260px;
+  min-width: 260px;
+}
+
+.cfg-pick .cfg-pick-path {
+  flex: 1;
+  min-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.cfg-pick .cfg-pick-btn {
+  flex: none;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+body.hover-ok .cfg-pick .cfg-pick-btn:not(:disabled):hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cfg-pick .cfg-pick-clear {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+}
+
+body.hover-ok .cfg-pick .cfg-pick-clear:not(:disabled):hover {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .cfg-pw-toggle.active {
@@ -1658,8 +1780,46 @@ body.hover-ok .action-btn.danger:not(:disabled):hover {
   color: var(--danger-ink);
 }
 
+/* ── 拖放安装遮罩：拖入窗口时的全窗反馈（虚线框 + 居中提示）── */
+.drop-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  /* 与弹层遮罩同款的毛玻璃模糊：拖入时面板内容退到景深后 */
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  /* 遮罩不拦截拖放事件（拖拽目标是窗口本身，指针事件可穿透 */
+  pointer-events: none;
+}
+
+.drop-mask.show {
+  display: flex;
+  animation: fadeIn 0.15s var(--ease-out);
+}
+
+.drop-mask-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 40px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  background: var(--bg-surface);
+  border: 1.5px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+}
+
 /* ── Toast ── */
 .toast {
+  overflow-wrap: anywhere;
   position: fixed;
   bottom: 22px;
   right: 22px;
@@ -1727,7 +1887,9 @@ body.hover-ok .action-btn.danger:not(:disabled):hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  /* 弹层层级：必须高于 wizard-overlay(300)——安装引导页开着期间更新检测
+     弹窗弹出会被引导页盖住不可点击（Esc 仍可关） */
+  z-index: 400;
   animation: fadeIn 0.15s var(--ease-out);
   /* 窗口太矮、面板超高时允许纵向滚动（配合子级 margin:auto 的安全居中） */
   overflow-y: auto;
@@ -2041,6 +2203,10 @@ body.hover-ok .settings-close:hover {
 
 .wizard-card {
   width: 380px;
+  /* 安全居中：flex 容器 align-items:center 下，超高内容顶部被裁且滚动
+     不可达（confirm-dialog 注释记过的同款事故）；margin:auto 让超高时
+     内容从顶部排开、可滚到底 */
+  margin: auto;
   max-width: 100%;
   text-align: center;
   animation: popIn 0.2s var(--ease-out);
@@ -2062,6 +2228,7 @@ body.hover-ok .settings-close:hover {
 }
 
 .wizard-name {
+  overflow-wrap: anywhere;
   font-size: 17px;
   font-weight: 700;
   font-family: var(--font-display);
@@ -2071,6 +2238,7 @@ body.hover-ok .settings-close:hover {
 }
 
 .wizard-meta {
+  overflow-wrap: anywhere;
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
@@ -2182,16 +2350,19 @@ body.hover-ok .settings-close:hover {
 }
 
 .wizard-perm-label {
+  overflow-wrap: anywhere;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
 }
 
 .wizard-perm.danger .wizard-perm-label {
+  overflow-wrap: anywhere;
   color: var(--danger);
 }
 
 .wizard-perm.medium .wizard-perm-label {
+  overflow-wrap: anywhere;
   color: var(--warning);
 }
 
@@ -2312,6 +2483,7 @@ body.hover-ok .settings-close:hover {
   .confirm-dialog,
   .wizard-card,
   .toast {
+  overflow-wrap: anywhere;
     animation-name: reducedFade;
   }
   .toast-out {
@@ -2407,6 +2579,8 @@ body.log-window #app {
 }
 
 .log-source-select {
+  max-width: 180px;
+  text-overflow: ellipsis;
   font: inherit;
   font-size: 12px;
   color: var(--text-primary, var(--accent));

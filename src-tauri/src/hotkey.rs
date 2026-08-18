@@ -11,7 +11,7 @@
 //! the enforcement loop only maintains z-order (desktop.rs), and
 //! `hide()`/`show()` keep the HWND and its frameless subclass intact.
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::i18n::{tr, trf, Key};
@@ -70,12 +70,17 @@ pub fn toggle_all_skins(app: &AppHandle) {
 /// Keep the tray "all skins hidden" check item in sync with reality.
 /// Clone the handle out of the guard so the MutexGuard drops before we
 /// call back into tauri.
+/// 本函数是全部皮肤可见性变化的漏斗（全局热键 toggle_all_skins、托盘
+/// 勾选项、皮肤窗 Alt+F4 降级隐藏都经这里同步托盘），故同时向管理器
+/// 发 skins-visibility-changed——列表/配置面板的「已隐藏」徽标按
+/// 真实窗口状态刷新，不靠热键簿记。
 pub fn sync_tray_toggle_item(app: &AppHandle) {
     let state = app.state::<AppState>();
     let item = state.toggle_item.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(item) = item {
         let _ = item.set_checked(all_skins_hidden(app));
     }
+    let _ = app.emit_to("main", "skins-visibility-changed", ());
 }
 
 /// Register the configured hotkey at startup. A parse failure only logs
@@ -160,19 +165,30 @@ pub fn apply_hotkey(app: &AppHandle, combo: &str) -> Result<(), String> {
         old_combo.trim().parse::<Shortcut>().ok()
     };
 
+    let mut old_still_registered = false;
     if let Some(old) = old {
         // 注销失败不阻断换绑，但必须留痕：否则旧注册泄漏（REGISTERED_COMBO
         // 只记新键，旧组合要到重启才释放）
-        if let Err(e) = app.global_shortcut().unregister(old) {
-            log::warn!("failed to unregister previous hotkey: {}", e);
+        match app.global_shortcut().unregister(old) {
+            Ok(()) => {}
+            Err(e) => {
+                log::warn!("failed to unregister previous hotkey: {}", e);
+                old_still_registered = true;
+            }
         }
     }
     if let Some(new) = new {
         if let Err(e) = app.global_shortcut().register(new) {
             // Roll back so the previous hotkey keeps working.
-            let restored = old
-                .map(|o| app.global_shortcut().register(o).is_ok())
-                .unwrap_or(false);
+            // 簿记按「旧注册真实存活状态」记账：注销旧键失败时旧注册还
+            // 活着（不必也无法回滚），回滚失败不等于旧键失效——
+            // REGISTERED_COMBO 置 None 会与「旧键仍生效」脱节
+            let restored = if old_still_registered {
+                true
+            } else {
+                old.map(|o| app.global_shortcut().register(o).is_ok())
+                    .unwrap_or(false)
+            };
             set_registered_combo(if restored {
                 Some(old_combo.trim().to_string())
             } else {

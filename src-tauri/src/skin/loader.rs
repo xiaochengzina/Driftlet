@@ -103,16 +103,32 @@ pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
         manifest.window.on_desktop = false;
     }
 
-    // entry 必须是皮肤文件夹内的单一文件名：拒绝目录穿越（".."）、子目录
-    // 分隔符与 ADS/盘符冒号
-    if !is_valid_entry_name(&manifest.entry) {
-        return Err(format!("Invalid entry file name '{}'", manifest.entry));
-    }
+    // window 默认值归一化（作者手写的 skin.json 不做任何信任假设）：
+    // 宽高钳到 [1, MAX_DIMENSION]（超大值会建出巨型表面吃 GPU 内存）；
+    // opacity 非有限/越界回落 [0.1, 1.0]（opacity:0 + 置顶 + 巨尺寸 =
+    // 隐形置顶吃点击窗口——安装向导不展示 window 默认值，必须在这里拦）。
+    // 注意：pack-skin 的镜像校验也要同步（AGENTS.md 硬约定）。
+    manifest.window.width = manifest.window.width.clamp(1, 10000);
+    manifest.window.height = manifest.window.height.clamp(1, 10000);
+    let op = manifest.window.opacity;
+    manifest.window.opacity = if op.is_finite() { op.clamp(0.1, 1.0) } else { 1.0 };
+    manifest.window.zoom = crate::commands::clamp_zoom(manifest.window.zoom);
+    // 网页皮肤自动刷新间隔钳到 ≤24h（作者手滑写大值的兜底）
+    manifest.window.refresh_seconds = manifest.window.refresh_seconds.map(|s| s.min(86400));
 
-    // Validate entry file exists
-    let entry_path = skin_dir.join(&manifest.entry);
-    if !entry_path.exists() {
-        return Err(format!("Entry file '{}' not found", manifest.entry));
+    // entry 必须是皮肤文件夹内的单一文件名：拒绝目录穿越（".."）、子目录
+    // 分隔符与 ADS/盘符冒号。例外：http(s) URL = 网页皮肤（窗口直接加载站点
+    // 页面），无本地文件可查
+    if !crate::skin::types::is_url_entry(&manifest.entry) {
+        if !is_valid_entry_name(&manifest.entry) {
+            return Err(format!("Invalid entry file name '{}'", manifest.entry));
+        }
+
+        // Validate entry file exists
+        let entry_path = skin_dir.join(&manifest.entry);
+        if !entry_path.exists() {
+            return Err(format!("Entry file '{}' not found", manifest.entry));
+        }
     }
 
     Ok(manifest)
@@ -237,7 +253,9 @@ fn type_fallback(def: &crate::skin::types::SkinSettingDef) -> serde_json::Value 
         | SkinSettingKind::Date
         | SkinSettingKind::DateTime
         | SkinSettingKind::Password
-        | SkinSettingKind::Font => Value::from(""),
+        | SkinSettingKind::Font
+        | SkinSettingKind::File
+        | SkinSettingKind::Directory => Value::from(""),
         SkinSettingKind::Select | SkinSettingKind::Radio => def
             .options
             .first()
@@ -268,7 +286,9 @@ fn setting_value_matches(kind: SkinSettingKind, v: &serde_json::Value) -> bool {
         | SkinSettingKind::Palette
         | SkinSettingKind::Select
         | SkinSettingKind::Radio
-        | SkinSettingKind::Font => v.is_string(),
+        | SkinSettingKind::Font
+        | SkinSettingKind::File
+        | SkinSettingKind::Directory => v.is_string(),
         SkinSettingKind::MultiSelect
         | SkinSettingKind::TaskList
         | SkinSettingKind::TodoList
@@ -279,9 +299,10 @@ fn setting_value_matches(kind: SkinSettingKind, v: &serde_json::Value) -> bool {
 }
 
 /// Build SkinInfo list for frontend display
-pub fn build_skin_info_list(skins: &[Skin], loaded_ids: &[String]) -> Vec<SkinInfo> {
+pub fn build_skin_info_list(skins: &[Skin], loaded_ids: &[String], hidden_ids: &[String]) -> Vec<SkinInfo> {
     skins.iter().map(|skin| {
         let loaded = loaded_ids.contains(&skin.id);
+        let hidden = hidden_ids.contains(&skin.id);
 
         // Auto-detect preview image in skin folder
         let preview = find_preview_image(&skin.directory);
@@ -296,6 +317,7 @@ pub fn build_skin_info_list(skins: &[Skin], loaded_ids: &[String]) -> Vec<SkinIn
             description_en: skin.manifest.description_en.clone(),
             bilingual: skin.manifest.bilingual,
             loaded,
+            hidden,
             preview,
         }
     }).collect()

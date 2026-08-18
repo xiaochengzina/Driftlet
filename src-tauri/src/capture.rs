@@ -53,6 +53,11 @@ pub fn capture_webview_to_png(
                 filled += got as usize;
             }
             buf.truncate(filled);
+            // 零字节截图不得当成功落盘（Stat/Read 得 0 时静默写空文件，
+            // 失败截图被当成功——预览图变成空白文件还当最新）
+            if filled == 0 {
+                return Err(format!("capture produced 0 bytes (source: {} bytes declared)", size));
+            }
             std::fs::write(path, &buf).map_err(|e| trf(lang, Key::WritePreviewFailed, &[&e.to_string()]))?;
         }
         Ok(())

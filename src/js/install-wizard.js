@@ -8,6 +8,7 @@
 import API from './api.js';
 import { t } from './i18n.js';
 import { esc, dispName, dispDesc } from './dom.js';
+import { renderPermsHTML } from './perms.js';
 
 export default class InstallWizard {
   /**
@@ -53,7 +54,9 @@ export default class InstallWizard {
     if (this.busy && !silent) return;
     this.overlay.remove();
     this.overlay = null;
-    if (!silent) {
+    // 换包场景（silent）也一样：done 页装完即应刷新列表——installedSkinId
+    // 非空时 onClose 不得被静默丢弃（否则刚装好的皮肤不可见直至手动刷新）
+    if (this.installedSkinId || !silent) {
       this.onClose(this.installedSkinId ? { skinId: this.installedSkinId } : null);
       this.installedSkinId = null;
     }
@@ -118,7 +121,7 @@ export default class InstallWizard {
           ${info.author ? `<span>${esc(info.author)}</span>` : ''}
         </div>
         ${dispDesc(info) ? `<p class="wizard-desc">${esc(dispDesc(info))}</p>` : ''}
-        ${this._renderPermissions(info.permissions)}
+        ${renderPermsHTML(info.permissions, { withTitle: true })}
         ${info.requires_host_version ? `<p class="wizard-note warn">${t('wizard.hostTooOld', { version: esc(info.requires_host_version) })}</p>` : ''}
         <div class="wizard-statusline ${danger ? 'danger' : ''}">
           <strong>${heading}</strong> · ${statusLine}
@@ -134,43 +137,8 @@ export default class InstallWizard {
     this.body.querySelector('[data-act="go"]').onclick = () => this._install(packagePath, info);
   }
 
-  // 权限声明列表（skin.json "permissions"，后端 PackageInfo.permissions 透传）。
-  // 已知权限给名称 + 一句说明，并按风险分级：shell / system 高危（红）、
-  // registry / clipboard / mic 中危（黄），均用警告图标与分级徽标标出；
-  // 未知权限原样显示 id（后端会忽略未知名，但展示出来让用户知情）；
-  // 旧版皮肤可能仍声明 "files"——皮肤目录内文件读写已免声明，静默略过。
-  _renderPermissions(permissions) {
-    const KNOWN = {
-      registry: { label: t('wizard.permRegistry'), desc: t('wizard.permRegistryDesc'), risk: 'medium' },
-      shell: { label: t('wizard.permShell'), desc: t('wizard.permShellDesc'), risk: 'high' },
-      system: { label: t('wizard.permSystem'), desc: t('wizard.permSystemDesc'), risk: 'high' },
-      clipboard: { label: t('wizard.permClipboard'), desc: t('wizard.permClipboardDesc'), risk: 'medium' },
-      mic: { label: t('wizard.permMic'), desc: t('wizard.permMicDesc'), risk: 'medium' },
-    };
-    const shieldIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
-    const warnIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
-
-    const list = (Array.isArray(permissions) ? permissions : []).filter(p => p !== 'files');
-    if (list.length === 0) {
-      return `<div class="wizard-perms"><div class="wizard-perm-none">${t('wizard.permNone')}</div></div>`;
-    }
-    const rows = list.map(p => {
-      // hasOwn 防 "__proto__"/"constructor" 这类 id 查到原型链上的假条目
-      const known = Object.hasOwn(KNOWN, p) ? KNOWN[p] : null;
-      const risk = known?.risk; // 'high' | 'medium' | undefined
-      const cls = risk === 'high' ? ' danger' : risk === 'medium' ? ' medium' : '';
-      const badge = risk === 'high' ? t('wizard.permHighRisk')
-        : risk === 'medium' ? t('wizard.permMediumRisk') : null;
-      return `<div class="wizard-perm${cls}">
-        <span class="wizard-perm-icon">${risk ? warnIcon : shieldIcon}</span>
-        <span class="wizard-perm-text">
-          <span class="wizard-perm-label">${known ? known.label : esc(p)}${badge ? `<em class="wizard-perm-risk">${badge}</em>` : ''}</span>
-          ${known ? `<span class="wizard-perm-desc">${known.desc}</span>` : ''}
-        </span>
-      </div>`;
-    }).join('');
-    return `<div class="wizard-perms"><div class="wizard-perms-title">${t('wizard.permissions')}</div>${rows}</div>`;
-  }
+  // 权限声明列表的渲染已收编为 src/js/perms.js 单一口源
+  // （引导页与配置页权限分区共用 renderPermsHTML）。
 
   // ── 状态 3：安装中 ──
   async _install(packagePath, info) {
@@ -225,6 +193,9 @@ export default class InstallWizard {
         // （gen 校验：期间若被新双击换包，不去关新向导）
         setTimeout(() => { if (gen === this._gen) this.close(); }, 500);
       } catch (err) {
+        // 代际守卫（与 _install 同款）：在途 loadSkin 期间用户双击换包后，
+        // 失败卡片不得渲染进新向导
+        if (!this.overlay || gen !== this._gen) return;
         loadBtn.disabled = false;
         loadBtn.textContent = t('wizard.loadNow');
         this._renderFailure(t('wizard.loadFailed'), err);

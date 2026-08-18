@@ -35,7 +35,8 @@ pub struct PackageInfo {
     /// skin.json 声明的中英双语开关：决定前端是否启用 *_en 文案
     pub bilingual: bool,
     /// skin.json 声明的敏感能力（"registry" / "shell" / "system" /
-    /// "clipboard" / "mic"，对应 skin_api 的 PERM_* 常量），
+    /// "clipboard" / "mic" / "file_system" / "control"，对应 skin_api 的
+    /// PERM_* 常量），
     /// 安装向导展示给用户确认
     pub permissions: Vec<String>,
     /// "new" | "update" | "reinstall" | "downgrade"
@@ -121,6 +122,28 @@ pub fn install_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
     let manifest = read_manifest(&base, lang)?;
     let id = require_package_id(&manifest, lang)?;
     check_entry_exists(&base, &manifest, lang)?;
+
+    // 同 id 不同文件夹名遮蔽：扫描去重按文件夹名字典序保留先者，而包装载
+    // 一律落在 skins/<id>——若已有「id 相同但文件夹名 ≠ id」的皮肤（如文件夹
+    // 直装 "CoolWidget"），新包装上后会被静默遮蔽、永远加载旧版本。安装前
+    // 拦下并引导先移除旧副本。
+    if let Some(existing) = loader::scan_skins_directory(skins_dir)
+        .into_iter()
+        .find(|s| s.id == id)
+    {
+        let folder = existing
+            .directory
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if folder != id {
+            return Err(format!(
+                "another copy of skin '{}' already exists at folder '{}' — remove it first, then install again",
+                id, folder
+            ));
+        }
+    }
 
     let dest = skins_dir.join(&id);
     let staging = skins_dir.join(format!(".staging-{}", id));
@@ -291,6 +314,10 @@ fn require_package_id(manifest: &SkinManifest, lang: &str) -> Result<String, Str
 }
 
 fn check_entry_exists(base: &Path, manifest: &SkinManifest, lang: &str) -> Result<(), String> {
+    // 例外：http(s) URL 入口 = 网页皮肤，无本地文件可查
+    if crate::skin::types::is_url_entry(&manifest.entry) {
+        return Ok(());
+    }
     // 与 loader 同一套 entry 名校验：含 "../\\:" 的 entry 即使此刻在解压
     // 目录里找得到，装上后也会被 loader 拒载——皮肤「装完即消失」，必须
     // 在安装前拦下
@@ -360,6 +387,16 @@ fn copy_dir_recursive_inner(src: &Path, dst: &Path, depth: u32) -> io::Result<()
         if meta.file_type().is_symlink() {
             log::warn!("Skipping symlink during skin copy: {:?}", src_path);
             continue;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::fs::MetadataExt;
+            // junction 在 Windows 上不被 is_symlink 标记，须按属性位判
+            //（reparse point 成环可穿越出暂存树）
+            if meta.file_attributes() & 0x400 != 0 {
+                log::warn!("Skipping junction/reparse point during skin copy: {:?}", src_path);
+                continue;
+            }
         }
         if meta.is_dir() {
             copy_dir_recursive_inner(&src_path, &dst_path, depth + 1)?;

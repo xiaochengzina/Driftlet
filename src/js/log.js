@@ -48,7 +48,10 @@ function sourceLabel(source) {
 }
 
 function passesFilter(entry) {
-  if (!filters[entry.level]) return false;
+  // 原型链键防护：未知级别（后端未来新增）按 info 兜底显示，不因
+  // filters['xxx'] 落到原型方法/undefined 而整条消失
+  const levelOk = Object.hasOwn(filters, entry.level) ? filters[entry.level] : filters.info;
+  if (!levelOk) return false;
   if (filters.source === 'all') return true;
   return entry.source === filters.source;
 }
@@ -193,10 +196,14 @@ function renderShell() {
     renderAll();
   };
   document.getElementById('log-clear').onclick = async () => {
+    // 清空竞态：await 期间新到的条目不得被 entries=[] 误删（与后端缓冲
+    // 不一致，重开窗口才能看到）——记清空代际，返回后保留更新的条目
+    const clearSeq = entries.length ? entries[entries.length - 1].seq : 0;
     try {
       await invoke('clear_app_log');
-      entries = [];
+      entries = entries.filter((e) => e.seq > clearSeq);
       knownSources.clear();
+      for (const e of entries) knownSources.add(e.source);
       rebuildSourceOptions();
       renderAll();
     } catch (err) {
@@ -220,13 +227,16 @@ async function boot() {
     if (!focused) document.body.classList.remove('hover-ok');
   });
 
-  // 先 listen 缓冲增量，再拉快照合并 —— 顺序反过来会丢窗口期内的条目
+  // 先 listen 缓冲增量，再拉快照合并 —— 顺序反过来会丢窗口期内的条目。
+  // 后端 100ms 合批：payload 可能是单条也可能是数组（高频日志合并下发），
+  // 两种形状都兼容
   pendingLive = [];
   await listen('app-log-added', (event) => {
+    const items = Array.isArray(event.payload) ? event.payload : [event.payload];
     if (pendingLive) {
-      pendingLive.push(event.payload);
+      pendingLive.push(...items);
     } else {
-      appendLive(event.payload);
+      for (const item of items) appendLive(item);
     }
   });
   try {
@@ -260,4 +270,9 @@ async function boot() {
   });
 }
 
-boot();
+boot().catch((err) => {
+  // 启动失败（listen/invoke reject）不得静默成「永空白」——在空态区明示
+  console.error('log window boot failed:', err);
+  const emptyEl = document.getElementById('log-empty');
+  if (emptyEl) emptyEl.textContent = String(err);
+});

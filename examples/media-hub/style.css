@@ -201,6 +201,13 @@ body {
   font-size: 24px;
 }
 
+/* [hidden] 防护：作者 display 恒胜 UA 的 [hidden]{display:none}——hidden
+   生效必须显式压住（web-view 的 frame/empty 同款事故，勿只修一边） */
+.media-cover-ph[hidden],
+.media-cover[hidden] {
+  display: none;
+}
+
 .media-text { flex: 1; min-width: 0; }
 .media-text p { margin: 0; }
 .media-text p:empty { display: none; }

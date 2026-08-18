@@ -44,11 +44,13 @@ static SNAP_WINDOWS: std::sync::LazyLock<Mutex<HashMap<isize, SnapEntry>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 登记/更新一个皮肤窗口的吸附配置（建窗与面板改设置时调用）。
+/// gap 在登记处统一钳制——手改 config.json 注入的越界值不能直达
+/// 吸附判定（命令路径 set_skin_snap_gap 已钳，这里是消费侧总闸）
 pub fn upsert(hwnd: isize, enabled: bool, gap: u32) {
     SNAP_WINDOWS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(hwnd, SnapEntry { enabled, gap });
+        .insert(hwnd, SnapEntry { enabled, gap: gap.min(MAX_SNAP_GAP) });
 }
 
 /// 窗口销毁时摘除登记。HWND 会被系统回收复用，残留条目可能把无关窗口
@@ -113,8 +115,13 @@ pub fn snap_drag(
     let w = moving.right - moving.left;
     let h = moving.bottom - moving.top;
 
-    let screen_x = [work.left + gap, work.right - gap - w];
-    let screen_y = [work.top + gap, work.bottom - gap - h];
+    // 超宽/超高兜底：窗口 ≥ 工作区 − 2·gap 时 `right−gap−w` 落在工作区
+    // 左侧之外——吸过去窗口被推出屏（报告实证：超宽窗拖近右缘被吸出屏）。
+    // 放不下时屏幕候选整轴剔除（窗口间候选不受影响）
+    let fits_w = w + 2 * gap <= work.right - work.left;
+    let fits_h = h + 2 * gap <= work.bottom - work.top;
+    let screen_x = if fits_w { [work.left + gap, work.right - gap - w] } else { [i32::MIN, i32::MIN] };
+    let screen_y = if fits_h { [work.top + gap, work.bottom - gap - h] } else { [i32::MIN, i32::MIN] };
 
     let mut win_x = Vec::new();
     let mut win_y = Vec::new();

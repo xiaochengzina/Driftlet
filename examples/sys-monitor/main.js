@@ -636,9 +636,25 @@ function setLang(next) {
 
 /* ── 轮询：速率类 1 秒一次；页面隐藏时暂停，可见时恢复 ────── */
 
+// 在飞护栏：慢命令（如 get_processes 在慢机器上 >1s）时请求会叠加、
+// 旧响应后落地闪旧值——每个任务在飞则跳过本 tick，天然串行化
+const inflight = new Set();
+function guard(name, f) {
+  return async () => {
+    if (inflight.has(name)) return;
+    inflight.add(name);
+    try {
+      await f();
+    } finally {
+      inflight.delete(name);
+    }
+  };
+}
+
 const fastTasks = [
-  refreshCpu, refreshGpu, refreshMemory, refreshDisks, refreshNetwork,
-  refreshProcesses, refreshBattery, refreshActivity,
+  guard('cpu', refreshCpu), guard('gpu', refreshGpu), guard('memory', refreshMemory),
+  guard('disks', refreshDisks), guard('network', refreshNetwork), guard('processes', refreshProcesses),
+  guard('battery', refreshBattery), guard('activity', refreshActivity),
 ];
 
 let timer = null;

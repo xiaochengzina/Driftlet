@@ -97,6 +97,8 @@ enum SkinSettingKind {
     DateTime,
     Password,
     DateTaskList,
+    File,
+    Directory,
 }
 
 /// 对应安装端 SkinSettingDef
@@ -128,6 +130,9 @@ struct SkinSettingDef {
     step: Option<f64>,
     #[serde(default)]
     options: Vec<SkinSettingOption>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    filters: Vec<String>,
 }
 
 /// 对应安装端 WindowDefaults（width/height 等类型不符会被拒绝）
@@ -150,6 +155,9 @@ struct WindowDefaults {
     resizable: bool,
     #[serde(default = "default_zoom")]
     zoom: f64,
+    #[serde(default)]
+    #[allow(dead_code)]
+    refresh_seconds: Option<u32>,
 }
 
 fn default_entry() -> String {
@@ -301,13 +309,17 @@ fn main() {
         .as_deref()
         .filter(|s| validate_skin_id(s))
         .unwrap_or_else(|| fail("skin.json 缺少合法的 id 字段（小写字母、数字、中划线，以字母或数字开头，且非 Windows 保留设备名，如 \"my-skin\"）"));
-    if !is_valid_entry_name(&manifest.entry) {
+    let is_web = {
+        let e = manifest.entry.trim_start();
+        e.starts_with("https://") || e.starts_with("http://")
+    };
+    if !is_web && !is_valid_entry_name(&manifest.entry) {
         fail(&format!(
             "入口文件 '{}' 不是合法的文件名（不能包含 \"..\"、'/'、'\\'、':'）",
             manifest.entry
         ));
     }
-    if !skin_dir.join(&manifest.entry).exists() {
+    if !is_web && !skin_dir.join(&manifest.entry).exists() {
         fail(&format!("入口文件 '{}' 不存在", manifest.entry));
     }
     let version = manifest.version.as_deref();

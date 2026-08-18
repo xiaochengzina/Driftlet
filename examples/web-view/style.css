@@ -1,0 +1,136 @@
+/* kimi-quota —— 外壳 + 标题条样式（管理器同款现代材质） */
+
+:root {
+  --accent: #0e75c3;
+  --accent-soft: rgba(14, 117, 195, 0.1);
+  --bg: #f4f8fb;
+  --card: #ffffff;
+  --text: #102a33;
+  --muted: #5d717c;
+  --border: rgba(14, 117, 195, 0.1);
+  --border-strong: rgba(14, 117, 195, 0.24);
+  --ok: #0e7a4f;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  overflow: hidden;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  background: transparent;
+  user-select: none;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+/* 标题条：整个都是拖动区（按住即可拖窗），右侧刷新钮可点 */
+.appbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--card);
+  background-image: linear-gradient(135deg, var(--accent-soft), transparent 62%);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+}
+
+.appbar h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态点：页面加载中闪、加载完成常绿、加载失败变红 */
+.dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.dot.loading { background: var(--accent); animation: pulse 0.9s ease-in-out infinite; }
+.dot.ok { background: var(--ok); }
+.dot.err { background: #c2402f; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.icon-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.icon-btn:hover { border-color: var(--border-strong); color: var(--accent); }
+.icon-btn.spin svg { animation: spin 0.8s linear infinite; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 未配置引导态 */
+.empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 0 28px;
+  line-height: 1.6;
+}
+
+.empty svg { opacity: 0.5; }
+
+/* 站点区 iframe：占满剩余空间，无边框 */
+#frame {
+  flex: 1;
+  min-height: 0;
+  border: none;
+  display: block;
+  width: 100%;
+  background: var(--card);
+}
+
+/* hidden 属性效力必须压过上方 display:block */
+#frame[hidden] {
+  display: none;
+}
+
+/* 同理：引导态的 display:flex 也会顶掉 hidden——hidden 生效需显式压住
+   （frame 同款事故，勿只修一边） */
+.empty[hidden] {
+  display: none;
+}

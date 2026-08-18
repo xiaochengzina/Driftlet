@@ -167,7 +167,6 @@ pub(crate) fn show_manager_window(app: &AppHandle) {
 }
 
 fn reload_all_skins(app: &AppHandle) {
-    let loaded_ids = app.state::<crate::AppState>().registry.loaded_ids();
     let handle = app.clone();
     // Reuse the manager's per-skin reload path (commands::reload_skin_impl =
     // unload + load as two separately-awaited blocking steps).  The old
@@ -181,7 +180,9 @@ fn reload_all_skins(app: &AppHandle) {
         // 状态的目录上扫描/建窗（可与安装方同排队，自愈但避免无谓报错）
         let state = handle.state::<crate::AppState>();
         let _install_guard = state.install_lock.lock().await;
-        for skin_id in loaded_ids {
+        // 快照在拿到锁之后再取：排队等待期间被卸载的皮肤会被
+        // reload_skin_impl 当「未加载→直接 load」重新拉起
+        for skin_id in state.registry.loaded_ids() {
             if let Err(e) = crate::commands::reload_skin_impl(handle.clone(), skin_id.clone()).await {
                 log::error!("reload_all_skins: failed to reload '{}': {}", skin_id, e);
             }

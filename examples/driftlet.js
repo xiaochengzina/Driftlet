@@ -29,6 +29,8 @@ window.Driftlet = (() => {
     get settings() { return bridge()?.settings || {}; },
     /** 管理器界面语言（"zh-CN" / "en"） */
     get language() { return bridge()?.language || 'zh-CN'; },
+    /** 管理器当前主题（"light" / "dark"；auto 已由后端折算成具体值） */
+    get theme() { return bridge()?.theme || 'light'; },
     /** 宿主版本号（如 "1.0.5"）：能力探测用，按数字段比较 */
     get hostVersion() { return bridge()?.hostVersion || ''; },
 
@@ -48,6 +50,7 @@ window.Driftlet = (() => {
     getIdleTime: () => call('get_idle_time'),
     getForegroundWindowInfo: () => call('get_foreground_window_info'),
     getMonitors: () => call('get_monitors'),
+    getSystemTheme: () => call('get_system_theme'),   // Windows 系统级 "light"/"dark"（AppsUseLightTheme）
 
     // ── 皮肤目录文件（免权限；沙箱限自身目录，binary: true 时 base64 收发）──
     readFile: (path, binary) => call('skin_read_file', { path, binary }),
@@ -59,6 +62,12 @@ window.Driftlet = (() => {
     getSetting: (key) => call('skin_get_setting', { key }),
     setSetting: (key, value) => call('skin_set_setting', { key, value }),
     log: (message, level) => call('skin_log', { level, message }),
+    // 隐藏任意已加载皮肤窗口（省略 id = 自己，免权限；指定他人需 control 权限）
+    hideSkin: (skinId) => call('skin_hide', { skinId }),
+    // 显示任意已加载皮肤窗口（同上；只显示不抢焦点）
+    showSkin: (skinId) => call('skin_show', { skinId }),
+    // 皮肤间广播（免权限；所有已加载皮肤含自己都会收到 desk-skin-message）
+    broadcast: (channel, payload) => call('skin_broadcast', { channel, payload }),
 
     // ── 敏感能力（需在 skin.json 声明对应 permissions）──
     readRegistryValue: (root, path, name) => call('read_registry_value', { root, path, name }),  // registry
@@ -71,6 +80,27 @@ window.Driftlet = (() => {
     openExternal: (target) => call('open_external', { target }),    // system
     showNotification: (title, body) => call('show_notification', { title, body }), // system
     getMicSpectrum: (bands) => call('get_mic_spectrum', { bands }), // mic
+    readAnyFile: (path, binary) => call('skin_read_any_file', { path, binary }),   // file_system（任意绝对路径；错误透传系统报错）
+    writeAnyFile: (path, data, binary) => call('skin_write_any_file', { path, data, binary }), // file_system（父目录自动创建）
+    listAnyDir: (path) => call('skin_list_any_dir', { path }),   // file_system（与 listDir 同款条目结构）
+    createAnyDir: (path) => call('skin_create_any_dir', { path }), // file_system（含多级，已存在视为成功）
+    deleteAnyPath: (path, recursive) => call('skin_delete_any_path', { path, recursive }), // file_system（目录树须 recursive: true）
+    // file_system：外部文件的引用 URL（<img src> / CSS url() 直接用，不经 JS 内存）
+    fileUrl: (path) => 'http://skin.localhost/__fs__?path=' + encodeURIComponent(path),
+    listSkins: () => call('skin_list_skins'),       // control（已安装皮肤清单：id/name/version/loaded/hidden）
+    getWindowConfig: (skinId) => call('skin_get_window_config', { skinId }),  // 省略 id = 自己，免权限；他人需 control
+    setWindowConfig: (skinId, patch) => call('skin_set_window_config', { skinId, patch }), // 省略 id = 改自己全键免权限；他人需 control
+    loadSkin: (skinId) => call('skin_load', { skinId }),        // 省略 id = 自己免权限；他人需 control
+    unloadSkin: (skinId) => call('skin_unload', { skinId }),    // 同上（目标是自己时 fire-and-forget，返回值不可依赖）
+    reloadSkin: (skinId) => call('skin_reload', { skinId }),    // 同上
+    httpRequest: (url, opts) => call('http_request', {          // 免权限（突破 CORS；页面本有 fetch 通道）
+      url,
+      method: opts?.method,
+      headers: opts?.headers,
+      body: opts?.body,
+      timeoutMs: opts?.timeoutMs,
+      binary: opts?.binary,                                     // true 时 body 按 base64 收发，响应含 headers
+    }),
 
     // ── 事件助手（返回解绑函数）──
     /** 管理器改了本皮肤的设置：fn(key, value)；__DESK_PP__.settings 已同步 */
@@ -84,6 +114,25 @@ window.Driftlet = (() => {
       const h = (e) => fn(e.detail?.language);
       document.addEventListener('desk-language-changed', h);
       return () => document.removeEventListener('desk-language-changed', h);
+    },
+    /** 管理器切换了主题：fn(theme)，theme 为 "light" / "dark"（已是折算值） */
+    onThemeChanged(fn) {
+      const h = (e) => fn(e.detail?.theme);
+      document.addEventListener('desk-theme-changed', h);
+      return () => document.removeEventListener('desk-theme-changed', h);
+    },
+    /** 其他皮肤（或自己）经 broadcast 发来消息：fn(channel, payload, fromSkinId) */
+    onSkinMessage(fn) {
+      const h = (e) => fn(e.detail?.channel, e.detail?.payload, e.detail?.from);
+      document.addEventListener('desk-skin-message', h);
+      return () => document.removeEventListener('desk-skin-message', h);
+    },
+    /** 本皮肤的窗口配置被改（管理器面板或 control 命令均可触发）：fn(key, value)，
+        key 为 opacity/placement/click_through/position_locked/resizable/zoom/edge_snap/snap_gap/position/size 之一 */
+    onWindowConfigChanged(fn) {
+      const h = (e) => fn(e.detail?.key, e.detail?.value);
+      document.addEventListener('desk-window-config-changed', h);
+      return () => document.removeEventListener('desk-window-config-changed', h);
     },
   };
 })();

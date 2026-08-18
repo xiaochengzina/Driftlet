@@ -22,6 +22,18 @@ const PROTECTED: [&str; 4] = [
     "settings.json.tmp",
 ];
 
+/// DOS 设备名判定（剥离扩展名后匹配，大小写不敏感）：CON/NUL/COM1-9/LPT1-9。
+/// Windows 语义下这些名字无论带不带扩展名都指向设备（"CON.txt" = 控制台）。
+fn is_dos_device_name(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or(name);
+    let upper = base.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "NUL")
+        || (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.len() == 4
+            && upper.as_bytes()[3].is_ascii_digit()
+            && upper.as_bytes()[3] != b'0'
+}
+
 pub const MAX_READ_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_WRITE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -73,6 +85,17 @@ pub fn resolve(base: &Path, rel: &str, for_write: bool, lang: &str) -> Result<Pa
             Component::Normal(s)
                 if s.to_str()
                     .map(|s| s.ends_with('.') || s.ends_with(' '))
+                    .unwrap_or(true) =>
+            {
+                return Err(trf(lang, Key::InvalidPath, &[rel]));
+            }
+            // DOS 设备名（CON/NUL/COM1-9/LPT1-9，剥离扩展名后匹配——
+            // Windows 里 "CON.txt" 同样是控制台）：读 CON 会无限阻塞主线程
+            // 冻结整个应用，写 COM1/LPT1 数据直达物理串并口。一律拒绝。
+            // 必须在下方 catch-all Normal 分支之前（match 按序匹配）。
+            Component::Normal(s)
+                if s.to_str()
+                    .map(|s| is_dos_device_name(s))
                     .unwrap_or(true) =>
             {
                 return Err(trf(lang, Key::InvalidPath, &[rel]));
@@ -302,6 +325,22 @@ mod tests {
         assert!(delete_file(&base, "skin.json::$DATA", "zh-CN").is_err());
         // 读/列路径同样不放行流语法
         assert!(resolve(&base, "a.txt:stream", false, "zh-CN").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rejects_dos_device_names() {
+        let base = temp_base("dev");
+        std::fs::write(base.join("a.txt"), "1").unwrap();
+        // CON/NUL/COM1/LPT1 及带扩展名形式一律拒绝（读 CON 会挂死主线程）
+        for bad in ["con", "CON", "nul.txt", "com1", "LPT9.log"] {
+            assert!(resolve(&base, bad, false, "zh-CN").is_err(), "{bad} must be rejected");
+        }
+        // 正常名字不误伤（a.txt 存在直读；console.log 走写路径——读路径
+        // canonicalize 要求存在）
+        std::fs::write(base.join("console.log"), "x").unwrap();
+        assert!(resolve(&base, "a.txt", false, "zh-CN").is_ok());
+        assert!(resolve(&base, "console.log", false, "zh-CN").is_ok());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

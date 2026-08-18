@@ -731,11 +731,54 @@ fn layout_scale_factor(window: &tauri::WebviewWindow) -> f64 {
 fn persistence_scale_factor(window: &tauri::WebviewWindow) -> f64 {
     #[cfg(target_os = "windows")]
     {
+        // 优先用建窗快照尺：layout_scale_factor 在 resize 期间分子随事件
+        // 同步变、分母是已存旧值，换算恒等旧值导致边框拖拽尺寸永不落盘
+        //（unchanged 恒真跳过保存）。快照与尺寸无关，天然稳定。
+        if let Some(s) = SCALE_SNAPSHOTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(window.label())
+            .copied()
+        {
+            return s;
+        }
         layout_scale_factor(window)
     }
     #[cfg(not(target_os = "windows"))]
     {
         window.scale_factor().unwrap_or(1.0)
+    }
+}
+
+/// 边框拖拽尺寸落盘的换算尺快照（label → 建窗时锁定的「物理客户区 ÷
+/// 逻辑宽」）。与尺寸无关——resize 期间不再依赖已存旧值（那场事故的
+/// 根源）。销毁时摘除。
+#[cfg(target_os = "windows")]
+static SCALE_SNAPSHOTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, f64>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// 建窗时锁定换算尺快照：此刻物理客户区 = 逻辑宽 × 真实尺（刚按
+/// inner_size 建完窗，配对天然正确；且不受虚拟屏 DPI 虚报影响——
+/// 量的是刚建出来的真实窗口）。
+#[cfg(target_os = "windows")]
+fn snapshot_scale_factor(window: &tauri::WebviewWindow, logical_w: f64) {
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+    let Ok(hwnd) = window.hwnd() else { return };
+    let mut rc = RECT::default();
+    unsafe {
+        let _ = GetClientRect(HWND(hwnd.0 as isize as *mut _), &mut rc);
+    }
+    let physical_w = (rc.right - rc.left) as f64;
+    if physical_w <= 0.0 || logical_w <= 0.0 {
+        return;
+    }
+    let scale = physical_w / logical_w;
+    if scale.is_finite() && scale > 0.1 && scale < 10.0 {
+        SCALE_SNAPSHOTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(window.label().to_string(), scale);
     }
 }
 
@@ -819,32 +862,48 @@ pub fn create_skin_window(
     //    skins_dir 下的真实文件路径；文件夹直装时 id 可能是 slugify 派生值
     //    （如中文文件夹名），id ≠ 文件夹名，用 id 必 404。前端预览图
     //    （api.js assetUrl 取路径末两段）同样按文件夹名拼 URL。
-    let folder_name = skin.directory.file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| format!("Invalid skin directory: {:?}", skin.directory))?;
-    let mut skin_url = tauri::Url::parse("skin://localhost")
-        .map_err(|e| format!("Failed to build skin URL: {}", e))?;
-    {
-        let mut segments = skin_url.path_segments_mut()
-            .map_err(|_| "Cannot build skin URL path".to_string())?;
-        segments.extend(&[folder_name, entry]);
-    }
-    skin_url.query_pairs_mut()
-        .append_pair("opacity", &config.opacity.to_string());
-    if config.position_locked {
-        // Position-lock state is served through the URL -> protocol handler
-        // bakes it into the injected bridge (__DESK_PP__.positionLocked).
-        // A post-creation eval would race the page load and lose the flag.
-        skin_url.query_pairs_mut().append_pair("locked", "1");
-    }
-    // Effective resizable: user's panel toggle (Some) wins; None follows the
-    // skin.json default.  Baked through the URL like the lock flag.
-    if config.resizable.unwrap_or(skin.manifest.window.resizable) {
-        // Same bake-in path as the lock flag: the protocol handler bakes
-        // __DESK_PP__.resizable, which enables the bridge's border-resize
-        // hot zones (pointermove cursor + pointerdown -> start_skin_resize).
-        skin_url.query_pairs_mut().append_pair("resizable", "1");
-    }
+    //
+    //    例外——网页皮肤（entry 为 http(s) URL）：窗口直接加载站点页面，
+    //    不走 skin:// 协议、不注入桥（页面上没有拖动区/右键菜单/命令通道；
+    //    远程源的自定义命令另有 tauri 的 remote-origin 守卫拦着）。站点登录态
+    //    走 WebView2 用户数据目录的 cookie 罐，天然跨重启持久化。
+    let is_web = crate::skin::types::is_url_entry(entry);
+    let webview_url = if is_web {
+        WebviewUrl::External(
+            entry
+                .trim()
+                .parse::<tauri::Url>()
+                .map_err(|e| format!("Invalid entry url '{}': {}", entry, e))?,
+        )
+    } else {
+        let folder_name = skin.directory.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("Invalid skin directory: {:?}", skin.directory))?;
+        let mut skin_url = tauri::Url::parse("skin://localhost")
+            .map_err(|e| format!("Failed to build skin URL: {}", e))?;
+        {
+            let mut segments = skin_url.path_segments_mut()
+                .map_err(|_| "Cannot build skin URL path".to_string())?;
+            segments.extend(&[folder_name, entry]);
+        }
+        skin_url.query_pairs_mut()
+            .append_pair("opacity", &config.opacity.to_string());
+        if config.position_locked {
+            // Position-lock state is served through the URL -> protocol handler
+            // bakes it into the injected bridge (__DESK_PP__.positionLocked).
+            // A post-creation eval would race the page load and lose the flag.
+            skin_url.query_pairs_mut().append_pair("locked", "1");
+        }
+        // Effective resizable: user's panel toggle (Some) wins; None follows the
+        // skin.json default.  Baked through the URL like the lock flag.
+        if config.resizable.unwrap_or(skin.manifest.window.resizable) {
+            // Same bake-in path as the lock flag: the protocol handler bakes
+            // __DESK_PP__.resizable, which enables the bridge's border-resize
+            // hot zones (pointermove cursor + pointerdown -> start_skin_resize).
+            skin_url.query_pairs_mut().append_pair("resizable", "1");
+        }
+        WebviewUrl::CustomProtocol(skin_url)
+    };
 
     let x = config.x.unwrap_or(100);
     let y = config.y.unwrap_or(100);
@@ -858,7 +917,7 @@ pub fn create_skin_window(
 
     // 2. Create window via Tauri (hidden until setup is done)
     // Coordinates are logical pixels, matching the values stored in config.
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(skin_url))
+    let window = WebviewWindowBuilder::new(app, &label, webview_url)
         .title(&skin.manifest.name)
         .inner_size(config.width as f64 * zoom, config.height as f64 * zoom)
         .position(x as f64, y as f64)
@@ -868,9 +927,21 @@ pub fn create_skin_window(
         .always_on_top(config.always_on_top)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(false)
-        .build()
-        .map_err(|e| format!("Failed to create window: {}", e))?;
+        .visible(false);
+    // 网页皮肤：桥不注入，初始不透明度经初始化脚本落（纯 ASCII）；本地皮肤
+    // 的 opacity 已随协议 query 烘焙
+    let window = if is_web {
+        window
+            .initialization_script(&format!(
+                "document.documentElement.style.opacity='{}';",
+                config.opacity
+            ))
+            .build()
+            .map_err(|e| format!("Failed to create window: {}", e))?
+    } else {
+        window.build()
+            .map_err(|e| format!("Failed to create window: {}", e))?
+    };
 
     // 远程控制软件的虚拟显示器 DPI 上报不一致（GameViewer/向日葵等虚拟屏：
     // GetDpiForMonitor 报 96、系统 DPI 实为 120——GameViewer 虚拟屏 +
@@ -894,6 +965,11 @@ pub fn create_skin_window(
     if let Err(e) = window.set_zoom(zoom) {
         log::warn!("set_zoom({}) failed for '{}': {}", zoom, skin.id, e);
     }
+
+    // 建窗即锁换算尺快照（Moved/Resized 落盘换算用；此时物理客户区 =
+    // 逻辑宽 × 真实尺，配对天然正确）
+    #[cfg(target_os = "windows")]
+    snapshot_scale_factor(&window, config.width as f64 * zoom);
 
     // 3. Strip DWM chrome + install the frameless subclass (while hidden).
     //    MUST run on the window's OWNER thread: SetWindowSubclass fails
@@ -932,6 +1008,25 @@ pub fn create_skin_window(
     #[cfg(target_os = "windows")]
     spawn_webview_hardening_retry(app, &label);
 
+    // 网页皮肤自动刷新（window.refresh_seconds）：普通线程按间隔 location.reload()
+    // ——登录态在 cookie 罐里，重载不掉线。闭包持有**建窗时的窗口句柄**：
+    // 皮肤卸载/重载后旧窗销毁，eval 返回 Err 自然退出——按 sid 从注册表重查
+    // 会命中重载后的新窗，旧线程叠加存活（每 reload 多一个线程，页面每周
+    // 期被刷 N 次），那是一条泄漏，勿改回去。
+    if is_web {
+        if let Some(secs) = skin.manifest.window.refresh_seconds.filter(|s| *s > 0) {
+            let win = window.clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(secs as u64));
+                    if win.eval("location.reload()").is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    }
+
     // 5. Listen for move events
     // WindowEvent::Moved reports physical (screen) pixels, but the rest of
     // the app stores and applies logical pixels (matching WebviewWindowBuilder::position).
@@ -948,14 +1043,18 @@ pub fn create_skin_window(
         window.on_window_event(move |event| {
             match event {
                 tauri::WindowEvent::Moved(position) => {
-                    let scale_factor = app_handle
+                    // 换算尺取不到时跳过本次落盘（unwrap_or(1.0) 会在非 96
+                    // DPI 屏把物理坐标当逻辑写错——下次移动自会补写）
+                    let Some(scale_factor) = app_handle
                         .get_webview_window(&label_for_event)
                         .map(|w| persistence_scale_factor(&w))
-                        .unwrap_or(1.0);
+                    else {
+                        return;
+                    };
                     let x = (position.x as f64 / scale_factor).round() as i32;
                     let y = (position.y as f64 / scale_factor).round() as i32;
                     save_dragged_position(&app_handle, &sid, x, y);
-                    let _ = app_handle.emit("skin-moved", serde_json::json!({
+                    let _ = app_handle.emit_to("main", "skin-moved", serde_json::json!({
                         "skinId": sid,
                         "x": x,
                         "y": y,
@@ -966,10 +1065,14 @@ pub fn create_skin_window(
                 // refresh the panel's W/H inputs.  Panel-driven set_skin_size
                 // echoes back with identical values and is skipped.
                 tauri::WindowEvent::Resized(size) => {
-                    let scale_factor = app_handle
+                    // 换算尺取不到时跳过本次落盘（unwrap_or(1.0) 会在非 96
+                    // DPI 屏把物理尺寸当逻辑写错）
+                    let Some(scale_factor) = app_handle
                         .get_webview_window(&label_for_event)
                         .map(|w| persistence_scale_factor(&w))
-                        .unwrap_or(1.0);
+                    else {
+                        return;
+                    };
                     let w = (size.width as f64 / scale_factor).round() as u32;
                     let h = (size.height as f64 / scale_factor).round() as u32;
                     // 缩放比例（zoom）：配置持久化的始终是 100% 基础尺寸 =
@@ -993,7 +1096,7 @@ pub fn create_skin_window(
                     };
                     if !unchanged {
                         save_dragged_size(&app_handle, &sid, base_w, base_h);
-                        let _ = app_handle.emit("skin-resized", serde_json::json!({
+                        let _ = app_handle.emit_to("main", "skin-resized", serde_json::json!({
                             "skinId": sid,
                             "width": w,
                             "height": h,
@@ -1044,6 +1147,54 @@ pub fn skin_window_label(skin_id: &str) -> String {
     format!("skin-{}", skin_id)
 }
 
+/// 皮肤完全出屏时的目标归位坐标（主显示器工作区左上 + 24px 边距）。
+/// 仅当窗口矩形与**所有**显示器工作区都不相交时返回 Some——部分出屏
+/// 是合法摆放（多屏拼接缝、刻意半掩），一律不动。坐标系统一物理像素
+/// （outer_position/outer_size 与 Monitor::work_area 同为物理）。
+#[cfg(target_os = "windows")]
+pub(crate) fn offscreen_target(app: &AppHandle, window: &tauri::WebviewWindow) -> Option<(i32, i32)> {
+    // 借任一窗口枚举显示器（管理器窗常驻；皮肤全隐藏时它也在）
+    let probe = app.get_webview_window("main")?;
+    let monitors = probe.available_monitors().ok()?;
+    if monitors.is_empty() {
+        return None;
+    }
+    let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return None;
+    };
+    let (l, t) = (pos.x, pos.y);
+    let (r, b) = (l + size.width as i32, t + size.height as i32);
+    let all_outside = monitors.iter().all(|m| {
+        let wa = m.work_area();
+        let (ml, mt) = (wa.position.x, wa.position.y);
+        let (mr, mb) = (ml + wa.size.width as i32, mt + wa.size.height as i32);
+        r <= ml || l >= mr || b <= mt || t >= mb
+    });
+    if !all_outside {
+        return None;
+    }
+    let primary = probe.primary_monitor().ok().flatten()?;
+    let pa = primary.work_area();
+    Some((pa.position.x + 24, pa.position.y + 24))
+}
+
+/// 把所有完全出屏的皮肤拉回主显示器工作区边缘（拔外接屏 / DPI 拓扑
+/// 变更后皮肤落在不可见区域，用户拖不回也删不到）。挂点 = lib.rs 的
+/// 5 秒维护定时器（拓扑变化最迟 5 秒自愈，启动自载亦被首 tick 覆盖）。
+/// 移动走 set_position → Moved 事件 → 后端既有防抖落盘，新位置即持久化。
+#[cfg(target_os = "windows")]
+pub fn rescue_offscreen_skins(app: &AppHandle) {
+    let state = app.state::<crate::AppState>();
+    for id in state.registry.loaded_ids() {
+        if let Some(window) = state.registry.get(&id) {
+            if let Some((x, y)) = offscreen_target(app, &window) {
+                let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                log::info!("Rescued off-screen skin '{}': moved to ({}, {})", id, x, y);
+            }
+        }
+    }
+}
+
 /// Labels whose in-flight close() is PROGRAMMATIC (unload / reload / exit).
 /// Alt+F4 delivers the same WM_CLOSE as close() does and CloseRequested
 /// carries no reason — this set is the discriminator: close_skin_window_nowait
@@ -1068,7 +1219,12 @@ pub fn destroy_skin_window(app: &AppHandle, label: &str) -> Result<(), String> {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         if app.get_webview_window(label).is_some() {
-            log::warn!("destroy_skin_window: label '{}' still taken after 2s", label);
+            // OS 模态循环（拖拽中并发卸载）饿死 2s 等待时不得放行——紧随的
+            // 重建会以 "already exists" 失败且更难排查，这里直接报错
+            return Err(format!(
+                "destroy_skin_window: label '{}' still taken after 2s (modal loop starvation?)",
+                label
+            ));
         }
     }
     Ok(())
@@ -1079,15 +1235,35 @@ pub fn destroy_skin_window(app: &AppHandle, label: &str) -> Result<(), String> {
 /// per-window wait destroy_skin_window does is pure latency (sequential, on
 /// the main thread, one wait per loaded skin).
 pub fn close_skin_window_nowait(app: &AppHandle, label: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    SCALE_SNAPSHOTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(label);
     if let Some(skin_id) = label.strip_prefix("skin-") {
         if let Some(window) = app.get_webview_window(label) {
-            if let Ok(hwnd) = window.hwnd() {
-                app.state::<crate::AppState>().pinner.unpin(skin_id, hwnd.0 as isize);
-                // 摘除边缘吸附登记（HWND 会被系统回收复用，不能残留）
-                crate::window::snap::unregister(hwnd.0 as isize);
-                // 摘除穿透登记（同理，HWND 复用不能残留）
-                #[cfg(target_os = "windows")]
-                set_passthrough_hwnd(hwnd.0 as isize, false);
+            let state = app.state::<crate::AppState>();
+            match window.hwnd() {
+                Ok(hwnd) => {
+                    state.pinner.unpin(skin_id, hwnd.0 as isize);
+                    // 摘除边缘吸附登记（HWND 会被系统回收复用，不能残留）
+                    crate::window::snap::unregister(hwnd.0 as isize);
+                    // 摘除穿透登记（同理，HWND 复用不能残留）
+                    #[cfg(target_os = "windows")]
+                    set_passthrough_hwnd(hwnd.0 as isize, false);
+                }
+                Err(_) => {
+                    // hwnd() 失败也不能跳过注销：pinner 里存着登记时的 HWND，
+                    // 靠它把 HWND 键的吸附/穿透登记一并摘干净（残留条目随
+                    // HWND 回收复用误伤无关窗口）
+                    let stored = state.pinner.hwnd_of(skin_id);
+                    state.pinner.unpin(skin_id, stored.unwrap_or(0));
+                    if let Some(h) = stored {
+                        crate::window::snap::unregister(h);
+                        #[cfg(target_os = "windows")]
+                        set_passthrough_hwnd(h, false);
+                    }
+                }
             }
         } else {
             app.state::<crate::AppState>().pinner.unpin(skin_id, 0);
@@ -1149,7 +1325,7 @@ static DRAG_SAVE_STATE: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, DragSaveState>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct DragSaveState {
     generation: u64,
     timer_running: bool,
@@ -1181,14 +1357,15 @@ fn debounced_config_flush(app: &AppHandle, skin_id: &str) {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(500));
             let up_to_date = {
-                let mut map = DRAG_SAVE_STATE.lock().unwrap_or_else(|e| e.into_inner());
-                let st = map.entry(sid.clone()).or_default();
-                if st.generation == seen {
-                    st.timer_running = false;
-                    true
-                } else {
-                    seen = st.generation;
-                    false
+                let map = DRAG_SAVE_STATE.lock().unwrap_or_else(|e| e.into_inner());
+                let st = map.get(&sid).copied();
+                match st {
+                    Some(s) if s.generation == seen => true,
+                    Some(s) => {
+                        seen = s.generation;
+                        false
+                    }
+                    None => true, // 条目被清（皮肤卸载）——按可写盘处理
                 }
             };
             if !up_to_date {
@@ -1201,6 +1378,16 @@ fn debounced_config_flush(app: &AppHandle, skin_id: &str) {
             let app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
             if let Err(e) = crate::skin::config::save_config(&state.config_dir, &app_config) {
                 log::warn!("Failed to save dragged state for '{}': {}", sid, e);
+            }
+            drop(app_config);
+            // timer_running 必须在写盘之后才置 false——先置会让退出的
+            // flush_pending_drag_saves 判定「无 pending」而跳过，末次落盘
+            // 恰好被 exit(0) 抢走（窄竞态）
+            {
+                let mut map = DRAG_SAVE_STATE.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(st) = map.get_mut(&sid) {
+                    st.timer_running = false;
+                }
             }
             break;
         }
