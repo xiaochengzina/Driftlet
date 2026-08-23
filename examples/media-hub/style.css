@@ -232,7 +232,10 @@ body {
   margin-top: 12px;
   border-radius: 999px;
   background: var(--input);
-  overflow: hidden;
+  /* 不设 overflow:hidden——命中区要比进度条高才好拖（range 覆盖件向上
+     下各扩 8px）；圆角靠 track 的 border-radius + 填充条自身的 radius，
+     不靠裁剪 */
+  position: relative;
 }
 
 .progress i {
@@ -242,6 +245,28 @@ body {
   background-image: var(--accent-grad);
   border-radius: 999px;
   transition: width 0.3s linear;
+}
+
+/* 可寻址时进度条可拖：透明 range 覆盖在进度条上承接手势，视觉仍是那条
+   渐变填充条（指针样式提示可拖）。命中区上下各扩 8px（6px 的条本身太细
+   不好抓） */
+.progress .seek {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -8px;
+  bottom: -8px;
+  width: 100%;
+  height: auto;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.progress .seek[hidden] {
+  display: none;
 }
 
 .media-times {

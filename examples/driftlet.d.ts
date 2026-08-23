@@ -305,20 +305,30 @@ declare const Driftlet: {
   readRegistryValue(root: string, path: string, name: string): Promise<DriftletRegistryValue>;
   /** 权限 shell；timeoutMs 默认 30000，钳制 100–120000；超时杀进程并 reject */
   runCommand(command: string, args?: string[], timeoutMs?: number): Promise<DriftletCommandOutput>;
-  /** 权限 system；0–100，越界钳制 */
+  /** 权限 media；0–100，越界钳制 */
   setVolume(volumePct: number): Promise<void>;
-  /** 权限 system */
+  /** 权限 media */
   setMute(muted: boolean): Promise<void>;
-  /** 权限 system；无播放会话时 reject */
+  /** 权限 media；无播放会话时 reject */
   mediaControl(action: 'play' | 'pause' | 'play_pause' | 'next' | 'previous'): Promise<boolean>;
   /** 权限 clipboard */
   readClipboardText(): Promise<string>;
   /** 权限 clipboard */
   writeClipboardText(text: string): Promise<void>;
-  /** 权限 system；http(s)://、mailto: 或本机绝对路径（可执行文件/UNC 被拒） */
+  /** 权限 system；http(s)://、mailto:、ms-settings:（Windows 设置页）或本机绝对路径（可执行文件/UNC 被拒） */
   openExternal(target: string): Promise<void>;
   /** 权限 system；title ≤64、body ≤256 字符（超长截断） */
   showNotification(title: string, body?: string): Promise<void>;
+  /** 权限 system：锁定当前会话（等同 Win+L） */
+  lockWorkstation(): Promise<void>;
+  /** 权限 system：熄灭显示器（任意输入即唤醒，不是睡眠） */
+  monitorOff(): Promise<void>;
+  /** 权限 system：系统进入睡眠（不强制、不休眠；系统策略禁用睡眠时报错） */
+  sleep(): Promise<void>;
+  /** 权限 system：关机 / 重启 / 注销（不带 force——有未保存数据的应用可阻止，用户会看到系统级阻止界面） */
+  powerControl(action: 'shutdown' | 'restart' | 'logoff'): Promise<void>;
+  /** 权限 system：清空回收站（带系统确认框与音效；已空直接成功、不弹框） */
+  emptyRecycleBin(): Promise<void>;
   /** 权限 mic；返回结构与 getAudioSpectrum 相同 */
   getMicSpectrum(bands?: number): Promise<DriftletSpectrum>;
   /** 权限 file_system（高危）：读取任意绝对路径的文本；binary: true 时返回 base64（≤32MB）。失败 reject 系统错误原文 */

@@ -2,10 +2,10 @@
   "id": "toolbox",
   "name": "本机工具箱",
   "name_en": "Toolbox",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Driftlet",
-  "description": "剪贴板/文件/注册表/命令/外链/设置接口演示",
-  "description_en": "Clipboard, files, registry, shell, links & settings API demo",
+  "description": "剪贴板/文件/注册表/命令/外链/电源/设置接口演示",
+  "description_en": "Clipboard, files, registry, shell, links, power & settings API demo",
   "bilingual": true,
   "entry": "index.html",
   "window": {

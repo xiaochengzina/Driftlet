@@ -32,6 +32,7 @@ const I18N = {
     mediaNote: 'get_media_info 每秒轮询；无播放会话时返回 null（不是错误）；media_control 需 system 权限',
     noSession: '无播放会话',
     noTitle: '（无标题）',
+    noTimeline: '本播放器不上报进度',
     stPlaying: '播放中',
     stPaused: '已暂停',
     stStopped: '已停止',
@@ -66,6 +67,7 @@ const I18N = {
     mediaNote: 'get_media_info polls every second; returns null (not an error) when there is no playback session; media_control requires the system permission',
     noSession: 'No playback session',
     noTitle: '(untitled)',
+    noTimeline: 'This player doesn\'t report progress',
     stPlaying: 'Playing',
     stPaused: 'Paused',
     stStopped: 'Stopped',
@@ -221,12 +223,21 @@ function renderMedia() {
   $('media-album').textContent = has ? (m.album || '') : '';
   $('media-status').textContent = has ? statusText(m.status) : '';
 
-  // 进度：duration 可能为 0（流媒体不上报），此时不显示进度
+  // 进度：duration 可能为 0（流媒体不上报），此时不显示进度；
+  // 可寻址（seekable）时进度条可拖——透明 range 覆盖承接手势，拖动中
+  // 冻结轮询的宽度回写（拖动和轮询抢同一条进度条会抖），松手才寻址
   const dur = has ? Number(m.duration_secs) || 0 : 0;
   const pos = has ? Math.max(0, Number(m.position_secs) || 0) : 0;
-  $('media-progress').style.width = dur > 0 ? `${Math.min(100, (pos / dur) * 100)}%` : '0%';
-  $('media-pos').textContent = dur > 0 ? fmtTime(pos) : '';
-  $('media-dur').textContent = dur > 0 ? fmtTime(dur) : '';
+  const seekable = has && m.seekable === true && dur > 0;
+  const seekEl = $('media-seek');
+  seekEl.hidden = !seekable;
+  if (!seekDragging && Date.now() - lastSeekAt > 1200) {
+    $('media-progress').style.width = dur > 0 ? `${Math.min(100, (pos / dur) * 100)}%` : '0%';
+    if (seekable) seekEl.value = String(Math.round(Math.min(1000, (pos / dur) * 1000)));
+  }
+  $('media-pos').textContent = dur > 0 ? fmtTime(seekDragging ? (Number(seekEl.value) / 1000) * dur : pos) : '';
+  // 降级提示：有会话但源不上报时间线（如网易云）——进度区明示而不是留白
+  $('media-dur').textContent = dur > 0 ? fmtTime(dur) : (has ? t('noTimeline') : '');
 
   // 控制反馈：布尔结果译为「已接受 / 未接受」；reject 文案原样显示（如「无播放会话」）
   const feedback = $('media-feedback');
@@ -432,6 +443,37 @@ $('btn-mute').addEventListener('click', async () => {
 $('btn-prev').addEventListener('click', () => sendMediaControl('previous'));
 $('btn-playpause').addEventListener('click', () => sendMediaControl('play_pause'));
 $('btn-next').addEventListener('click', () => sendMediaControl('next'));
+
+// 进度条拖动寻址：seekable 时透明 range 覆盖在进度条上。拖动中冻结轮询
+// 回写（拖动和轮询抢同一条进度条会抖），input 事件即时更新视觉宽度，
+// change（松手）才发寻址命令。寻址后开 1.2s 抑制窗：SMTC 追上前轮询
+// 不回写（否则立刻 poll 读到旧位置，进度条「往左缩再回到终点」）
+let seekDragging = false;
+let lastSeekAt = 0;
+(function bindSeek() {
+  const seekEl = $('media-seek');
+  const fill = $('media-progress');
+  seekEl.addEventListener('pointerdown', () => { seekDragging = true; });
+  window.addEventListener('pointerup', () => { seekDragging = false; });
+  seekEl.addEventListener('input', () => {
+    fill.style.transition = 'none'; // 拖动中即时跟随，不做补间动画
+    fill.style.width = `${(Number(seekEl.value) / 1000) * 100}%`;
+  });
+  seekEl.addEventListener('change', async () => {
+    const m = mediaState;
+    const dur = m ? Number(m.duration_secs) || 0 : 0;
+    if (!dur) return;
+    lastSeekAt = Date.now();
+    fill.style.transition = ''; // 恢复补间（抑制窗过后正常过渡）
+    try {
+      await call('media_seek', { positionSecs: (Number(seekEl.value) / 1000) * dur });
+      mediaErr = '';
+    } catch (err) {
+      mediaErr = String(err); // 例如：未声明 system 权限 / 源不支持寻址
+    }
+    pollMedia();
+  });
+})();
 
 $('src-loop').addEventListener('click', () => setSpecSource('loop'));
 $('src-mic').addEventListener('click', () => setSpecSource('mic'));

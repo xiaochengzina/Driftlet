@@ -138,6 +138,10 @@ pub enum Key {
     ClipboardFailed,
     InvalidTarget,
     NotificationFailed,
+    PowerControlFailed,
+    InvalidPowerAction,
+    RecycleBinFailed,
+    DemoteFailed,
     // Only used in the non-Windows fallback arms.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     WindowsOnly,
@@ -278,6 +282,10 @@ fn zh(key: Key) -> &'static str {
         Key::ClipboardFailed => "剪贴板操作失败：{}",
         Key::InvalidTarget => "不允许打开的链接或路径：{}",
         Key::NotificationFailed => "通知发送失败：{}",
+        Key::PowerControlFailed => "电源操作失败：{}",
+        Key::InvalidPowerAction => "无效的电源动作 '{}'",
+        Key::RecycleBinFailed => "清空回收站失败：{}",
+        Key::DemoteFailed => "检测到 Driftlet 正以管理员权限运行，且自动降权失败（{}）。\n\nDriftlet 不需要管理员权限——请以普通方式重新启动（双击桌面或开始菜单图标）。",
         Key::WindowsOnly => "该功能仅支持 Windows",
     }
 }
@@ -388,6 +396,10 @@ fn en(key: Key) -> &'static str {
         Key::ClipboardFailed => "Clipboard operation failed: {}",
         Key::InvalidTarget => "Opening this link or path is not allowed: {}",
         Key::NotificationFailed => "Failed to show notification: {}",
+        Key::PowerControlFailed => "Power operation failed: {}",
+        Key::InvalidPowerAction => "Invalid power action '{}'",
+        Key::RecycleBinFailed => "Failed to empty the recycle bin: {}",
+        Key::DemoteFailed => "Driftlet was launched with administrator rights, and automatic de-elevation failed ({}).\n\nDriftlet does not need administrator rights — please start it again normally (double-click the desktop or Start Menu icon).",
         Key::WindowsOnly => "This feature is only supported on Windows",
     }
 }
@@ -502,6 +514,10 @@ mod tests {
             Key::ClipboardFailed,
             Key::InvalidTarget,
             Key::NotificationFailed,
+            Key::PowerControlFailed,
+            Key::InvalidPowerAction,
+            Key::RecycleBinFailed,
+            Key::DemoteFailed,
             Key::ManagerOnly,
             Key::BackupFormatUnsupported,
             Key::ReadBackupFailed,

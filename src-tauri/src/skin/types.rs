@@ -399,7 +399,9 @@ fn default_theme() -> String {
     "auto".to_string()
 }
 
-fn default_language() -> String {
+/// 首次启动的默认语言（随 OS UI 语言）。pub(crate)：elevation.rs 的
+/// 提权降权失败提示框在 AppState 建立之前也要它兜底语言。
+pub(crate) fn default_language() -> String {
     // First-run default follows the OS UI language: Chinese systems get
     // "zh-CN", everything else "en" — mirroring the NSIS installer's
     // automatic language selection (zh → SimpChinese, fallback English)

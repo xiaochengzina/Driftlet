@@ -1,11 +1,12 @@
 //! Skin-facing backend APIs: read-only system information plus the
-//! permission-gated capabilities.  Seven permissions, each gating its own
+//! permission-gated capabilities.  Eight permissions, each gating its own
 //! command set:
 //!
 //!   * `registry`  — read_registry_value
 //!   * `shell`     — run_command
-//!   * `system`    — set_volume / set_mute / media_control / open_external /
-//!                   show_notification
+//!   * `system`    — open_external / show_notification / lock_workstation /
+//!                   monitor_off / sleep / power_control / empty_recycle_bin
+//!   * `media`     — set_volume / set_mute / media_control / media_seek
 //!   * `clipboard` — read_clipboard_text / write_clipboard_text
 //!   * `mic`       — get_mic_spectrum
 //!   * `file_system` — skin_read_any_file / skin_write_any_file（任意绝对路径，高危）
@@ -38,6 +39,8 @@ mod media;
 mod notify;
 #[cfg(target_os = "windows")]
 mod pdh;
+#[cfg(target_os = "windows")]
+mod power;
 #[cfg(target_os = "windows")]
 mod registry;
 #[cfg(target_os = "windows")]
@@ -95,6 +98,9 @@ pub struct MediaInfo {
     pub status: String,
     pub position_secs: f64,
     pub duration_secs: f64,
+    /// 源播放器是否支持拖动进度条寻址（TryChangePlaybackPositionAsync）。
+    /// 媒体中心式播控常关寻址——为 false 时皮肤应把进度条锁成只读。
+    pub seekable: bool,
     /// JPEG/PNG bytes as base64, when the source app provides artwork.
     pub cover_base64: Option<String>,
     /// cover_base64 的格式（"image/jpeg" | "image/png" | ...），按 magic
@@ -157,9 +163,16 @@ pub struct MonitorInfo {
 
 pub const PERM_REGISTRY: &str = "registry";
 pub const PERM_SHELL: &str = "shell";
-/// State-changing system controls: volume (set_volume / set_mute), media
-/// transport (media_control), open_external, show_notification.
+/// State-changing system controls: open_external, show_notification,
+/// lock_workstation / monitor_off / sleep / power_control / empty_recycle_bin.
+///（音量与媒体控制挪进了 media——它们是同一族「当前在放什么」的播控面。
+/// 注意：system 刻意没有「启动 exe」的通道——可执行目标一律拒绝
+/// （open_external 黑名单），新命令也不得接收可执行路径参数；运行程序
+/// 只属于 shell 权限的 run_command。）
 pub const PERM_SYSTEM: &str = "system";
+/// Media + volume (set_volume / set_mute / media_control / media_seek)——
+/// 从 system 拆出单列：这一族「当前在放什么」的播控与开外链/通知不同级，中危
+pub const PERM_MEDIA: &str = "media";
 /// Clipboard read+write (read can expose what the user just copied).
 pub const PERM_CLIPBOARD: &str = "clipboard";
 /// Microphone input — eavesdropping risk, unlike the loopback spectrum
@@ -1041,7 +1054,7 @@ pub fn get_volume(app: AppHandle) -> Result<VolumeInfo, String> {
 pub fn set_volume(app: AppHandle, window: tauri::WebviewWindow, volume_pct: f32) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    require_perm(&state, &window, PERM_SYSTEM)?;
+    require_perm(&state, &window, PERM_MEDIA)?;
     #[cfg(target_os = "windows")]
     {
         volume::set_volume(volume_pct).map_err(|e| trf(&lang, Key::VolumeFailed, &[&e]))
@@ -1057,7 +1070,7 @@ pub fn set_volume(app: AppHandle, window: tauri::WebviewWindow, volume_pct: f32)
 pub fn set_mute(app: AppHandle, window: tauri::WebviewWindow, muted: bool) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    require_perm(&state, &window, PERM_SYSTEM)?;
+    require_perm(&state, &window, PERM_MEDIA)?;
     #[cfg(target_os = "windows")]
     {
         volume::set_mute(muted).map_err(|e| trf(&lang, Key::VolumeFailed, &[&e]))
@@ -1094,7 +1107,7 @@ pub async fn get_media_info(app: AppHandle) -> Result<Option<MediaInfo>, String>
 pub async fn media_control(app: AppHandle, window: tauri::WebviewWindow, action: String) -> Result<bool, String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    require_perm(&state, &window, PERM_SYSTEM)?;
+    require_perm(&state, &window, PERM_MEDIA)?;
 
     #[cfg(target_os = "windows")]
     {
@@ -1115,6 +1128,28 @@ pub async fn media_control(app: AppHandle, window: tauri::WebviewWindow, action:
     #[cfg(not(target_os = "windows"))]
     {
         let _ = action;
+        Err(windows_only(&app))
+    }
+}
+
+/// 拖动进度条寻址（绝对秒数）。源不支持寻址时返回 false（不是错误）。
+#[tauri::command]
+pub async fn media_seek(app: AppHandle, window: tauri::WebviewWindow, position_secs: f64) -> Result<bool, String> {
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    require_perm(&state, &window, PERM_MEDIA)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let lang_inner = lang.clone();
+        tauri::async_runtime::spawn_blocking(move || media::seek(position_secs))
+            .await
+            .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?
+            .map_err(|e| trf(&lang_inner, Key::MediaControlFailed, &[&e]))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = position_secs;
         Err(windows_only(&app))
     }
 }
@@ -1145,15 +1180,20 @@ pub fn write_clipboard_text(app: AppHandle, window: tauri::WebviewWindow, text: 
 
 // ─── Open external link/file (permission: system) ───
 
-/// http(s) / mailto 链接，或本地绝对路径（目录、文档等）。拒绝：其他
-/// scheme（file:/javascript: 等）、相对路径、UNC 路径（\\、// 前缀——
-/// 可能触发 NTLM 认证外发）、可直接执行/被系统当代码解析的扩展名
-/// （ShellExecute 打开等同于运行）。目标是否存在不做提前探测：不存在
-/// 与打开失败统一报 OpenFailed，消除路径存在性探针。
+/// http(s) / mailto / ms-settings 链接，或本地绝对路径（目录、文档等）。
+/// 拒绝：其他 scheme（file:/javascript: 等）、相对路径、UNC 路径
+/// （\\、// 前缀——可能触发 NTLM 认证外发）、可直接执行/被系统当代码
+/// 解析的扩展名（ShellExecute 打开等同于运行）。目标是否存在不做提前
+/// 探测：不存在与打开失败统一报 OpenFailed，消除路径存在性探针。
+/// ms-settings: 是系统设置页 URI（由设置应用处理，无代码执行面）。
 fn is_open_target_allowed(target: &str) -> bool {
     let t = target.trim();
     let lower = t.to_ascii_lowercase();
-    if lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:") {
+    if lower.starts_with("https://")
+        || lower.starts_with("http://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("ms-settings:")
+    {
         return true;
     }
     if t.starts_with("\\\\") || t.starts_with("//") {
@@ -1295,6 +1335,126 @@ pub async fn show_notification(
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (title, body);
+        Err(windows_only(&app))
+    }
+}
+
+// ─── 电源与回收站（permission: system，Windows）───
+//
+// 五条命令全部无路径/无目标参数——system 权限刻意没有「启动 exe」的
+// 通道（与 open_external 的可执行黑名单同一条防线）；运行程序只属于
+// shell 权限的 run_command。Win32 调用统一走 spawn_blocking（与
+// media_control 同规则：不占主线程/async worker）。
+
+/// 锁定当前会话（等同 Win+L）。
+#[tauri::command]
+pub async fn lock_workstation(app: AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    require_perm(&state, &window, PERM_SYSTEM)?;
+    #[cfg(target_os = "windows")]
+    {
+        let lang_inner = lang.clone();
+        tauri::async_runtime::spawn_blocking(power::lock)
+            .await
+            .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?
+            .map_err(|e| trf(&lang_inner, Key::PowerControlFailed, &[&e]))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(windows_only(&app))
+    }
+}
+
+/// 熄灭显示器（任意输入即唤醒，不是睡眠）。
+#[tauri::command]
+pub async fn monitor_off(app: AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    require_perm(&state, &window, PERM_SYSTEM)?;
+    #[cfg(target_os = "windows")]
+    {
+        let lang_inner = lang.clone();
+        tauri::async_runtime::spawn_blocking(power::monitor_off)
+            .await
+            .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?
+            .map_err(|e| trf(&lang_inner, Key::PowerControlFailed, &[&e]))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(windows_only(&app))
+    }
+}
+
+/// 进入睡眠（不强制、不休眠；系统策略禁用睡眠时报错）。
+#[tauri::command]
+pub async fn sleep(app: AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    require_perm(&state, &window, PERM_SYSTEM)?;
+    #[cfg(target_os = "windows")]
+    {
+        let lang_inner = lang.clone();
+        tauri::async_runtime::spawn_blocking(power::sleep)
+            .await
+            .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?
+            .map_err(|e| trf(&lang_inner, Key::PowerControlFailed, &[&e]))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(windows_only(&app))
+    }
+}
+
+/// 关机 / 重启 / 注销（不带 force——有未保存数据的应用可以阻止，用户会
+/// 看到系统级阻止界面，皮肤不能绕过它静默丢数据）。
+#[tauri::command]
+pub async fn power_control(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    action: String,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    require_perm(&state, &window, PERM_SYSTEM)?;
+    #[cfg(target_os = "windows")]
+    {
+        let act = match action.as_str() {
+            "shutdown" => power::PowerAction::Shutdown,
+            "restart" => power::PowerAction::Restart,
+            "logoff" => power::PowerAction::Logoff,
+            other => return Err(trf(&lang, Key::InvalidPowerAction, &[other])),
+        };
+        let lang_inner = lang.clone();
+        tauri::async_runtime::spawn_blocking(move || power::power(act))
+            .await
+            .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?
+            .map_err(|e| trf(&lang_inner, Key::PowerControlFailed, &[&e]))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = action;
+        Err(windows_only(&app))
+    }
+}
+
+/// 清空回收站（带系统确认框与音效——破坏性操作的最终确认权留给用户；
+/// 回收站已空时直接成功、不弹框）。
+#[tauri::command]
+pub async fn empty_recycle_bin(app: AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    require_perm(&state, &window, PERM_SYSTEM)?;
+    #[cfg(target_os = "windows")]
+    {
+        let lang_inner = lang.clone();
+        tauri::async_runtime::spawn_blocking(power::empty_recycle_bin)
+            .await
+            .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?
+            .map_err(|e| trf(&lang_inner, Key::RecycleBinFailed, &[&e]))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
         Err(windows_only(&app))
     }
 }
@@ -2047,6 +2207,9 @@ mod tests {
         assert!(super::is_open_target_allowed("https://example.com"));
         assert!(super::is_open_target_allowed("http://example.com"));
         assert!(super::is_open_target_allowed("mailto:a@b.c"));
+        // Windows 设置页 URI（由设置应用处理，无代码执行面）
+        assert!(super::is_open_target_allowed("ms-settings:display"));
+        assert!(super::is_open_target_allowed("MS-Settings:WindowsUpdate"));
         assert!(!super::is_open_target_allowed("file:///c:/windows"));
         assert!(!super::is_open_target_allowed("javascript:alert(1)"));
         assert!(!super::is_open_target_allowed("relative/path.txt"));

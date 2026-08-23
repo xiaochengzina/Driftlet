@@ -2,6 +2,15 @@
 
 本文件记录 Driftlet 的所有重要变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.2] - 2026-08-23
+
+### 新增
+
+- **提权启动自动降级（`elevation.rs`，任务计划交互令牌方案）**：程序不需要管理员权限（清单 asInvoker，全部能力标准用户可用），但被已提权的终端/启动器拉起时子进程会继承高完整性——皮肤上下文随之提权、`run_command` 子进程全部提权、Explorer 拖 .dskin 进管理器被 UIPI 拦截。现启动最前（Builder/single-instance 之前，父进程无占用无 handoff 竞态）检测 `TokenElevation`，提权则注册一次性任务（`/it` 交互令牌、不传 /ru 免密码）并 `schtasks /run` 立即触发——任务计划服务从交互会话令牌创建子进程，**天然中完整性**（本地探针实证 S-1-16-8192 Medium IL），子进程启动时按 `--demote-cleanup` 参数自清任务。**三条堵死路线成文勿改回**（均实测）：CreateProcessAsUserW（SeAssignPrimaryToken 不发给管理员）、CreateProcessWithTokenW（ACCESS_DENIED 5）、explorer COM 链（GetItemObject 拿不到 IShellFolderViewDual）；`runas /trustlevel:0x40000` 密码提示走 WriteConsole、无控制台即死。降级失败 = 原生消息框提示 + 硬退出（提权不可用是明确需求，不再「记警告继续跑」）；`DRIFTLET_ALLOW_ELEVATED=1` 放行；debug 构建默认不降级（防 `npm run tauri dev` 从提权终端起时断 dev loop），`DRIFTLET_FORCE_DEMOTE=1` 可测。参数引号规则有单测钉住。关键机制双版、双版 README 安全模型同步。cargo test 116 过。
+- **`system` 权限扩容五条常用命令 + `open_external` 放行 `ms-settings:`**：新增 `lock_workstation`（锁屏，LockWorkStation）、`monitor_off`（关显示器，PostMessage 广播 SC_MONITORPOWER——不走 SendMessage，广播遇挂死窗口会被同步拖住）、`sleep`（SetSuspendState，自动启用 SE_SHUTDOWN_NAME 且校验 GetLastError ≠ ERROR_NOT_ALL_ASSIGNED）、`power_control`（关机/重启/注销，ExitWindowsEx **不带 force**——未保存数据的应用可阻止，用户看系统级阻止界面）、`empty_recycle_bin`（SHEmptyRecycleBinW 资源管理器同款确认框+进度+音效，先查空、已空直接成功不弹框）。**`system` 刻意没有「启动 exe」的通道**：五条命令全部无路径/无目标参数，open_external 的可执行黑名单原样保留——运行程序仍只属于 `shell` 权限的 `run_command`。open_external 白名单新增 `ms-settings:`（系统设置页 URI，设置应用处理，无代码执行面）。Win32 调用统一 spawn_blocking（不占主线程/async worker）。perms.js 的 system 描述双语言更新（旧文案「打开外部链接或程序」本就不实——程序一直打不开）；toolbox 新增「电源与回收站」演示卡（关机/重启/注销按钮两击确认）+ 外链卡补 ms-settings 演示钮（v1.1.0）；driftlet.js/d.ts 收录五条封装（顺带修正 setVolume/setMute/mediaControl 注释残留 system 应为 media）。双版指南（§2.3 权限表 + 速查表 + §5.3 新小节与 open_external 白名单）、关键机制双版（电源五条条目 + 白名单）、双版 README（系统控制括注媒体拆分后残留音量/媒体一并修正）同步。cargo test 113 过。
+- **媒体控制拆分为独立权限 `media`（中危，权限 7 → 8）**：`set_volume` / `set_mute` / `media_control` / `media_seek` 从 `system` 挪出单列——「当前在放什么」的播控面（音量 + 播放 + 进度）与开外链/通知不同级。`system` 保留：打开外部链接/文件、系统通知。media-hub 声明 `system` + `media` + `mic`。perms.js/i18n 收录 media（中危黄）。双版指南（§2.3 八权限 + 速查表 + 小节标题）、双版 README、关键机制双版（八权限 + 分级清单）、CHANGELOG 未发布节同步。
+- **媒体进度条可拖动 + 会话择优**：`media_seek` 命令（`media` 权限）按绝对秒寻址（SMTC `TryChangePlaybackPositionAsync`），`get_media_info` 新增 `seekable` 字段（源是否支持寻址——媒体中心式播控常关寻址，false 时进度条锁只读）；**会话选取从「GetCurrentSession（Windows 认为的最近交互）」改「枚举 + 择优」**（正在播放 > 有进度 > 有元数据）——多会话场景（浏览器 + 网易云并存）取到的是正主，此前网易云进度拿不到即因此。media-hub（v1.1.0）进度条可寻址时可拖（透明 range 覆盖承接手势，拖动中冻结轮询回写防抖，松手才寻址）。双版开发指南（get_media_info 小节 + media_seek + 速查表）、关键机制双版（会话择优 + 寻址条目）同步。
+
 ## [1.1.1] - 2026-08-23
 
 ### 新增

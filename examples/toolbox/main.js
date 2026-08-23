@@ -9,6 +9,8 @@
  *   注册表  read_registry_value（registry，只读）
  *   命令    run_command（shell：普通权限、隐藏窗口、超时杀进程）
  *   外链    open_external（system；.exe 等可执行目标会被拒绝——有专门的演示按钮）
+ *   电源    lock_workstation / monitor_off / sleep / power_control / empty_recycle_bin
+ *           （system；全部无路径参数——system 权限刻意没有「启动 exe」的通道）
  *   设置    skin_get_setting / skin_set_setting（免权限）
  *
  * 契约要点（皮肤开发指南 §4.4）：
@@ -25,7 +27,7 @@
 const I18N = {
   'zh-CN': {
     title: '本机工具箱',
-    subtitle: '剪贴板 · 文件 · 注册表 · 命令 · 外链 · 设置接口演示',
+    subtitle: '剪贴板 · 文件 · 注册表 · 命令 · 外链 · 电源 · 设置接口演示',
     bridgeOk: '桥已连接',
     bridgeMissing: '桥不可用（纯浏览器预览）',
     permFree: '免权限',
@@ -59,9 +61,22 @@ const I18N = {
     btnRun: '运行',
 
     cardExternal: '打开链接 / 文件',
-    extPlaceholder: 'https://… 、mailto:… 或本机绝对路径',
+    extPlaceholder: 'https://… 、mailto:… 、ms-settings:… 或本机绝对路径',
     btnOpen: '打开',
+    btnOpenSettings: '打开系统设置页（ms-settings:）',
     btnOpenDenied: '演示被拒绝（.exe 路径）',
+
+    cardPower: '电源与回收站',
+    powerWarn: '以下按钮真实生效：锁屏/灭屏/睡眠立即执行；关机/重启/注销需连点两次确认（不带 force，未保存数据的应用可阻止）；清空回收站弹系统确认框。',
+    btnPowerLock: '锁屏',
+    btnPowerMonitor: '关闭显示器',
+    btnPowerSleep: '睡眠',
+    btnPowerShutdown: '关机',
+    btnPowerRestart: '重启',
+    btnPowerLogoff: '注销',
+    btnPowerRecycle: '清空回收站',
+    powerArm: (label) => `再点一次确认${label}`,
+    resPowerDone: (label) => `已执行：${label}`,
 
     cardSettings: '设置读写',
     tokenNote: 'api_token 是 password 类型：值不会注入页面，__DESK_PP__.settings.api_token 恒为空串（可在上方输入框自行验证）；唯一读取通道是 skin_get_setting。',
@@ -93,7 +108,7 @@ const I18N = {
   },
   en: {
     title: 'Toolbox',
-    subtitle: 'Clipboard · files · registry · shell · links & settings API demo',
+    subtitle: 'Clipboard · files · registry · shell · links · power & settings API demo',
     bridgeOk: 'Bridge connected',
     bridgeMissing: 'Bridge unavailable (browser preview)',
     permFree: 'no permission',
@@ -127,9 +142,22 @@ const I18N = {
     btnRun: 'Run',
 
     cardExternal: 'Open Link / File',
-    extPlaceholder: 'https://…, mailto:… or an absolute local path',
+    extPlaceholder: 'https://…, mailto:…, ms-settings:… or an absolute local path',
     btnOpen: 'Open',
+    btnOpenSettings: 'Open a Settings page (ms-settings:)',
     btnOpenDenied: 'Demo rejection (.exe path)',
+
+    cardPower: 'Power & Recycle Bin',
+    powerWarn: 'These buttons take effect for real: lock / display-off / sleep run immediately; shutdown / restart / logoff need a second click to confirm (no force — apps with unsaved data may block); emptying the Recycle Bin shows the system confirmation.',
+    btnPowerLock: 'Lock',
+    btnPowerMonitor: 'Display off',
+    btnPowerSleep: 'Sleep',
+    btnPowerShutdown: 'Shut down',
+    btnPowerRestart: 'Restart',
+    btnPowerLogoff: 'Sign out',
+    btnPowerRecycle: 'Empty Recycle Bin',
+    powerArm: (label) => `Click again to confirm: ${label}`,
+    resPowerDone: (label) => `Done: ${label}`,
 
     cardSettings: 'Settings Read / Write',
     tokenNote: 'api_token is a password setting: it is never baked into the page — __DESK_PP__.settings.api_token is always an empty string; the only read channel is skin_get_setting.',
@@ -162,7 +190,7 @@ const I18N = {
 };
 
 const NOTE_PATH = 'data/note.txt'; // 文件卡演示用的固定相对路径
-const RESULT_IDS = ['clip-result', 'file-result', 'reg-result', 'cmd-result', 'ext-result', 'settings-result'];
+const RESULT_IDS = ['clip-result', 'file-result', 'reg-result', 'cmd-result', 'ext-result', 'power-result', 'settings-result'];
 
 let lang = 'zh-CN';  // 当前皮肤界面语言
 let settings = {};   // __DESK_PP__.settings（password 键恒为空串，见指南 §4.3）
@@ -220,6 +248,8 @@ function renderPlaceholders() {
 /* ── 静态文案与桥状态徽标 ─────────────────────────────────── */
 
 function applyI18n() {
+  // 先解除电源按钮的武装态（重绘会把确认文案覆盖回普通文案）
+  powerDisarmers.forEach((d) => d());
   document.querySelectorAll('[data-i18n]').forEach((el) => {
     el.textContent = t(el.dataset.i18n);
   });
@@ -392,6 +422,50 @@ async function onOpenExternal(target) {
     // 目标不存在与打开失败返回同样的错误；.exe 等可执行目标明确拒绝
     showError('ext-result', err);
   }
+}
+
+/* ── 电源与回收站（权限 system） ───────────────────────────── */
+
+// 两击确认按钮的解除武装回调表：语言切换重绘会重写全部按钮文案——
+// 若不先解除武装，按钮显示回普通文案却仍处于武装态，下一次点击会
+// 在没有任何确认提示的情况下直接执行关机/重启/注销
+const powerDisarmers = [];
+
+async function onPower(cmd, args, label) {
+  if (!needBridge('power-result')) return;
+  try {
+    await window.__DESK_PP__.invoke(cmd, args);
+    showResult('power-result', t('resPowerDone', label));
+  } catch (err) {
+    showError('power-result', err);
+  }
+}
+
+/**
+ * 关机/重启/注销的两击确认：第一击把按钮武装 5 秒（文案换成确认提示），
+ * 武装期内第二击才真正执行。power_control 本身不带 force——真正执行后
+ * 有未保存数据的应用仍可阻止（用户看到系统级阻止界面），演示侧不做
+ * 一键即发的关机按钮。
+ */
+function twoStep(btn, labelKey, fn) {
+  let armed = false;
+  let timer = 0;
+  const disarm = () => {
+    armed = false;
+    clearTimeout(timer);
+    btn.textContent = t(labelKey);
+  };
+  powerDisarmers.push(disarm);
+  btn.addEventListener('click', () => {
+    if (!armed) {
+      armed = true;
+      btn.textContent = t('powerArm', t(labelKey));
+      timer = setTimeout(disarm, 5000);
+      return;
+    }
+    disarm();
+    fn();
+  });
 }
 
 /* ── 设置读写（skin_get_setting / skin_set_setting，免权限） ─ */
@@ -579,9 +653,27 @@ function bindButtons() {
 
   document.getElementById('btn-ext-open').addEventListener('click',
     () => onOpenExternal(document.getElementById('ext-target').value.trim()));
+  // Windows 设置页 URI（open_external 白名单含 ms-settings:）
+  document.getElementById('btn-ext-settings').addEventListener('click',
+    () => onOpenExternal('ms-settings:display'));
   // 故意用一个可执行文件路径演示 open_external 的拒绝错误文案
   document.getElementById('btn-ext-denied').addEventListener('click',
     () => onOpenExternal('C:\\Windows\\System32\\notepad.exe'));
+
+  document.getElementById('btn-power-lock').addEventListener('click',
+    () => onPower('lock_workstation', {}, t('btnPowerLock')));
+  document.getElementById('btn-power-monitor').addEventListener('click',
+    () => onPower('monitor_off', {}, t('btnPowerMonitor')));
+  document.getElementById('btn-power-sleep').addEventListener('click',
+    () => onPower('sleep', {}, t('btnPowerSleep')));
+  twoStep(document.getElementById('btn-power-shutdown'), 'btnPowerShutdown',
+    () => onPower('power_control', { action: 'shutdown' }, t('btnPowerShutdown')));
+  twoStep(document.getElementById('btn-power-restart'), 'btnPowerRestart',
+    () => onPower('power_control', { action: 'restart' }, t('btnPowerRestart')));
+  twoStep(document.getElementById('btn-power-logoff'), 'btnPowerLogoff',
+    () => onPower('power_control', { action: 'logoff' }, t('btnPowerLogoff')));
+  document.getElementById('btn-power-recycle').addEventListener('click',
+    () => onPower('empty_recycle_bin', {}, t('btnPowerRecycle')));
 
   document.getElementById('btn-read-token').addEventListener('click', onReadToken);
   document.getElementById('btn-save-note').addEventListener('click', onSaveNote);

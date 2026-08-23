@@ -193,7 +193,8 @@ Before a skin can call "sensitive capability" backend commands (§5.3), it must 
 |------|------|-----------|
 | `registry` | Medium risk | `read_registry_value` (read-only) |
 | `shell` | High risk | `run_command` (normal privileges, hidden window) |
-| `system` | High risk | `set_volume` / `set_mute` / `media_control` / `open_external` / `show_notification` (change system state: adjust volume, control media playback, open external links/files, send system notifications) |
+| `system` | High risk | `open_external` / `show_notification` / `lock_workstation` / `monitor_off` / `sleep` / `power_control` / `empty_recycle_bin` (change system state: open external links/files, send system notifications, lock screen / display off / sleep / shutdown / restart / sign out, empty the Recycle Bin. **Note: `system` has no "launch an exe" channel** — running programs belongs exclusively to `run_command` under the `shell` permission) |
+| `media` | Medium risk | `set_volume` / `set_mute` / `media_control` / `media_seek` (volume adjust + media playback control and seek — one family of playback controls, listed separately) |
 | `clipboard` | Medium risk | `read_clipboard_text` / `write_clipboard_text` (reading may expose sensitive content the user just copied) |
 | `mic` | Medium risk | `get_mic_spectrum` (microphone input — unlike system loopback, this is real audio capture and privacy-sensitive) |
 | `file_system` | High risk | `skin_read_any_file` / `skin_write_any_file` / `skin_list_any_dir` / `skin_create_any_dir` / `skin_delete_any_path` (read / write / list / create / delete at arbitrary absolute paths — beyond the skin-folder sandbox, the whole disk is reachable; UNC network paths are always rejected; failures reject with the raw system error) |
@@ -447,7 +448,9 @@ Injected by the app before the page loads; ready to use when skin scripts run. T
 | `http_request` | — | Arbitrary HTTP request (beyond CORS; pages already have fetch) |
 | `read_registry_value` | `registry` | Registry read-only |
 | `run_command` | `shell` | Run a command (normal privileges, hidden window) |
-| `set_volume` / `set_mute` / `media_control` / `open_external` / `show_notification` | `system` | Set volume / mute / media transport / open external target / toast notification |
+| `open_external` / `show_notification` | `system` | Open external target (incl. `ms-settings:` Settings pages) / toast notification |
+| `lock_workstation` / `monitor_off` / `sleep` / `power_control` / `empty_recycle_bin` | `system` | Lock screen / display off / sleep / shutdown·restart·sign out / empty Recycle Bin |
+| `set_volume` / `set_mute` / `media_control` / `media_seek` | `media` | Volume / mute / media transport / media seek |
 | `read_clipboard_text` / `write_clipboard_text` | `clipboard` | Clipboard read / write |
 | `get_mic_spectrum` | `mic` | Microphone spectrum |
 | `skin_read_any_file` / `skin_write_any_file` / `skin_list_any_dir` / `skin_create_any_dir` / `skin_delete_any_path` | `file_system` | Arbitrary-path file read / write / list / mkdir / delete (high risk) |
@@ -621,12 +624,20 @@ const m = await window.__DESK_PP__.invoke('get_media_info');
 //   title: "Song title", artist: "Artist", album: "Album",
 //   status: "playing",                  // playing | paused | stopped
 //   position_secs: 42.5, duration_secs: 231.0,
+//   seekable: true,                     // source supports position seeking (otherwise the progress bar stays read-only)
 //   cover_base64: "<image base64>",     // cover art; null when the source app doesn't provide one
 //   cover_mime: "image/jpeg"            // cover format (sniffed from content); null when unrecognized
 // }
 ```
 
-Fields the player didn't report are empty strings; progress may likewise be 0. `position_secs` is a snapshot of the player's last report and does not advance on its own during playback (reporting cadence varies by player — interpolate yourself if you need a smooth progress bar).
+Fields the player didn't report are empty strings; progress may likewise be 0. `position_secs` is a snapshot of the player's last report and does not advance on its own during playback (reporting cadence varies by player — interpolate yourself if you need a smooth progress bar). **Session picking = enumerate + prefer** (playing > has progress > has metadata), not what Windows considers the "current" session — in multi-session scenarios (e.g. a browser plus NetEase Cloud Music) you get the real one.
+
+**Progress-bar seeking** (`media` permission, `media_seek`): positions by absolute seconds; when `seekable` is false (media-center-style controls often disable seeking) it returns `false` — not an error — so a skin should keep the progress bar read-only in that case:
+
+```js
+const ok = await window.__DESK_PP__.invoke('media_seek', { positionSecs: 120.5 });
+// true = seeked; false = the source doesn't support seeking (keep the bar read-only)
+```
 
 #### `get_battery_info`
 
@@ -746,13 +757,13 @@ const r = await window.__DESK_PP__.invoke('run_command', {
 - launch failures (command not found, etc.) reject;
 - suited for one-shot query commands; processes needing interaction don't work; grandchild processes of long-running processes may not be cleaned up by the timeout, and output can be incomplete while a grandchild holds the output pipes — use with care.
 
-#### System Volume & Media Control (Permission `system`)
+#### System Volume & Media Control (permission `media`)
 
 ```js
-await window.__DESK_PP__.invoke('set_volume', { volumePct: 60 });  // 0–100, out-of-range values are clamped
+await window.__DESK_PP__.invoke('set_volume', { volumePct: 60 });  // 0–100, out-of-range values are clamped (media)
 await window.__DESK_PP__.invoke('set_mute', { muted: true });
 
-const ok = await window.__DESK_PP__.invoke('media_control', { action: 'play_pause' });
+const ok = await window.__DESK_PP__.invoke('media_control', { action: 'play_pause' });  // media
 // action: play | pause | play_pause | next | previous
 // returns a boolean: whether the target player accepted the action; rejects when there is no playback session
 ```
@@ -775,7 +786,7 @@ await window.__DESK_PP__.invoke('open_external', { target: 'https://example.com'
 await window.__DESK_PP__.invoke('open_external', { target: 'D:\\docs\\report.pdf' });
 ```
 
-Allowed targets: `http(s)://`, `mailto:`, local absolute paths (files or folders). Explicitly rejected:
+Allowed targets: `http(s)://`, `mailto:`, `ms-settings:` (Windows Settings-page URIs, e.g. `ms-settings:display` — handled by the system Settings app, no code-execution surface), local absolute paths (files or folders). Explicitly rejected:
 
 - **Executables / types the system resolves as code or remote references** (`.exe` `.bat` `.cmd` `.ps1` `.vbs` `.vbe` `.js` `.jse` `.wsf` `.wsh` `.msi` `.msp` `.msc` `.scr` `.com` `.pif` `.cpl` `.lnk` `.hta` `.reg` `.dll` `.jar` `.url` `.search-ms` `.library-ms` `.application` `.appref-ms` `.diagcab` `.website` `.chm` `.settingcontent-ms` `.scf` `.hlp` `.wsc` `.sct`) — to run programs, use `run_command` with the `shell` permission, so users get a correct expectation of capabilities; the last six (Explorer search/library files, ClickOnce, diagnostic packages, etc.) can indirectly point at remote shares — same NTLM-leak surface as UNC paths, so they are rejected too;
 - **UNC paths** (`\\host\share` form; accessing one triggers an SMB connection);
@@ -795,6 +806,22 @@ await window.__DESK_PP__.invoke('show_notification', { title: 'Reminder', body: 
 - no buttons/callbacks or other interaction — it's just a "reminder";
 - the first call registers a Driftlet shortcut in the Start Menu (a system requirement for non-packaged apps to send notifications) — this is normal;
 - keep the frequency low — users who get spammed will simply turn off notifications for the whole app.
+
+#### Power & Recycle Bin (Permission `system`)
+
+```js
+await window.__DESK_PP__.invoke('lock_workstation');                    // lock the session (same as Win+L)
+await window.__DESK_PP__.invoke('monitor_off');                         // turn the display off (any input wakes it — not sleep)
+await window.__DESK_PP__.invoke('sleep');                               // put the system to sleep (no force, no hibernate)
+await window.__DESK_PP__.invoke('power_control', { action: 'shutdown' }); // shut down; also restart / logoff
+await window.__DESK_PP__.invoke('empty_recycle_bin');                   // empty the Recycle Bin
+```
+
+- All of them take **no path/target parameters** — the `system` permission deliberately has no "launch an exe" channel (same line of defense as `open_external`'s executable blacklist); to run programs use `run_command` under the `shell` permission;
+- `power_control` does not force anything: apps with unsaved data may block the shutdown/restart and the user sees the system-level "apps are preventing shutdown" screen — a skin cannot bypass it to silently discard data;
+- `empty_recycle_bin` performs the same regular emptying as Explorer (system confirmation box + progress + sound) — the final say over the destructive action stays with the user; a skin cannot empty silently. When the bin is already empty it succeeds immediately without the box;
+- `sleep` rejects with a readable error on machines where sleep is disabled by system policy;
+- `monitor_off` only turns the screen off (mouse/keyboard input wakes it) — it is neither locking nor sleeping; combine it with `lock_workstation` for "lock when away".
 
 #### Microphone Spectrum (Permission `mic`)
 
@@ -1124,7 +1151,7 @@ The repo ships seven example skins. `controls-demo` is the reference implementat
 |------|----------|
 | `examples/controls-demo` | All 22 setting control types + groups + descriptions + Chinese/English bilingual (§4.5), HTML/CSS/JS split with relative-path references, the manager's modern material (cool paper background + floating white cards + soft shadows; three light background tints: cool paper / warm white / mist blue), the fill + internal scroll paradigm, the schema read via `fetch('skin.json')` on a relative path with control labels/groups/options rendered per the bridge language, `desk-language-changed` driving the UI language to follow the manager instantly (§4.5), setting values live-applied in the demo area (accent color / progress bar / status dot / font / background tint / panel density / stepper-driven ticker interval), `password`-type values read via `skin_get_setting`, and rendering entirely with DOM APIs / `textContent` |
 | `examples/sys-monitor` | The full §5.2 read-only system-info set: CPU (total bar + per-thread mini bars) / GPU / memory / disks (incl. per-volume space) / network (rates + local IPs) / OS / top-5 processes (sortable by CPU or memory) / battery / idle time / foreground window / monitors; rate readings poll every 1s (first call is a zero baseline), static info reads once at startup, polling pauses while the page is hidden. **Zero permission declarations** |
-| `examples/media-hub` | Volume read/set/mute, SMTC media info (cover / progress / status) and playback control (play_pause/next/previous), dual-source spectrum from system loopback and microphone (live canvas bars + peak line, paused while hidden, device auto-released ~30s after polling stops), toast notifications; permissions `system` + `mic` |
+| `examples/media-hub` | Volume read/set/mute, SMTC media info (cover / progress / status / seekable) and playback control (play_pause/next/previous) + draggable progress-bar seeking (`media_seek`, locks read-only when the source doesn't support it), dual-source spectrum from system loopback and microphone (live canvas bars + peak line, paused while hidden, device auto-released ~30s after polling stops), toast notifications; permissions `system` + `media` + `mic` |
 | `examples/toolbox` | Clipboard read/write, skin-directory file write/read/list/delete, read-only registry (preset + custom keys), command execution (preset `ver`/`ipconfig` + custom, showing code/stdout/stderr), opening links (including a rejected `.exe` target demo), `skin_get_setting` / `skin_set_setting` (the only read channel for `password` values, writing settings back, syncing manager-side edits via `desk-setting-changed`); permissions `registry` / `shell` / `clipboard` / `system` |
 | `examples/deepseek-balance` | Reference for networked skins: direct `fetch` of an external REST API (DeepSeek balance query — the server returns CORS allow headers, §3.4), the API key stored in a `password` setting and read via `skin_get_setting` (§4.3), the official whale logo (icon region cropped out of the wordmark SVG, inlined with `currentColor` so it tints with the theme), scheduled auto-queries (configurable interval) + pause while hidden / catch-up query on becoming visible + a manual refresh button, a configurable low-balance warning line (amber figure + badge), a Windows notification on dropping below the line (edge-triggered, re-arms after recovery), one-click top-up page via `open_external`, OK / low-balance / query-failed / unconfigured status badge, live-applied accent color and topped-up-balance toggle (granted balance shown only when present), Chinese/English bilingual; permission `system` |
 | `examples/power-tools` | Demo of the two high-risk permissions: arbitrary absolute-path file read/write (`skin_read_any_file` / `skin_write_any_file` — failures reject with the raw system error; binary via base64), and reading/patching any skin's window config (`skin_get_window_config` / `skin_set_window_config` — whole-patch validation, one-sided position/size merging, zoom before size); permissions `file_system` (high-risk red) + `control` (medium-risk yellow) |

@@ -2,6 +2,8 @@ mod app_log;
 mod commands;
 mod backup;
 mod desktop;
+#[cfg(target_os = "windows")]
+mod elevation;
 mod hotkey;
 // Debug builds only — in release the module is compiled out entirely so its
 // watcher/helpers don't trigger dead-code warnings during packaging.
@@ -105,6 +107,16 @@ impl AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     app_log::init_logger();
+    // 提权启动自动降级：本程序不需要管理员（清单 asInvoker；音量/媒体/
+    // run_command 普通权限/电源五条/WebView2 全都不吃提权），提权运行只会
+    // 让皮肤拿到高完整性上下文、run_command 子进程全部提权、Explorer 拖放
+    // 被 UIPI 拦截。必须在 Builder/single-instance 之前完成——降级 = 注册
+    // 一次性任务计划（/it 交互令牌）立即触发代起中完整性副本并退出本进程
+    // （此刻父进程什么都没占，无 handoff 竞态；子进程启动时自清任务）；
+    // 降级失败 = 原生消息框提示 + 硬退出（提权不可用是明确需求）。
+    // 令牌/explorer COM/runas 路线已实测堵死勿改回（详见 elevation.rs 头注释）。
+    #[cfg(target_os = "windows")]
+    elevation::startup_demote();
 
     tauri::Builder::default()
         // Must stay the first plugin: a second instance launched by
@@ -506,10 +518,16 @@ pub fn run() {
             skin_api::set_mute,
             skin_api::get_media_info,
             skin_api::media_control,
+            skin_api::media_seek,
             skin_api::read_clipboard_text,
             skin_api::write_clipboard_text,
             skin_api::open_external,
             skin_api::show_notification,
+            skin_api::lock_workstation,
+            skin_api::monitor_off,
+            skin_api::sleep,
+            skin_api::power_control,
+            skin_api::empty_recycle_bin,
             skin_api::get_mic_spectrum,
             skin_api::get_battery_info,
             skin_api::get_idle_time,

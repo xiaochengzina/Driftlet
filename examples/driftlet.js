@@ -72,13 +72,18 @@ window.Driftlet = (() => {
     // ── 敏感能力（需在 skin.json 声明对应 permissions）──
     readRegistryValue: (root, path, name) => call('read_registry_value', { root, path, name }),  // registry
     runCommand: (command, args, timeoutMs) => call('run_command', { command, args, timeoutMs }), // shell
-    setVolume: (volumePct) => call('set_volume', { volumePct }),    // system（0–100，越界钳制）
-    setMute: (muted) => call('set_mute', { muted }),                // system
-    mediaControl: (action) => call('media_control', { action }),    // system
+    setVolume: (volumePct) => call('set_volume', { volumePct }),    // media（0–100，越界钳制）
+    setMute: (muted) => call('set_mute', { muted }),                // media
+    mediaControl: (action) => call('media_control', { action }),    // media
     readClipboardText: () => call('read_clipboard_text'),           // clipboard
     writeClipboardText: (text) => call('write_clipboard_text', { text }), // clipboard
-    openExternal: (target) => call('open_external', { target }),    // system
+    openExternal: (target) => call('open_external', { target }),    // system（http(s)/mailto/ms-settings: 或本机绝对路径；.exe 等可执行目标拒绝）
     showNotification: (title, body) => call('show_notification', { title, body }), // system
+    lockWorkstation: () => call('lock_workstation'),                // system（等同 Win+L）
+    monitorOff: () => call('monitor_off'),                          // system（灭屏，任意输入唤醒）
+    sleep: () => call('sleep'),                                     // system（系统进入睡眠）
+    powerControl: (action) => call('power_control', { action }),    // system（shutdown/restart/logoff；不带 force，应用可阻止）
+    emptyRecycleBin: () => call('empty_recycle_bin'),               // system（带系统确认框；已空直接成功）
     getMicSpectrum: (bands) => call('get_mic_spectrum', { bands }), // mic
     readAnyFile: (path, binary) => call('skin_read_any_file', { path, binary }),   // file_system（任意绝对路径；错误透传系统报错）
     writeAnyFile: (path, data, binary) => call('skin_write_any_file', { path, data, binary }), // file_system（父目录自动创建）

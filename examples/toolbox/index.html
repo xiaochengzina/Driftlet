@@ -98,9 +98,30 @@
           <button class="btn" id="btn-ext-open" data-i18n="btnOpen"></button>
         </div>
         <div class="btn-row">
+          <button class="btn" id="btn-ext-settings" data-i18n="btnOpenSettings"></button>
           <button class="btn danger" id="btn-ext-denied" data-i18n="btnOpenDenied"></button>
         </div>
         <pre class="result" id="ext-result"></pre>
+      </section>
+
+      <!-- 电源与回收站：lock_workstation / monitor_off / sleep / power_control / empty_recycle_bin -->
+      <section class="card">
+        <h2><span data-i18n="cardPower"></span><span class="perm">system</span></h2>
+        <p class="note warn" data-i18n="powerWarn"></p>
+        <div class="btn-row">
+          <button class="btn" id="btn-power-lock" data-i18n="btnPowerLock"></button>
+          <button class="btn" id="btn-power-monitor" data-i18n="btnPowerMonitor"></button>
+          <button class="btn" id="btn-power-sleep" data-i18n="btnPowerSleep"></button>
+        </div>
+        <div class="btn-row">
+          <button class="btn danger" id="btn-power-shutdown" data-i18n="btnPowerShutdown"></button>
+          <button class="btn danger" id="btn-power-restart" data-i18n="btnPowerRestart"></button>
+          <button class="btn danger" id="btn-power-logoff" data-i18n="btnPowerLogoff"></button>
+        </div>
+        <div class="btn-row">
+          <button class="btn" id="btn-power-recycle" data-i18n="btnPowerRecycle"></button>
+        </div>
+        <pre class="result" id="power-result"></pre>
       </section>
 
       <!-- 设置读写：skin_get_setting / skin_set_setting（免权限） -->
