@@ -219,7 +219,7 @@ fn parse_fs_query(query: Option<&str>) -> Option<PathBuf> {
 /// password 类型设置项的值恒替换为空串：skin:// 对所有皮肤同源，烘焙进
 /// HTML 的值可被任意皮肤 fetch 到；password 值由 skin_get_setting 命令
 /// 按窗口身份校验后单独下发（不经过本注入）。
-fn baked_settings_json(
+pub(crate) fn baked_settings_json(
     skins_dir: &Path,
     relative_path: &str,
 ) -> String {
@@ -311,288 +311,14 @@ fn inject_bridge(html: String, opacity: f64, locked: bool, resizable: bool, sett
     // carried the baked value too, it would survive the inline override on
     // html and keep the page dim (e.g. baked 0.5, then runtime set to 1.0
     // stayed at 0.5 until the next reload).
-    // 管理器界面语言烘焙进桥：皮肤可据此让自己的界面跟随管理器语言（与锁定
-    // 态同理，必须在 serve 时烘焙而非创建后 eval，防竞态）。运行时切换由
-    // set_language 命令 eval 更新并派发 desk-language-changed 事件。
-    let language_json = serde_json::to_string(language).unwrap_or_else(|_| "\"zh-CN\"".into());
-    // 当前生效主题烘焙进桥（auto 已在后端折算成具体 light/dark）：皮肤据此
-    // 跟随管理器昼夜配色。运行时切换由 set_theme 命令 eval 更新并派发
-    // desk-theme-changed 事件。
-    let theme_json = serde_json::to_string(theme).unwrap_or_else(|_| "\"light\"".into());
-    // 宿主版本烘焙进桥：皮肤据此做能力探测（新控件/新命令在老宿主上自行降级），
-    // 与 min_host_version 的安装期提示互补。版本号不随运行期变化，无需事件同步。
-    let host_version_json =
-        serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"unknown\"".into());
     let bridge = format!(
-        r#"<style>
-.drag-region {{
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-  cursor: grab;
-}}
-html {{ opacity: {opacity}; }}
-</style>
-{lock_style}
-<script>
-window.__DESK_PP__={{
-  setOpacity:function(v){{document.documentElement.style.opacity=v;}},
-  positionLocked: {locked},
-  resizable: {resizable},
-  language: {language_json},
-  theme: {theme_json},
-  hostVersion: {host_version_json},
-  // 约定：password 类型设置项的值在此恒为空串——skin:// 对所有皮肤同源，
-  // 烘焙值可被任意皮肤读取；password 值需经 skin_get_setting 命令获取
-  //（后端按窗口身份校验后单独下发）。
-  settings: {settings_json},
-  invoke:function(cmd,args){{return window.__TAURI_INTERNALS__.invoke(cmd,args||{{}});}},
-  // Runtime toggle for border-resize (「窗口」页开关 -> set_skin_resizable
-  // evals this).  Also shows/hides the animated hazard-stripe frame marking
-  // the grab area — transparent skins have no visible window edge otherwise.
-  setResizable:function(on){{
-    window.__DESK_PP__.resizable=!!on;
-    var f=document.getElementById('desk-resize-frame');
-    if(on&&!f){{
-      var st=document.getElementById('desk-resize-frame-style');
-      if(!st){{
-        st=document.createElement('style');
-        st.id='desk-resize-frame-style';
-        st.textContent='#desk-resize-frame{{position:fixed;inset:0;z-index:2147483647;pointer-events:none;}}'
-          +'#desk-resize-frame i{{position:absolute;display:block;overflow:hidden;}}'
-          +'#desk-resize-frame b{{position:absolute;display:block;will-change:transform;}}'
-          +'#desk-resize-frame .t,#desk-resize-frame .b{{left:0;right:0;height:4px;}}'
-          +'#desk-resize-frame .t{{top:0;}}'
-          +'#desk-resize-frame .b{{bottom:0;}}'
-          +'#desk-resize-frame .l,#desk-resize-frame .r{{top:4px;bottom:4px;width:4px;}}'
-          +'#desk-resize-frame .l{{left:0;}}'
-          +'#desk-resize-frame .r{{right:0;}}'
-          +'#desk-resize-frame .t b,#desk-resize-frame .b b{{top:0;bottom:0;left:-34px;right:-34px;background:repeating-linear-gradient(45deg,#ffd400 0 12px,#161616 12px 24px);}}'
-          +'#desk-resize-frame .l b,#desk-resize-frame .r b{{left:0;right:0;top:-34px;bottom:-34px;background:repeating-linear-gradient(-45deg,#ffd400 0 12px,#161616 12px 24px);}}'
-          +'#desk-resize-frame .t b{{animation:deskStripeT .9s linear infinite;}}'
-          +'#desk-resize-frame .b b{{animation:deskStripeB .9s linear infinite;}}'
-          +'#desk-resize-frame .l b{{animation:deskStripeL .9s linear infinite;}}'
-          +'#desk-resize-frame .r b{{animation:deskStripeR .9s linear infinite;}}'
-          +'@keyframes deskStripeT{{to{{transform:translateX(33.94px);}}}}'
-          +'@keyframes deskStripeB{{to{{transform:translateX(-33.94px);}}}}'
-          +'@keyframes deskStripeL{{to{{transform:translateY(-33.94px);}}}}'
-          +'@keyframes deskStripeR{{to{{transform:translateY(33.94px);}}}}'
-          +'@media (prefers-reduced-motion: reduce){{#desk-resize-frame b{{animation:none;}}}}';
-        (document.head||document.documentElement).appendChild(st);
-      }}
-      f=document.createElement('div');
-      f.id='desk-resize-frame';
-      f.innerHTML='<i class="t"><b></b></i><i class="r"><b></b></i><i class="b"><b></b></i><i class="l"><b></b></i>';
-      (document.body||document.documentElement).appendChild(f);
-    }}
-    if(!on){{
-      if(f)f.remove();
-      var st=document.getElementById('desk-resize-frame-style');
-      if(st)st.remove();
-      var st2=document.getElementById('desk-resize-style');
-      if(st2)st2.remove();
-    }}
-  }}
-}};
-// Recommended alias (same object); __DESK_PP__ is the legacy name, kept for
-// compatibility.  New skins should use window.driftlet.
-window.driftlet=window.__DESK_PP__;
-(function(){{
-  // Right-click: suppress WebView2's default menu (also disabled via
-  // ICoreWebView2Settings) and open the native skin menu instead —
-  // unless the page consumed the click itself: a skin that calls
-  // preventDefault() on contextmenu (e.g. an in-card edit) opts out of
-  // the host menu for that click.  Listening on window (last stop of
-  // the bubble path) makes defaultPrevented reflect every page handler,
-  // regardless of where it was registered.
-  window.addEventListener('contextmenu', function(e){{
-    if (e.defaultPrevented) return;
-    e.preventDefault();
-    window.__DESK_PP__.invoke('show_skin_context_menu');
-  }});
-  function onPointerDown(e){{
-    if (e.button !== 0) return;
-    if (window.__DESK_PP__.positionLocked) return;
-    // Interactive elements keep their clicks: start_skin_drag enters the
-    // system modal move loop on pointerdown, which captures the mouse and
-    // eats the matching pointerup — the DOM 'click' never fires.
-    var t = e.target;
-    if (t && t.closest && t.closest('button,input,select,textarea,a,label,[contenteditable="true"]')) return;
-    window.__DESK_PP__.invoke('start_skin_drag');
-  }}
-  function attach(){{
-    document.querySelectorAll('.drag-region').forEach(function(el){{
-      el.removeEventListener('pointerdown', onPointerDown);
-      el.addEventListener('pointerdown', onPointerDown);
-    }});
-  }}
-  function setup(){{
-    attach();
-    if (typeof MutationObserver !== 'undefined' && document.body) {{
-      new MutationObserver(attach).observe(document.body, {{childList:true, subtree:true}});
-    }}
-  }}
-  if (document.readyState === 'loading') {{
-    document.addEventListener('DOMContentLoaded', setup);
-  }} else {{
-    setup();
-  }}
-}})();
-(function(){{
-  // Border-resize hot zones (skin.json window.resizable / 「窗口」页开关).
-  // The WebView2 child window covers the entire skin window, so native
-  // WM_NCHITTEST on the parent never fires — the bridge detects edge
-  // proximity itself, mirrors the resize cursor via #desk-resize-style,
-  // and has the backend synthesize WM_NCLBUTTONDOWN(HT*) to start the
-  // system size loop (same mechanism as start_skin_drag for moves).
-  // Listeners are always registered; the flag is checked per event so the
-  // panel toggle (setResizable) takes effect without a reload.
-  var BORDER = 6;
-  var CURSORS = {{n:'ns-resize', s:'ns-resize', w:'ew-resize', e:'ew-resize',
-    nw:'nwse-resize', se:'nwse-resize', ne:'nesw-resize', sw:'nesw-resize'}};
-  function zoneAt(x, y) {{
-    var w = window.innerWidth, h = window.innerHeight;
-    var l = x < BORDER, r = x >= w - BORDER, t = y < BORDER, b = y >= h - BORDER;
-    if (l && t) return 'nw'; if (r && t) return 'ne';
-    if (l && b) return 'sw'; if (r && b) return 'se';
-    if (l) return 'w'; if (r) return 'e'; if (t) return 'n'; if (b) return 's';
-    return '';
-  }}
-  function setZoneCursor(zone) {{
-    var style = document.getElementById('desk-resize-style');
-    if (zone) {{
-      if (!style) {{
-        style = document.createElement('style');
-        style.id = 'desk-resize-style';
-        (document.head || document.documentElement).appendChild(style);
-      }}
-      var css = '*{{cursor:' + CURSORS[zone] + '!important}}';
-      if (style.textContent !== css) style.textContent = css;
-    }} else if (style) {{
-      style.remove();
-    }}
-  }}
-  document.addEventListener('pointermove', function(e){{
-    if (!window.__DESK_PP__.resizable) {{ setZoneCursor(''); return; }}
-    setZoneCursor(zoneAt(e.clientX, e.clientY));
-  }}, true);
-  document.addEventListener('pointerleave', function(){{ setZoneCursor(''); }}, true);
-  document.addEventListener('pointerdown', function(e){{
-    if (e.button !== 0) return;
-    if (!window.__DESK_PP__.resizable) return;
-    var z = zoneAt(e.clientX, e.clientY);
-    if (!z) return;
-    e.preventDefault();
-    e.stopPropagation();
-    window.__DESK_PP__.invoke('start_skin_resize', {{direction: z}});
-  }}, true);
-  // Sync the frame hint once the body exists (initial state comes baked
-  // from the URL; runtime toggles go through setResizable directly).
-  function syncFrame(){{ window.__DESK_PP__.setResizable(window.__DESK_PP__.resizable); }}
-  if (document.readyState === 'loading') {{
-    document.addEventListener('DOMContentLoaded', syncFrame);
-  }} else {{
-    syncFrame();
-  }}
-}})();
-(function(){{
-  // Console forwarding to the host log: DevTools is disabled in skin
-  // windows, so console output and uncaught errors would vanish otherwise.
-  // Batched (one invoke per flush) + capped — a console.log in a tight
-  // loop must not drown the IPC channel.  ASCII-only on purpose: the
-  // bridge is injected into pages whose charset we don't control.
-  var FLUSH_MS = 250, FLUSH_CAP = 30, QUEUE_CAP = 300, MSG_CAP = 1200;
-  var queue = [], dropped = 0, timer = null;
-  function ser(v){{
-    try {{
-      if (typeof v === 'string') return v;
-      if (v instanceof Error) return String(v.stack || v);
-      if (v === undefined) return 'undefined';
-      if (typeof v === 'function') return String(v);
-      var seen = [];
-      return JSON.stringify(v, function(k, x){{
-        if (x && typeof x === 'object') {{
-          if (seen.indexOf(x) !== -1) return '[Circular]';
-          seen.push(x);
-        }}
-        return x;
-      }});
-    }} catch (e) {{ return String(v); }}
-  }}
-  function enqueue(level, message){{
-    if (message.length > MSG_CAP) message = message.slice(0, MSG_CAP) + '...';
-    var last = queue[queue.length - 1];
-    if (last && last.level === level && last.message === message) {{
-      last.n++;
-      return;
-    }}
-    // Hard in-queue cap: a tight loop logging DISTINCT messages would
-    // otherwise grow the queue unboundedly within one flush window.
-    if (queue.length >= QUEUE_CAP) {{ dropped++; return; }}
-    queue.push({{level: level, message: message, n: 1}});
-    if (!timer) timer = setTimeout(flush, FLUSH_MS);
-  }}
-  function flush(){{
-    timer = null;
-    var batch = queue.splice(0, FLUSH_CAP);
-    if (queue.length) {{ dropped += queue.length; queue.length = 0; }}
-    var entries = [];
-    for (var i = 0; i < batch.length; i++) {{
-      var e = batch[i];
-      entries.push({{level: e.level, message: e.n > 1 ? e.message + ' (x' + e.n + ')' : e.message}});
-    }}
-    if (dropped) {{
-      entries.push({{level: 'warn', message: '[host] dropped ' + dropped + ' console messages (flood guard)'}});
-      dropped = 0;
-    }}
-    if (!entries.length) return;
-    // Never log from inside the forwarder (recursion): send failures are
-    // swallowed silently.
-    try {{ window.__DESK_PP__.invoke('skin_console_log', {{entries: entries}}).catch(function(){{}}); }} catch (e) {{}}
-  }}
-  var LEVELS = {{log: 'info', info: 'info', debug: 'info', warn: 'warn', error: 'error'}};
-  ['log','info','debug','warn','error'].forEach(function(name){{
-    var orig = console[name];
-    if (typeof orig !== 'function') return;
-    console[name] = function(){{
-      try {{ enqueue(LEVELS[name], Array.prototype.map.call(arguments, ser).join(' ')); }} catch (e) {{}}
-      return orig.apply(console, arguments);
-    }};
-  }});
-  // Capture phase: resource-error events (img/script/link) don't bubble.
-  window.addEventListener('error', function(e){{
-    try {{
-      if (e && e.message) {{
-        enqueue('error', e.message + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : ''));
-      }} else if (e && e.target && e.target !== window) {{
-        var src = e.target.src || e.target.href;
-        if (src) enqueue('error', 'resource failed: ' + src);
-      }}
-    }} catch (_) {{}}
-  }}, true);
-  window.addEventListener('unhandledrejection', function(e){{
-    try {{ enqueue('error', 'unhandled rejection: ' + ser(e.reason)); }} catch (_) {{}}
-  }});
-  document.addEventListener('securitypolicyviolation', function(e){{
-    try {{ enqueue('error', 'CSP blocked: ' + (e.blockedURI || '') + ' (' + e.violatedDirective + ')'); }} catch (_) {{}}
-  }});
-}})();
-(function(){{
-  // Dev mode (设置页「高级」开关): F12 / Ctrl+Shift+I opens DevTools for
-  // this skin window.  Browser accelerator keys stay disabled (F5/Ctrl+R
-  // et al.) — with them off these keys reach the page as DOM events, which
-  // we forward; the backend command is the authority and no-ops while dev
-  // mode is off, so this listener can live here unconditionally.  Capture
-  // phase so the page cannot swallow the keys.
-  window.addEventListener('keydown', function(e){{
-    var hit = e.key === 'F12'
-      || (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.code === 'KeyI'));
-    if (!hit) return;
-    e.preventDefault();
-    try {{ window.__DESK_PP__.invoke('open_skin_devtools').catch(function(){{}}); }} catch (_) {{}}
-  }}, true);
-}})();
-</script>"#
+
+        "<style>\n{}\n</style>\n{}\n<script>\n{}\n</script>",
+        bridge_css(opacity),
+        lock_style,
+        bridge_script(locked, resizable, settings_json, language, theme),
     );
+
 
     // 大小写敏感定位修复：HTML 标签可大写（</HEAD>）。不 to_lowercase()
     //（非 ASCII 字符小写化会改变字节长度，索引会漂——insert_str 落在非
@@ -853,3 +579,289 @@ mod tests {
         let _ = std::fs::remove_dir_all(&skins_dir);
     }
 }
+
+/// 桥脚本正文（__DESK_PP__ 对象 + 右键菜单/拖动/边框缩放/控制台转发/DevTools 的
+/// 全部 IIFE）。与 bridge_css 分离：注入路径（HTML 拼接 vs 其他载体）各自组合。
+fn bridge_script(locked: bool, resizable: bool, settings_json: &str, language: &str, theme: &str) -> String {
+    // 管理器界面语言烘焙进桥：皮肤可据此让自己的界面跟随管理器语言（与锁定
+    // 态同理，必须在 serve 时烘焙而非创建后 eval，防竞态）。运行时切换由
+    // set_language 命令 eval 更新并派发 desk-language-changed 事件。
+    let language_json = serde_json::to_string(language).unwrap_or_else(|_| "\"zh-CN\"".into());
+    // 当前生效主题烘焙进桥（auto 已在后端折算成具体 light/dark）：皮肤据此
+    // 跟随管理器昼夜配色。运行时切换由 set_theme 命令 eval 更新并派发
+    // desk-theme-changed 事件。
+    let theme_json = serde_json::to_string(theme).unwrap_or_else(|_| "\"light\"".into());
+    // 宿主版本烘焙进桥：皮肤据此做能力探测（新控件/新命令在老宿主上自行降级），
+    // 与 min_host_version 的安装期提示互补。版本号不随运行期变化，无需事件同步。
+    let host_version_json =
+        serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"unknown\"".into());
+    format!(
+        r#"window.__DESK_PP__={{  setOpacity:function(v){{document.documentElement.style.opacity=v;}},
+  positionLocked: {locked},
+  resizable: {resizable},
+  language: {language_json},
+  theme: {theme_json},
+  hostVersion: {host_version_json},
+  // 约定：password 类型设置项的值在此恒为空串——skin:// 对所有皮肤同源，
+  // 烘焙值可被任意皮肤读取；password 值需经 skin_get_setting 命令获取
+  //（后端按窗口身份校验后单独下发）。
+  settings: {settings_json},
+  invoke:function(cmd,args){{return window.__TAURI_INTERNALS__.invoke(cmd,args||{{}});}},
+  // Runtime toggle for border-resize (「窗口」页开关 -> set_skin_resizable
+  // evals this).  Also shows/hides the animated hazard-stripe frame marking
+  // the grab area — transparent skins have no visible window edge otherwise.
+  setResizable:function(on){{
+    window.__DESK_PP__.resizable=!!on;
+    var f=document.getElementById('desk-resize-frame');
+    if(on&&!f){{
+      var st=document.getElementById('desk-resize-frame-style');
+      if(!st){{
+        st=document.createElement('style');
+        st.id='desk-resize-frame-style';
+        st.textContent='#desk-resize-frame{{position:fixed;inset:0;z-index:2147483647;pointer-events:none;}}'
+          +'#desk-resize-frame i{{position:absolute;display:block;overflow:hidden;}}'
+          +'#desk-resize-frame b{{position:absolute;display:block;will-change:transform;}}'
+          +'#desk-resize-frame .t,#desk-resize-frame .b{{left:0;right:0;height:4px;}}'
+          +'#desk-resize-frame .t{{top:0;}}'
+          +'#desk-resize-frame .b{{bottom:0;}}'
+          +'#desk-resize-frame .l,#desk-resize-frame .r{{top:4px;bottom:4px;width:4px;}}'
+          +'#desk-resize-frame .l{{left:0;}}'
+          +'#desk-resize-frame .r{{right:0;}}'
+          +'#desk-resize-frame .t b,#desk-resize-frame .b b{{top:0;bottom:0;left:-34px;right:-34px;background:repeating-linear-gradient(45deg,#ffd400 0 12px,#161616 12px 24px);}}'
+          +'#desk-resize-frame .l b,#desk-resize-frame .r b{{left:0;right:0;top:-34px;bottom:-34px;background:repeating-linear-gradient(-45deg,#ffd400 0 12px,#161616 12px 24px);}}'
+          +'#desk-resize-frame .t b{{animation:deskStripeT .9s linear infinite;}}'
+          +'#desk-resize-frame .b b{{animation:deskStripeB .9s linear infinite;}}'
+          +'#desk-resize-frame .l b{{animation:deskStripeL .9s linear infinite;}}'
+          +'#desk-resize-frame .r b{{animation:deskStripeR .9s linear infinite;}}'
+          +'@keyframes deskStripeT{{to{{transform:translateX(33.94px);}}}}'
+          +'@keyframes deskStripeB{{to{{transform:translateX(-33.94px);}}}}'
+          +'@keyframes deskStripeL{{to{{transform:translateY(-33.94px);}}}}'
+          +'@keyframes deskStripeR{{to{{transform:translateY(33.94px);}}}}'
+          +'@media (prefers-reduced-motion: reduce){{#desk-resize-frame b{{animation:none;}}}}';
+        (document.head||document.documentElement).appendChild(st);
+      }}
+      f=document.createElement('div');
+      f.id='desk-resize-frame';
+      f.innerHTML='<i class="t"><b></b></i><i class="r"><b></b></i><i class="b"><b></b></i><i class="l"><b></b></i>';
+      (document.body||document.documentElement).appendChild(f);
+    }}
+    if(!on){{
+      if(f)f.remove();
+      var st=document.getElementById('desk-resize-frame-style');
+      if(st)st.remove();
+      var st2=document.getElementById('desk-resize-style');
+      if(st2)st2.remove();
+    }}
+  }}
+}};
+// Recommended alias (same object); __DESK_PP__ is the legacy name, kept for
+// compatibility.  New skins should use window.driftlet.
+window.driftlet=window.__DESK_PP__;
+(function(){{
+  // Right-click: suppress WebView2's default menu (also disabled via
+  // ICoreWebView2Settings) and open the native skin menu instead —
+  // unless the page consumed the click itself: a skin that calls
+  // preventDefault() on contextmenu (e.g. an in-card edit) opts out of
+  // the host menu for that click.  Listening on window (last stop of
+  // the bubble path) makes defaultPrevented reflect every page handler,
+  // regardless of where it was registered.
+  window.addEventListener('contextmenu', function(e){{
+    if (e.defaultPrevented) return;
+    e.preventDefault();
+    window.__DESK_PP__.invoke('show_skin_context_menu');
+  }});
+  function onPointerDown(e){{
+    if (e.button !== 0) return;
+    if (window.__DESK_PP__.positionLocked) return;
+    // Interactive elements keep their clicks: start_skin_drag enters the
+    // system modal move loop on pointerdown, which captures the mouse and
+    // eats the matching pointerup — the DOM 'click' never fires.
+    var t = e.target;
+    if (t && t.closest && t.closest('button,input,select,textarea,a,label,[contenteditable="true"]')) return;
+    window.__DESK_PP__.invoke('start_skin_drag');
+  }}
+  function attach(){{
+    document.querySelectorAll('.drag-region').forEach(function(el){{
+      el.removeEventListener('pointerdown', onPointerDown);
+      el.addEventListener('pointerdown', onPointerDown);
+    }});
+  }}
+  function setup(){{
+    attach();
+    if (typeof MutationObserver !== 'undefined' && document.body) {{
+      new MutationObserver(attach).observe(document.body, {{childList:true, subtree:true}});
+    }}
+  }}
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', setup);
+  }} else {{
+    setup();
+  }}
+}})();
+(function(){{
+  // Border-resize hot zones (skin.json window.resizable / 「窗口」页开关).
+  // The WebView2 child window covers the entire skin window, so native
+  // WM_NCHITTEST on the parent never fires — the bridge detects edge
+  // proximity itself, mirrors the resize cursor via #desk-resize-style,
+  // and has the backend synthesize WM_NCLBUTTONDOWN(HT*) to start the
+  // system size loop (same mechanism as start_skin_drag for moves).
+  // Listeners are always registered; the flag is checked per event so the
+  // panel toggle (setResizable) takes effect without a reload.
+  var BORDER = 6;
+  var CURSORS = {{n:'ns-resize', s:'ns-resize', w:'ew-resize', e:'ew-resize',
+    nw:'nwse-resize', se:'nwse-resize', ne:'nesw-resize', sw:'nesw-resize'}};
+  function zoneAt(x, y) {{
+    var w = window.innerWidth, h = window.innerHeight;
+    var l = x < BORDER, r = x >= w - BORDER, t = y < BORDER, b = y >= h - BORDER;
+    if (l && t) return 'nw'; if (r && t) return 'ne';
+    if (l && b) return 'sw'; if (r && b) return 'se';
+    if (l) return 'w'; if (r) return 'e'; if (t) return 'n'; if (b) return 's';
+    return '';
+  }}
+  function setZoneCursor(zone) {{
+    var style = document.getElementById('desk-resize-style');
+    if (zone) {{
+      if (!style) {{
+        style = document.createElement('style');
+        style.id = 'desk-resize-style';
+        (document.head || document.documentElement).appendChild(style);
+      }}
+      var css = '*{{cursor:' + CURSORS[zone] + '!important}}';
+      if (style.textContent !== css) style.textContent = css;
+    }} else if (style) {{
+      style.remove();
+    }}
+  }}
+  document.addEventListener('pointermove', function(e){{
+    if (!window.__DESK_PP__.resizable) {{ setZoneCursor(''); return; }}
+    setZoneCursor(zoneAt(e.clientX, e.clientY));
+  }}, true);
+  document.addEventListener('pointerleave', function(){{ setZoneCursor(''); }}, true);
+  document.addEventListener('pointerdown', function(e){{
+    if (e.button !== 0) return;
+    if (!window.__DESK_PP__.resizable) return;
+    var z = zoneAt(e.clientX, e.clientY);
+    if (!z) return;
+    e.preventDefault();
+    e.stopPropagation();
+    window.__DESK_PP__.invoke('start_skin_resize', {{direction: z}});
+  }}, true);
+  // Sync the frame hint once the body exists (initial state comes baked
+  // from the URL; runtime toggles go through setResizable directly).
+  function syncFrame(){{ window.__DESK_PP__.setResizable(window.__DESK_PP__.resizable); }}
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', syncFrame);
+  }} else {{
+    syncFrame();
+  }}
+}})();
+(function(){{
+  // Console forwarding to the host log: DevTools is disabled in skin
+  // windows, so console output and uncaught errors would vanish otherwise.
+  // Batched (one invoke per flush) + capped — a console.log in a tight
+  // loop must not drown the IPC channel.  ASCII-only on purpose: the
+  // bridge is injected into pages whose charset we don't control.
+  var FLUSH_MS = 250, FLUSH_CAP = 30, QUEUE_CAP = 300, MSG_CAP = 1200;
+  var queue = [], dropped = 0, timer = null;
+  function ser(v){{
+    try {{
+      if (typeof v === 'string') return v;
+      if (v instanceof Error) return String(v.stack || v);
+      if (v === undefined) return 'undefined';
+      if (typeof v === 'function') return String(v);
+      var seen = [];
+      return JSON.stringify(v, function(k, x){{
+        if (x && typeof x === 'object') {{
+          if (seen.indexOf(x) !== -1) return '[Circular]';
+          seen.push(x);
+        }}
+        return x;
+      }});
+    }} catch (e) {{ return String(v); }}
+  }}
+  function enqueue(level, message){{
+    if (message.length > MSG_CAP) message = message.slice(0, MSG_CAP) + '...';
+    var last = queue[queue.length - 1];
+    if (last && last.level === level && last.message === message) {{
+      last.n++;
+      return;
+    }}
+    // Hard in-queue cap: a tight loop logging DISTINCT messages would
+    // otherwise grow the queue unboundedly within one flush window.
+    if (queue.length >= QUEUE_CAP) {{ dropped++; return; }}
+    queue.push({{level: level, message: message, n: 1}});
+    if (!timer) timer = setTimeout(flush, FLUSH_MS);
+  }}
+  function flush(){{
+    timer = null;
+    var batch = queue.splice(0, FLUSH_CAP);
+    if (queue.length) {{ dropped += queue.length; queue.length = 0; }}
+    var entries = [];
+    for (var i = 0; i < batch.length; i++) {{
+      var e = batch[i];
+      entries.push({{level: e.level, message: e.n > 1 ? e.message + ' (x' + e.n + ')' : e.message}});
+    }}
+    if (dropped) {{
+      entries.push({{level: 'warn', message: '[host] dropped ' + dropped + ' console messages (flood guard)'}});
+      dropped = 0;
+    }}
+    if (!entries.length) return;
+    // Never log from inside the forwarder (recursion): send failures are
+    // swallowed silently.
+    try {{ window.__DESK_PP__.invoke('skin_console_log', {{entries: entries}}).catch(function(){{}}); }} catch (e) {{}}
+  }}
+  var LEVELS = {{log: 'info', info: 'info', debug: 'info', warn: 'warn', error: 'error'}};
+  ['log','info','debug','warn','error'].forEach(function(name){{
+    var orig = console[name];
+    if (typeof orig !== 'function') return;
+    console[name] = function(){{
+      try {{ enqueue(LEVELS[name], Array.prototype.map.call(arguments, ser).join(' ')); }} catch (e) {{}}
+      return orig.apply(console, arguments);
+    }};
+  }});
+  // Capture phase: resource-error events (img/script/link) don't bubble.
+  window.addEventListener('error', function(e){{
+    try {{
+      if (e && e.message) {{
+        enqueue('error', e.message + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : ''));
+      }} else if (e && e.target && e.target !== window) {{
+        var src = e.target.src || e.target.href;
+        if (src) enqueue('error', 'resource failed: ' + src);
+      }}
+    }} catch (_) {{}}
+  }}, true);
+  window.addEventListener('unhandledrejection', function(e){{
+    try {{ enqueue('error', 'unhandled rejection: ' + ser(e.reason)); }} catch (_) {{}}
+  }});
+  document.addEventListener('securitypolicyviolation', function(e){{
+    try {{ enqueue('error', 'CSP blocked: ' + (e.blockedURI || '') + ' (' + e.violatedDirective + ')'); }} catch (_) {{}}
+  }});
+}})();
+(function(){{
+  // Dev mode (设置页「高级」开关): F12 / Ctrl+Shift+I opens DevTools for
+  // this skin window.  Browser accelerator keys stay disabled (F5/Ctrl+R
+  // et al.) — with them off these keys reach the page as DOM events, which
+  // we forward; the backend command is the authority and no-ops while dev
+  // mode is off, so this listener can live here unconditionally.  Capture
+  // phase so the page cannot swallow the keys.
+  window.addEventListener('keydown', function(e){{
+    var hit = e.key === 'F12'
+      || (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.code === 'KeyI'));
+    if (!hit) return;
+    e.preventDefault();
+    try {{ window.__DESK_PP__.invoke('open_skin_devtools').catch(function(){{}}); }} catch (_) {{}}
+  }}, true);
+}})();
+"#
+    )
+}
+
+/// 桥基础样式（.drag-region 的 no-drag/光标 + html 透明度烘焙）。
+/// Opacity is baked ONLY on <html>: runtime changes set
+/// documentElement's inline style, which overrides this rule.
+fn bridge_css(opacity: f64) -> String {
+    format!(
+        ".drag-region {{\n  -webkit-app-region: no-drag;\n  app-region: no-drag;\n  cursor: grab;\n}}\nhtml {{ opacity: {opacity}; }}",
+    )
+}
+

@@ -267,7 +267,7 @@ tools\pack-skin.exe <皮肤文件夹> [输出目录]
 
 - **权限声明**：注册表、Shell、系统控制（音量/媒体/打开外部/通知）、剪贴板、麦克风、任意路径文件读写（`file_system`）、皮肤窗口配置与生命周期控制（`control`）共 7 种敏感能力，皮肤必须在 `skin.json` 声明 `permissions` 才可调用，后端逐命令强制校验；安装引导页逐条展示声明并按两档分级标注（高危 `shell` / `system` / `file_system` 标红，中危 `registry` / `clipboard` / `mic` / `control` 标黄）。
 - **管理器命令仅管理器窗口可调**：加载/卸载/设置等全部管理命令校验调用方窗口身份，皮肤窗口调用一律拒绝（仅拖动、边框缩放、右键菜单三个无害命令例外）。
-- **皮肤窗口零授权**：皮肤窗口的 capabilities 为空，不授予任何 Tauri 核心/插件权限，只能经注入桥 `__DESK_PP__.invoke` 调后端命令。
+- **皮肤窗口零授权**：皮肤窗口的 capabilities 不授予任何 Tauri 核心/插件权限，只能经注入桥 `__DESK_PP__.invoke` 调后端命令。
 - **文件沙箱**：皮肤的文件读写限定在自身目录内（拒绝绝对路径与 `..` 逃逸），`skin.json` / `settings.json` 禁写禁删。
 - **设置值跨皮肤隔离**：`settings.json` 被 skin:// 协议拦截（含 8.3 短名、ADS 等绕过手段），A 皮肤读不到 B 皮肤的设置；`password` 类型值不落页面，由 `skin_get_setting` 按窗口身份下发。
 - **`.dskin` 安装防护**：解压防 zip-slip 与 zip 炸弹（按实际解压字节计量），体积/文件数上限 64MB / 256MB / 5000；staging 回滚式安装，失败不破坏旧版本。

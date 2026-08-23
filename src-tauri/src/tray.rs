@@ -192,7 +192,9 @@ fn reload_all_skins(app: &AppHandle) {
 
 /// Gracefully shut down: signal real exit so the main window actually closes
 /// instead of hiding to tray, then close all windows and exit.
-fn graceful_exit(app: &AppHandle) {
+/// pub(crate)：自动更新的「立即安装」也走这条退出路径（启动安装器后
+/// 整站退出，让 NSIS 能覆盖 exe）。
+pub(crate) fn graceful_exit(app: &AppHandle) {
     log::info!("Graceful exit: closing all windows...");
 
     let state = app.state::<crate::AppState>();

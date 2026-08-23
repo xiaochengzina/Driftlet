@@ -19,29 +19,42 @@ export async function initUpdateCheck() {
     if (config.update_check === false) return;
     const result = await API.checkUpdate();
     if (!result?.has_update) return;
+
+    // 发现新版本：优先后台自动下载安装包（固定文件名覆盖旧包，下载完成
+    // 才提示安装）；下载失败/无安装包资产时降级为「前往下载」
+    let downloaded = false;
+    if (result.installer_url) {
+      try {
+        await API.downloadUpdate(result.installer_url, result.latest_version);
+        downloaded = true;
+      } catch (err) {
+        console.error('update download failed:', err);
+      }
+    }
+
     // 弹提示前先把窗口亮出来（隐藏启动时弹窗画了也看不见）
     const win = getCurrentWindow();
     await win.unminimize();
     await win.show();
     await win.setFocus();
-    showUpdateDialog(result);
+    showUpdateDialog(result, downloaded);
   } catch (err) {
     console.error('update check failed:', err);
   }
 }
 
-function showUpdateDialog(result) {
+function showUpdateDialog(result, downloaded) {
   const overlay = document.createElement('div');
   overlay.className = 'confirm-overlay';
   overlay.innerHTML = `
     <div class="confirm-dialog">
       <div class="confirm-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
       <h3>${t('update.title')}</h3>
-      <p>${t('update.body', { latest: esc(result.latest_version), current: esc(result.current_version) })}</p>
+      <p>${t(downloaded ? 'update.bodyDownloaded' : 'update.body', { latest: esc(result.latest_version), current: esc(result.current_version) })}</p>
       <label class="update-remind"><input type="checkbox" id="update-dont-remind"><span>${t('update.dontRemind')}</span></label>
       <div class="confirm-buttons">
-        <button class="confirm-btn cancel">${t('common.cancel')}</button>
-        <button class="confirm-btn primary">${t('update.download')}</button>
+        <button class="confirm-btn cancel">${t(downloaded ? 'update.later' : 'common.cancel')}</button>
+        <button class="confirm-btn primary">${t(downloaded ? 'update.installNow' : 'update.download')}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -75,9 +88,18 @@ function showUpdateDialog(result) {
   goBtn.onclick = async () => {
     close();
     try {
-      await API.openReleasePage();
+      if (downloaded) {
+        // 立即安装：后端启动安装包并整站退出（此调用后应用即退出）
+        await API.installUpdate();
+      } else {
+        await API.openReleasePage();
+      }
     } catch (err) {
-      console.error('openReleasePage failed:', err);
+      console.error('update action failed:', err);
+      // 安装失败（安装包缺失/启动失败）降级打开下载页
+      if (downloaded) {
+        try { await API.openReleasePage(); } catch (err2) { console.error('openReleasePage failed:', err2); }
+      }
     }
   };
   // 与删除/重置确认框一致：初始焦点落在「取消」

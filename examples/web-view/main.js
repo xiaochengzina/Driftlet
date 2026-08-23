@@ -81,8 +81,13 @@ function syncUrl() {
   return false;
 }
 
+function autoRefresh() {
+  return window.__DESK_PP__?.settings?.auto_refresh !== false; // 默认开
+}
+
 function restartTimer() {
-  if (timer) clearInterval(timer);
+  if (timer) { clearInterval(timer); timer = null; }
+  if (!autoRefresh()) return; // 关掉自动刷新就不起定时器（手动刷新按钮不受限）
   const minutes = Math.max(1, Number(window.__DESK_PP__?.settings?.refresh_min) || 5);
   timer = setInterval(() => {
     if (!document.hidden && siteUrl()) reloadFrame();
@@ -111,7 +116,7 @@ function boot() {
 
   document.getElementById('btn-refresh').onclick = reloadFrame;
   document.addEventListener('desk-setting-changed', (e) => {
-    if (e.detail?.key === 'refresh_min') restartTimer();
+    if (e.detail?.key === 'refresh_min' || e.detail?.key === 'auto_refresh') restartTimer();
     if (e.detail?.key === 'site_url') syncUrl();
   });
   document.addEventListener('desk-language-changed', (e) => {
@@ -119,8 +124,9 @@ function boot() {
     applyI18n();
   });
   document.addEventListener('visibilitychange', () => {
-    // syncUrl 返回 true = 地址变了已自行重载——再 reloadFrame 会双重加载
-    if (!document.hidden) { if (!syncUrl() && siteUrl()) reloadFrame(); }
+    // syncUrl 返回 true = 地址变了已自行重载——再 reloadFrame 会双重加载；
+    // 自动刷新关闭时恢复可见也不补刷（那是自动刷新语义的一部分）
+    if (!document.hidden && autoRefresh()) { if (!syncUrl() && siteUrl()) reloadFrame(); }
   });
   // 兜底对齐：窗口重新获得焦点时也对齐一次（管理器写入发生在皮肤失焦时
   // 也覆盖到——事件通道本身是有的，这里是第二道保险）

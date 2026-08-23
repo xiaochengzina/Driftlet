@@ -181,6 +181,10 @@ pub fn run() {
             // 可能只剩 <name>.import-old 而数据目录缺失——启动即把旧数据挪回来
             crate::backup::rollback_interrupted_import(&config_dir, &skins_dir);
 
+            // 更新清理：新版本装上了（当前版本 ≥ 下载标记版本）→ 删掉更新
+            // 目录里的安装包与标记（装完不留下次还用不到的旧安装包）
+            crate::update::cleanup_downloaded_installer(&config_dir);
+
             // 同步开发期示例皮肤（release 构建在函数内直接返回）
             copy_example_skins(&skins_dir);
 
@@ -465,6 +469,8 @@ pub fn run() {
             commands::check_update,
             commands::set_update_check,
             commands::open_release_page,
+            commands::download_update,
+            commands::install_update,
             commands::take_hotkey_error,
             commands::open_skins_folder,
             commands::pick_path,

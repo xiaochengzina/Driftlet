@@ -19,6 +19,16 @@ export default class SkinList {
     // render 全量重解码；重新截取或皮肤版本更新时才 bump。
     this.previewVersions = new Map();
     this._lastVersions = new Map();
+    this.bindScrollFade();
+  }
+
+  /** 滚动渐变淡出：列表滚出顶部后给容器挂 scrolled，CSS 在顶部做渐隐
+      遮罩（卡片不再被生硬截断）。容器在外壳重绘后会被替换——app.js 的
+      rerender 重绑后需再调一次本方法 */
+  bindScrollFade() {
+    this.container.addEventListener('scroll', () => {
+      this.container.classList.toggle('scrolled', this.container.scrollTop > 2);
+    });
   }
 
   bumpPreview(skinId) {

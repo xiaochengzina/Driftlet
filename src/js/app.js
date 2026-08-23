@@ -124,9 +124,9 @@ class App {
           <span class="brand-version" id="brand-version"></span>
         </div>
         <div class="win-btns">
-          <button id="btn-minimize" title="${t('app.minimize')}" class="win-btn"><svg width="10" height="1"><rect width="10" height="1" fill="currentColor"/></svg></button>
-          <button id="btn-maximize" title="${t('app.maximize')}" class="win-btn"><svg width="10" height="10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
-          <button id="btn-close" title="${t('common.close')}" class="win-btn win-btn-close"><svg width="10" height="10"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.2"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.2"/></svg></button>
+          <button id="btn-minimize" title="${t('app.minimize')}" class="win-btn"><svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+          <button id="btn-maximize" title="${t('app.maximize')}" class="win-btn"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button id="btn-close" title="${t('common.close')}" class="win-btn win-btn-close"><svg width="12" height="12" viewBox="0 0 12 12"><line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
         </div>
       </div>
       <div class="app-body">
@@ -248,8 +248,8 @@ class App {
       if (!btn) return;
       const isMaxed = await win.isMaximized();
       btn.innerHTML = isMaxed
-        ? '<svg width="10" height="10"><rect x="3" y="3" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1" y="1" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>'
-        : '<svg width="10" height="10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+        ? '<svg width="12" height="12" viewBox="0 0 12 12"><rect x="4.5" y="4.5" width="6" height="6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="1.5" y="1.5" width="6" height="6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>'
+        : '<svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     });
   }
 
@@ -283,6 +283,7 @@ class App {
     this._paintVersion();
     // 外壳重建后容器元素已更换，重新挂接再重绘
     this.skinList.container = document.getElementById('skin-list-container');
+    this.skinList.bindScrollFade();
     this.skinList.render();
     this.skinEditor.container = document.getElementById('main-panel');
     this.skinEditor.render();

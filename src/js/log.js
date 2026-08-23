@@ -160,8 +160,8 @@ function renderShell() {
         <span class="brand-sub">${t('log.title')}</span>
       </div>
       <div class="win-btns">
-        <button id="btn-minimize" class="win-btn"><svg width="10" height="1"><rect width="10" height="1" fill="currentColor"/></svg></button>
-        <button id="btn-close" class="win-btn win-btn-close"><svg width="10" height="10"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.2"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.2"/></svg></button>
+        <button id="btn-minimize" class="win-btn"><svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+        <button id="btn-close" class="win-btn win-btn-close"><svg width="12" height="12" viewBox="0 0 12 12"><line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       </div>
     </div>
     <div class="log-toolbar">

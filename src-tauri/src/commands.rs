@@ -1788,6 +1788,40 @@ pub fn open_release_page(window: tauri::WebviewWindow, app: AppHandle) -> Result
     crate::skin_api::open_target_impl(crate::update::RELEASES_LATEST_URL, &lang)
 }
 
+/// 自动下载新版安装包到更新目录（固定文件名覆盖旧包 + .tmp 中断不留垃圾）。
+/// 完成才返回路径——前端在下载完成后才提示安装。
+#[tauri::command]
+pub async fn download_update(window: tauri::WebviewWindow, app: AppHandle, url: String, version: String) -> Result<String, String> {
+    require_manager(&window)?;
+    let config_dir = app.state::<AppState>().config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::update::download_installer(&config_dir, &url, &version)
+            .map(|p| p.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 立即安装：启动已下载的安装包并整站退出（NSIS 需要 exe 不被占用才能
+/// 覆盖；安装器的 CheckIfAppIsRunning 会等本进程退掉）。安装包必须存在
+/// 于固定更新目录——只接受「我们刚下载的那一个」，不接受任意路径。
+#[tauri::command]
+pub fn install_update(window: tauri::WebviewWindow, app: AppHandle) -> Result<(), String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let installer = crate::update::update_dir(&state.config_dir)
+        .join(crate::update::INSTALLER_FILENAME);
+    if !installer.is_file() {
+        return Err("installer not downloaded yet".to_string());
+    }
+    std::process::Command::new(&installer)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    // 安装器已起——整站退出让 NSIS 能覆盖 exe
+    crate::tray::graceful_exit(&app);
+    Ok(())
+}
+
 /// Persist the UI language ("zh-CN" | "en"), update runtime state, and
 /// rebuild the tray menu so it switches language immediately. 已加载的皮肤
 /// 窗口同步收到 desk-language-changed 事件（皮肤可让自己的界面跟随切换）。

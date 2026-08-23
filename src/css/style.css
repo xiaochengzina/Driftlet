@@ -16,6 +16,9 @@
   --bg-sidebar: #eaf2f8;
   --bg-surface: #ffffff;
   --bg-surface-hover: #f0f6fb;
+  /* 标题栏窗控按钮悬停底（浅色下 --bg-surface-hover 太白、几乎看不见——
+     加深的冷蓝灰让它有明确反馈；深色主题仍用 --bg-surface-hover 的值） */
+  --win-btn-hover: #e6eff7;
   --bg-input: #eef4f9;
   --border: rgba(14, 117, 195, 0.1);
   --border-strong: rgba(14, 117, 195, 0.24);
@@ -102,6 +105,8 @@
   --bg-sidebar: #222a34;
   --bg-surface: #323c4b;
   --bg-surface-hover: #3b4758;
+  /* 窗控按钮悬停底：深色下现有值对比已足，直接沿用 */
+  --win-btn-hover: #3b4758;
   --bg-input: #2b3542;
   --border: rgba(170, 200, 225, 0.09);
   --border-strong: rgba(170, 200, 225, 0.2);
@@ -240,6 +245,14 @@ textarea:focus-visible {
   display: block;
 }
 
+/* 管理器内所有 img 一律不可拖出窗口（预览图/品牌 logo 的默认图片拖拽
+   会把图片拖出到桌面/其他窗口——管理器没有任何合法的图片拖出场景；
+   只拦「元素拖出」，.dskin 文件拖入窗口的 drop-mask 流不受影响）。
+   皮肤侧不动（皮肤可能有合法的页内 HTML5 拖拽用法） */
+img {
+  -webkit-user-drag: none;
+}
+
 .brand-name {
   font-family: var(--font-display);
   font-size: 13px;
@@ -309,7 +322,7 @@ textarea:focus-visible {
    pointermove 再恢复——防止 WebView2 按隐藏前的旧光标位置重算出
    残留的 :hover（详见 app.js bindWindowControls） */
 body.hover-ok .win-btn:hover {
-  background: var(--bg-surface-hover);
+  background: var(--win-btn-hover);
   color: var(--text-primary);
 }
 
@@ -481,6 +494,14 @@ body.hover-ok .search-clear:hover {
   flex: 1;
   overflow-y: auto;
   padding: 4px 10px 10px;
+}
+
+/* 滚动渐变淡出：列表滚出顶部时，上缘的卡片不再被生硬截断——
+   滚动了（scrolled）才在顶部 26px 做渐隐遮罩，静止在顶时不遮。
+   下缘不遮：footer 已有分隔线，边界本来就清晰 */
+.skin-list.scrolled {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 26px);
+  mask-image: linear-gradient(to bottom, transparent, #000 26px);
 }
 
 .sidebar-footer {

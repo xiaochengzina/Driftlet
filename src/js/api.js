@@ -192,6 +192,17 @@ const API = {
     return invoke('open_release_page');
   },
 
+  // 自动下载新版安装包（完成才 resolve 出路径；网络失败 reject——
+  // 前端降级为「前往下载」）
+  downloadUpdate(url, version) {
+    return invoke('download_update', { url, version });
+  },
+
+  // 立即安装：启动已下载的安装包并整站退出
+  installUpdate() {
+    return invoke('install_update');
+  },
+
   // 打开日志窗口（已开着则提到前台；窗口由后端创建，label "log"）
   openLogWindow() {
     return invoke('open_log_window');
