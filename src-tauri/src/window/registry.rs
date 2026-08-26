@@ -51,15 +51,4 @@ impl SkinWindowRegistry {
             .cloned()
             .collect()
     }
-
-    /// Return (skin_id, HWND) for all loaded windows.
-    /// Used by the periodic cleanup timer to reassert frameless state.
-    pub fn all_hwnds(&self) -> Vec<(String, isize)> {
-        self.windows
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .filter_map(|(id, w)| w.hwnd().ok().map(|h| (id.clone(), h.0 as isize)))
-            .collect()
-    }
 }

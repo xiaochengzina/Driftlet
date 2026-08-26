@@ -347,7 +347,7 @@ function render() {
 function bindEvents() {
   el.refresh.addEventListener('click', fetchBalance);
 
-  // 打开充值页（system 权限 open_external；纯浏览器调试时兜底 window.open）
+  // 打开充值页（open_link 低危权限 open_external——http(s) 目标；纯浏览器调试时兜底 window.open）
   el.topup = document.getElementById('topup');
   el.topup.addEventListener('click', () => {
     if (window.__DESK_PP__?.invoke) {

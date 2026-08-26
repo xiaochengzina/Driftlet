@@ -331,6 +331,110 @@ fn check_entry_exists(base: &Path, manifest: &SkinManifest, lang: &str) -> Resul
     }
 }
 
+/// 把皮肤文件夹打成 .dskin 分发包，返回打包的文件数。
+/// 收集规则 / skip 清单 / zip 约定（Deflated + 正斜杠路径）与
+/// tools/pack-skin/src/main.rs 手工镜像——改动必须两边同步（镜像对拍脚本
+/// 已覆盖 skip 清单与体积上限）。
+/// 先过装载校验（manifest 合法 + entry 存在——打出去的包必须能装回来），
+/// 再经 .tmp 原子就位（中断不留半截包）。
+pub fn create_package(skin_dir: &Path, out_path: &Path, lang: &str) -> Result<usize, String> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    loader::load_skin_manifest(skin_dir)?;
+
+    // settings.json* 是用户的设置值数据（运行时生成），不打进分发包；
+    // *.dskin 是旧打包产物防滚进新包。比较大小写不敏感（全小写常量）
+    const SKIP_FILES: [&str; 6] = [
+        ".ds_store",
+        "thumbs.db",
+        "desktop.ini",
+        "settings.json",
+        "settings.json.bak",
+        "settings.json.tmp",
+    ];
+    // 版本控制与依赖目录不属于皮肤资源
+    const SKIP_DIRS: [&str; 3] = [".git", ".svn", "node_modules"];
+
+    fn collect(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+        for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let p = entry.path();
+            if p.is_dir() {
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if SKIP_DIRS.contains(&name) {
+                        continue;
+                    }
+                }
+                collect(&p, base, out)?;
+            } else if p.is_file() {
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    let lower = name.to_ascii_lowercase();
+                    if SKIP_FILES.contains(&lower.as_str()) || lower.ends_with(".dskin") {
+                        // 子目录里出现排除条目多半是误放（pack-skin 会提示）——
+                        // 应用侧无终端，记日志
+                        if dir != base {
+                            log::info!("package: skipping excluded entry in subdir {}", p.display());
+                        }
+                        continue;
+                    }
+                }
+                if let Ok(rel) = p.strip_prefix(base) {
+                    out.push(rel.to_path_buf());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = Vec::new();
+    collect(skin_dir, skin_dir, &mut files)
+        .map_err(|e| trf(lang, Key::PackageCreateFailed, &[&e]))?;
+
+    // 与 pack-skin 同口径：解压后合计上限（防误打包巨型目录）
+    let total_bytes: u64 = files
+        .iter()
+        .map(|r| fs::metadata(skin_dir.join(r)).map(|m| m.len()).unwrap_or(0))
+        .sum();
+    if total_bytes > MAX_TOTAL_BYTES {
+        return Err(trf(
+            lang,
+            Key::PackageCreateFailed,
+            &[&format!("文件总体积超过安装上限（{} MB）", MAX_TOTAL_BYTES / 1024 / 1024)],
+        ));
+    }
+
+    let tmp = out_path.with_extension("dskin.tmp");
+    let result: Result<(), String> = (|| -> Result<(), String> {
+        let file = fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        let mut zw = zip::ZipWriter::new(file);
+        let opts = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for rel in &files {
+            // zip 内路径统一用正斜杠；非 ASCII 文件名 zip crate 自动置 UTF-8 标志
+            let rel_unix = rel.to_string_lossy().replace('\\', "/");
+            zw.start_file(&rel_unix, opts).map_err(|e| e.to_string())?;
+            let data = fs::read(skin_dir.join(rel)).map_err(|e| e.to_string())?;
+            zw.write_all(&data).map_err(|e| e.to_string())?;
+        }
+        zw.finish().map_err(|e| e.to_string())?;
+        Ok(())
+    })()
+    .map_err(|e| trf(lang, Key::PackageCreateFailed, &[&e]));
+    match result {
+        Ok(()) => fs::rename(&tmp, out_path)
+            .map(|_| files.len())
+            .map_err(|e| {
+                let _ = fs::remove_file(&tmp);
+                trf(lang, Key::PackageCreateFailed, &[&e.to_string()])
+            }),
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
 /// 比较版本号。按点分数字段逐段比较（"1.2.0" > "1.10"？否，按数值 10 > 2）。
 /// 无法解析时退化为字符串比较：相同 = Same，不同 = Newer（视为更新）。
 pub fn compare_versions(a: Option<&str>, b: Option<&str>) -> VersionRelation {

@@ -113,7 +113,7 @@ class App {
 
   renderShell() {
     document.getElementById('app').innerHTML = `
-      <div class="titlebar">
+      <div class="titlebar" data-tauri-drag-region="deep">
         <div class="brand">
           <!-- 应用 logo：容器已带圆角与裁切，直接铺满即可 -->
           <div class="brand-logo" id="brand-logo">

@@ -931,6 +931,9 @@ Section Uninstall
   ; We do this when not updating (to preserve the registry value on updates)
   ${If} $UpdateMode <> 1
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
+    ; 安装期 FinishPageLeave 同步写过 StartupApproved 的启用位——一并删掉，
+    ; 否则任务管理器「启动」页留一条没有 Run 值对应的过期记录（审查 工-8）
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "driftlet"
   ${EndIf}
 
   ; App data deletion moved to NSIS_HOOK_POSTUNINSTALL (unconditional on

@@ -855,10 +855,72 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   border-color: transparent;
 }
 
+/* 低危蓝：信息色即 --accent（与 toast.info 同口径） */
+.perm-chip.low {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
 /* 未声明权限时的中性说明行（不成胶囊） */
 .perm-chips-none {
   font-size: 11px;
   color: var(--text-faint);
+}
+
+/* ── 备份导入审查（设置页导入确认框内的皮肤清单 + 权限胶囊）──
+   与 confirmDialog 的克制语言同源：无框文字清单，层级靠字重与间距承担，
+   不用卡片盒/填充块（与删除确认页视觉一致） */
+.backup-review-list {
+  margin-top: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+}
+
+.backup-skin-row .perm-chips {
+  margin-top: 4px;
+}
+
+/* 行间分隔 = 居中的 60% 宽短线（伪元素实现——border-top 只能通栏）。
+   用 --border（深色 9% 透明度）而非 --border-strong（20%）：维护者实机
+   对比后定——更强的分隔在确认框里偏抢，quiet 的 9% 更贴合对话框语言。
+   列表项分隔 ≠ 材质分层（设计系统禁的是发丝描边给面板分层） */
+.backup-skin-row + .backup-skin-row::before {
+  content: '';
+  display: block;
+  width: 60%;
+  margin: 0 auto 12px;
+  border-top: 1px solid var(--border);
+}
+
+.backup-skin-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.backup-skin-id {
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.backup-review-empty {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: left;
+}
+
+.backup-review-highwarn {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--danger);
+  text-align: left;
 }
 
 /* ── 主面板 ── */
@@ -1854,7 +1916,9 @@ body.hover-ok .action-btn.danger:not(:disabled):hover {
   border-radius: var(--radius-md);
   font-size: 12.5px;
   color: var(--text-primary);
-  z-index: 300;
+  /* 必须压过设置/确认弹层（z-400）：设置页内操作的成败反馈全经 toast——
+     被遮罩压住即「操作无反馈」（审查 C-F1） */
+  z-index: 500;
   box-shadow: var(--shadow-pop);
   animation: toastIn 0.25s var(--ease-out);
   max-width: 320px;
@@ -1938,6 +2002,11 @@ body.hover-ok .action-btn.danger:not(:disabled):hover {
   width: 360px;
   max-width: 88vw;
   text-align: center;
+}
+
+/* 宽档：内容型确认框（备份导入审查清单等——360px 塞清单太挤） */
+.confirm-dialog.wide {
+  width: 460px;
 }
 
 /* 图标徽章：.accent（安装皮肤包，天蓝）/ .danger（危险操作，红）两种语义色 */
@@ -2363,6 +2432,15 @@ body.hover-ok .settings-close:hover {
   color: var(--warning);
 }
 
+/* 低危蓝：信息色即 --accent（与 toast.info 同口径） */
+.wizard-perm.low {
+  background: var(--accent-soft);
+}
+
+.wizard-perm.low .wizard-perm-icon {
+  color: var(--accent);
+}
+
 .wizard-perm-text {
   display: flex;
   flex-direction: column;
@@ -2387,6 +2465,11 @@ body.hover-ok .settings-close:hover {
   color: var(--warning);
 }
 
+.wizard-perm.low .wizard-perm-label {
+  overflow-wrap: anywhere;
+  color: var(--accent);
+}
+
 .wizard-perm-risk {
   font-style: normal;
   font-size: 10px;
@@ -2404,6 +2487,11 @@ body.hover-ok .settings-close:hover {
 .wizard-perm.medium .wizard-perm-risk {
   border: 1px solid var(--warning);
   color: var(--warning);
+}
+
+.wizard-perm.low .wizard-perm-risk {
+  border: 1px solid var(--accent);
+  color: var(--accent);
 }
 
 .wizard-perm-desc {

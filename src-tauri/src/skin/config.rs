@@ -21,6 +21,14 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
             let content = content.trim_start_matches('\u{feff}');
             match serde_json::from_str::<AppConfig>(content) {
                 Ok(mut config) => {
+                    // language 字段加载路径归一化（与 set_language 命令的
+                    // normalize 同口径）：手改/导入的 config.json 里它是自由
+                    // 字符串，而该值会被烘焙进每个皮肤页面的注入桥 <script>——
+                    // 不归一 = 脚本注入向量（审查 B-F1；桥侧另有 </ 转义兜底）
+                    let norm = crate::i18n::normalize(&config.language);
+                    if config.language != norm {
+                        config.language = norm.to_string();
+                    }
                     if normalize_mode_flags(&mut config) {
                         // 迁移结果立即落盘：否则 wallpaper_layer=true 会留到
                         // 下次偶然保存，每次启动都重复触发迁移与重绘。
@@ -217,6 +225,34 @@ fn write_raw_config(config_dir: &Path, json: &serde_json::Value) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_config_normalizes_language_field() {
+        // B-F1：language 会烘焙进皮肤桥 <script>——加载路径必须归一化，
+        // 手改/导入的 config.json 携带的自由字符串不得直通
+        let dir = std::env::temp_dir().join(format!(
+            "driftlet-lang-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        // AppConfig 的 version / loaded_skins / skin_settings 是无默认值的
+        // 必填字段——只写 language 的极简 JSON 会被判损坏重置（本机恰为中文
+        // 环境时 default_language() 兜底成 zh-CN 而假性通过，英文 CI 露馅）。
+        // 必须写完整结构才真正走到归一化路径
+        fs::write(
+            dir.join(CONFIG_FILENAME),
+            r#"{"version":2,"loaded_skins":[],"skin_settings":{},"language":"zh</script><script>alert(1)</script>"}"#,
+        )
+        .unwrap();
+        let config = load_config(&dir);
+        assert_eq!(config.language, "zh-CN", "非法 language 必须归一化");
+        assert!(!config.language.contains("</"), "注入序列不得存活");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn load_config_tolerates_utf8_bom() {

@@ -18,7 +18,7 @@
 
     <!-- 面板：填充 + 内部滚动范式，内容超高在面板内滚动，不撑出窗口 -->
     <main class="panel">
-      <!-- 音量卡片：get_volume（免权限）/ set_volume / set_mute（需 system） -->
+      <!-- 音量卡片：get_volume / set_volume / set_mute（均 media） -->
       <section class="card">
         <h2><span id="vol-heading"></span><code>get_volume · set_volume · set_mute</code></h2>
         <div class="vol-row">
@@ -31,7 +31,7 @@
         <p class="note" id="vol-note"></p>
       </section>
 
-      <!-- 媒体卡片：get_media_info（1 秒轮询）/ media_control（需 system） -->
+      <!-- 媒体卡片：get_media_info（media，1 秒轮询）/ media_control（media） -->
       <section class="card">
         <h2><span id="media-heading"></span><code>get_media_info · media_control</code></h2>
         <div class="media-body">
@@ -56,7 +56,7 @@
         <p class="note" id="media-note"></p>
       </section>
 
-      <!-- 频谱卡片：get_audio_spectrum（环回，免权限）/ get_mic_spectrum（需 mic） -->
+      <!-- 频谱卡片：get_audio_spectrum（环回，media）/ get_mic_spectrum（mic） -->
       <section class="card">
         <h2><span id="spec-heading"></span><code>get_audio_spectrum · get_mic_spectrum</code></h2>
         <div class="seg">
@@ -69,7 +69,7 @@
         <p class="note" id="spec-note"></p>
       </section>
 
-      <!-- 通知卡片：show_notification（需 system） -->
+      <!-- 通知卡片：show_notification（notify） -->
       <section class="card">
         <h2><span id="notify-heading"></span><code>show_notification</code></h2>
         <button class="btn wide" id="btn-notify" type="button"></button>

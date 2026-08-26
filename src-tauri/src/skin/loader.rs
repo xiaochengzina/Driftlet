@@ -107,7 +107,10 @@ pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
     // 宽高钳到 [1, MAX_DIMENSION]（超大值会建出巨型表面吃 GPU 内存）；
     // opacity 非有限/越界回落 [0.1, 1.0]（opacity:0 + 置顶 + 巨尺寸 =
     // 隐形置顶吃点击窗口——安装向导不展示 window 默认值，必须在这里拦）。
-    // 注意：pack-skin 的镜像校验也要同步（AGENTS.md 硬约定）。
+    // 注意：此钳制是安装端加载时的归一化（非拒绝）；pack-skin 有提示式
+    // 镜像（声明值会被钳时打印提示，不改包内容、不拦截——给创作者
+    // 「所见即所得」，无「打包放行、安装拒载」分歧）。
+    // 改动必须同步镜像到 tools/pack-skin 并重建 exe。
     manifest.window.width = manifest.window.width.clamp(1, 10000);
     manifest.window.height = manifest.window.height.clamp(1, 10000);
     let op = manifest.window.opacity;
@@ -205,10 +208,12 @@ pub fn slugify_skin_id(name: &str) -> String {
         }
     }
     let slug = slug.trim_matches('-').chars().take(64).collect::<String>();
-    if !slug.is_empty() {
+    // 保留设备名兜底（审查 L5）：文件夹叫 "con" 会滑出保留名 id，下游
+    // validate_skin_id 会拒——这里直接避开，落哈希形态
+    if !slug.is_empty() && !is_reserved_device_name(&slug) {
         return slug;
     }
-    // All-non-ASCII name → stable hash-based id
+    // All-non-ASCII name（或滑出保留设备名）→ stable hash-based id
     let mut hash: u32 = 2166136261;
     for b in name.as_bytes() {
         hash ^= *b as u32;
@@ -357,6 +362,19 @@ mod tests {
         assert_eq!(manifest.name, "BOM Skin");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slugify_avoids_reserved_device_names() {
+        // 保留设备名不落 slug（审查 L5）：改落哈希形态，且产物须过
+        // validate_skin_id
+        for name in ["con", "CON", "nul", "com1", "LPT9"] {
+            let id = slugify_skin_id(name);
+            assert!(!is_reserved_device_name(&id), "{name} slugged to reserved {id}");
+            assert!(validate_skin_id(&id, "zh-CN").is_ok(), "{id} must be a valid id");
+        }
+        // 正常名字照旧走 slug
+        assert_eq!(slugify_skin_id("My Clock"), "my-clock");
     }
 
     #[test]

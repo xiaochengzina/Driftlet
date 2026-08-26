@@ -37,6 +37,29 @@ fn is_dos_device_name(name: &str) -> bool {
 pub const MAX_READ_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_WRITE_BYTES: usize = 16 * 1024 * 1024;
 
+/// 上限流式读的失败形态：IO 错误与超限分开——调用方对两者文案不同
+///（超限是明确的用户错误，IO 错误按路径无效/系统原文处理）。
+#[derive(Debug)]
+pub(crate) enum CapReadError {
+    Io(String),
+    TooLarge,
+}
+
+/// 按上限流式读文件：`take(max+1)` 后按实际字节再审——metadata 预检与
+/// 读取之间文件被换大（TOCTOU）也不会做无界分配。沙箱版与任意路径版
+/// 共用本函数（审查 M2：两处同语义曾写法不一，正是易错模式）。
+pub(crate) fn read_capped(path: &Path, max: u64) -> Result<Vec<u8>, CapReadError> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(max + 1).read_to_end(&mut buf))
+        .map_err(|e| CapReadError::Io(e.to_string()))?;
+    if buf.len() as u64 > max {
+        return Err(CapReadError::TooLarge);
+    }
+    Ok(buf)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DirEntry {
     pub name: String,
@@ -171,7 +194,13 @@ pub fn read_file(base: &Path, rel: &str, binary: bool, lang: &str) -> Result<Str
     if meta.len() > MAX_READ_BYTES {
         return Err(tr(lang, Key::FileTooLarge).to_string());
     }
-    let bytes = std::fs::read(&p).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
+    // metadata 预检后仍按上限+1 流式读：预检与读取之间文件被换大
+    //（TOCTOU）也不会做无界分配（审查 M2）
+    let bytes = match read_capped(&p, MAX_READ_BYTES) {
+        Ok(b) => b,
+        Err(CapReadError::TooLarge) => return Err(tr(lang, Key::FileTooLarge).to_string()),
+        Err(CapReadError::Io(_)) => return Err(trf(lang, Key::InvalidPath, &[rel])),
+    };
     if binary {
         Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
     } else {
@@ -180,6 +209,12 @@ pub fn read_file(base: &Path, rel: &str, binary: bool, lang: &str) -> Result<Str
 }
 
 pub fn write_file(base: &Path, rel: &str, data: &str, binary: bool, lang: &str) -> Result<(), String> {
+    // 二进制：先按 base64 展开上界拦超长输入再解码——先解码后限会把宿主
+    // 内存放大到输入串级别（复审 B-F4；界 = 解码后恰超 MAX 的最小输入长，
+    // 外加少量 padding 余量）
+    if binary && data.len() > (MAX_WRITE_BYTES / 3 + 1) * 4 + 4 {
+        return Err(tr(lang, Key::FileTooLarge).to_string());
+    }
     let bytes = if binary {
         base64::engine::general_purpose::STANDARD
             .decode(data)
@@ -325,6 +360,17 @@ mod tests {
         assert!(delete_file(&base, "skin.json::$DATA", "zh-CN").is_err());
         // 读/列路径同样不放行流语法
         assert!(resolve(&base, "a.txt:stream", false, "zh-CN").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_capped_enforces_limit_after_open() {
+        let base = temp_base("cap");
+        std::fs::write(base.join("f.bin"), b"123456").unwrap();
+        // 上限内直读 OK；恰好超限被拒——防线不依赖 metadata 预检（TOCTOU）
+        assert_eq!(read_capped(&base.join("f.bin"), 6).unwrap(), b"123456");
+        assert!(matches!(read_capped(&base.join("f.bin"), 5), Err(CapReadError::TooLarge)));
+        assert!(matches!(read_capped(&base.join("nope.bin"), 5), Err(CapReadError::Io(_))));
         let _ = std::fs::remove_dir_all(&base);
     }
 

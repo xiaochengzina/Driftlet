@@ -118,16 +118,21 @@ fn spawn_capture(shared: &Arc<Shared>, source: Source) {
 /// 采集线程退出（含 panic 展开）时复位存活标志，允许 spectrum 侧重建；
 /// 统一清空环形缓冲（loop 底部的清空只管 run_capture 正常返回的路径，
 /// panic 展开会跳过它）。
-struct AliveReset(Arc<Shared>);
+struct AliveReset {
+    shared: Arc<Shared>,
+    /// COM 套间须配对释放，但只在初始化成功后——init 失败路径上执行
+    /// CoUninitialize 是未配对调用（复审 B-F3），故用标志位区分
+    com_initialized: bool,
+}
 
 impl Drop for AliveReset {
     fn drop(&mut self) {
-        self.0.alive.store(false, Ordering::Relaxed);
-        self.0.samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.shared.alive.store(false, Ordering::Relaxed);
+        self.shared.samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
         if std::thread::panicking() {
             // panic 展开跳过了错误记录：alive 已假、error 为空时 spectrum
             // 侧认不到死亡、永不重建——补一条错误让下次调用走重建分支
-            let mut err = self.0.error.lock().unwrap_or_else(|e| e.into_inner());
+            let mut err = self.shared.error.lock().unwrap_or_else(|e| e.into_inner());
             if err.is_none() {
                 *err = Some("capture thread panicked".to_string());
             }
@@ -136,21 +141,24 @@ impl Drop for AliveReset {
         // 本线程的套间（线程退出前必须配对；本线程是专属采集线程，套间
         // 初始化者只有我们自己，配对不会误伤他人计数）
         #[cfg(target_os = "windows")]
-        unsafe {
-            windows::Win32::System::Com::CoUninitialize();
+        if self.com_initialized {
+            unsafe {
+                windows::Win32::System::Com::CoUninitialize();
+            }
         }
     }
 }
 
 fn capture_thread(shared: Arc<Shared>, source: Source) {
     shared.alive.store(true, Ordering::Relaxed);
-    let _alive = AliveReset(shared.clone());
+    let mut _alive = AliveReset { shared: shared.clone(), com_initialized: false };
     // COM (MTA) once per thread, before any WASAPI call.  S_FALSE (already
     // initialized) is a success HRESULT, so .ok() accepts it.
     if let Err(e) = wasapi::initialize_mta().ok() {
         *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("COM init failed: {}", e));
         return;
     }
+    _alive.com_initialized = true;
     loop {
         // Park until a skin starts polling again.
         while shared.last_poll.lock().unwrap_or_else(|e| e.into_inner()).elapsed() > Duration::from_secs(2) {

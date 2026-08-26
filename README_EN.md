@@ -11,7 +11,7 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Install, uninstall, load, and reload skins
 - Install/update skins from `.dskin` skin packages (zip format); updates preserve user settings data
 - Double-click a `.dskin` file to bring up the install wizard directly (the installer registers the file association)
-- Skin permission model: sensitive capabilities must be declared in `permissions` in `skin.json` (8 kinds: registry / Shell / system control (open external / notifications / power & Recycle Bin) / clipboard / microphone / arbitrary-path file access / skin control / media control); the install wizard lists them one by one and flags them with a two-tier high/medium risk grading (see "Security Model")
+- Skin permission model: sensitive capabilities must be declared in `permissions` in `skin.json` (12 kinds: registry / Shell / system control (open links / power & Recycle Bin) / clipboard / microphone / arbitrary-path file access / skin window control / media control / notifications / system info / network requests / opening web links); the install wizard lists them one by one and flags them with a three-tier high/medium/low risk grading (see "Security Model")
 - Custom skin settings: declare config items in `skin.json` (22 control types + groups + descriptions); the config panel is generated automatically
 - Adjust a skin's opacity, position, size, and zoom (the "Window" tab can enable resize-by-dragging: shows a frame hint, drag edges/corners to resize directly; zoom scales the whole window and its content from 50%–200%)
 - Always on top / pin to desktop (mutually exclusive, pin to desktop by default), disable dragging
@@ -22,8 +22,8 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Right-click a skin window to open the skin menu (open config / refresh / unload)
 - A global hotkey hides/shows all loaded skins with one keystroke (default Ctrl+Shift+Alt+D, changeable or disabled in Settings), with a synced checked item in the tray menu; Alt+F4 on a skin window only hides it — call it back via the hotkey or the tray
 - Browser refresh/navigation shortcuts like F5 are blocked in both the manager and skin windows — pages cannot be refreshed by keystroke; the window lifecycle belongs entirely to the manager
-- Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing)
-- Startup update check (on by default, can be turned off in Settings): prompts when a new GitHub release is available, with a one-click jump to the download page or an option to stop reminding
+- Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing; the import review shows the permission declarations of the skins inside, same conventions as the install wizard)
+- Startup update check (on by default, can be turned off in Settings): downloads the installer in the background once a new GitHub release is found (fixed name `update/Driftlet-update-setup.exe`, overwritten on the next download — no piles of installers), and only then shows an "Install now" prompt; on download failure it falls back to the "Go to download page" flow
 
 ---
 
@@ -87,9 +87,9 @@ npm run tauri build
 ├── CHANGELOG.md          # Version change log
 └── docs/                 # Development docs
     ├── 皮肤开发指南.md    # Interface docs and specs for skin creators
+    ├── skin-development-guide.md   # Skin development guide (English)
     ├── 关键机制.md        # Window / desktop layer implementation details (do not regress)
-    ├── 设计系统.md        # Manager UI visual system and frontend contract
-    └── 已知问题.md        # Known issues and future directions
+    └── critical-mechanisms.md      # Critical mechanisms (English counterpart)
 ```
 
 ---
@@ -265,12 +265,13 @@ See `docs/skin-development-guide.md` §8 for details.
 
 A third-party skin is **networked local code** (a full Chromium web page + backend command calls) — treat it with that trust model. Driftlet's lines of defense:
 
-- **No administrator rights needed**: every capability works as a standard user (the manifest is asInvoker); if launched from an elevated terminal/launcher, the app automatically relaunches itself at normal privilege via a one-shot scheduled task and exits the elevated process; if de-elevation fails, it tells the user and exits rather than running elevated (`DRIFTLET_ALLOW_ELEVATED=1` is an explicit opt-out; debug builds skip demotion by default).
+- **No administrator rights needed**: every capability works as a standard user (the manifest is asInvoker); if launched from an elevated terminal/launcher, the app notifies you once (consequences: shell-permissioned skins can silently run commands with full administrator rights; Explorer→manager .dskin drag is blocked — double-click or the file picker work instead) — "Yes" = continue and never ask again, "No" = exit (`DRIFTLET_ALLOW_ELEVATED=1` also opts out; debug builds skip the notice by default). No automatic demotion: the scheduled-task route trips behavioral AV detection and token APIs require admin privileges that standard users elevated via UAC don't have — both routes were field-tested and removed.
 
-- **Permission declaration**: 8 kinds of sensitive capabilities — registry, Shell, system control (open external / notifications / lock / sleep / shutdown / empty Recycle Bin), clipboard, microphone, arbitrary-path file read/write (`file_system`), cross-skin window-config & lifecycle control (`control`), and media control (`media`) — must be declared in `permissions` in `skin.json` before they can be called, and the backend enforces per-command checks; the install wizard lists each declaration with a two-tier grading (high risk `shell` / `system` / `file_system` in red, medium risk `registry` / `clipboard` / `mic` / `control` / `media` in yellow).
-- **Manager commands are callable only from the manager window**: all management commands (load / unload / settings, etc.) verify the caller window's identity; calls from skin windows are always rejected (except three harmless commands: dragging, frame resizing, and the right-click menu).
+- **Permission declaration**: 12 kinds of sensitive capabilities — registry, Shell, system control (open links / lock / sleep / shutdown / empty Recycle Bin), clipboard, microphone, arbitrary-path file read/write (`file_system`), cross-skin window-config & lifecycle control (`control`), media reads & control (`media`), system notifications (`notify`), read-only system info (`sys_info`), network requests (`network`), and opening web links (`open_link`) — must be declared in `permissions` in `skin.json` before they can be called, and the backend enforces per-command checks; the install wizard lists each declaration with a three-tier grading (high risk `shell` / `system` / `file_system` in red, medium risk `registry` / `clipboard` / `mic` / `control` in yellow, low risk `media` / `notify` / `sys_info` / `network` / `open_link` in blue). Link opening accepts only an http(s)/mailto/ms-settings URI whitelist — the local-path arm was removed entirely (an executable-extension blacklist is negative enumeration that can never keep up with the execution surface); skins that genuinely need to open local files declare the `shell` permission instead.
+- **Manager commands are callable only from the manager window**: all management commands (load / unload / settings, etc.) verify the caller window's identity; calls from skin windows are always rejected (except three harmless commands: dragging, frame resizing, and the right-click menu). Every IPC command is registered with its caller tier in the policy table at `src-tauri/src/policy.rs`, and a completeness test enforces "a new command must be registered and carry the matching gate in its body" — a missing gate fails the build instead of relying on human review.
 - **Zero grants for skin windows**: skin windows get no Tauri core/plugin permissions from capabilities; they can only reach backend commands through the injected bridge `__DESK_PP__.invoke`. 
-- **File sandbox**: a skin's file reads/writes are confined to its own folder (absolute paths and `..` escapes rejected); `skin.json` / `settings.json` are write- and delete-protected.
+- **File sandbox**: a skin's file reads/writes are confined to its own folder (absolute paths and `..` escapes rejected); `skin.json` / `settings.json` are write- and delete-protected. Even a skin holding `file_system` cannot mutate the app data roots (skins/config), the update directory, or the program directory — blocking silent self-escalation via skin.json edits and tampering with files the host later executes (installer / exe / dll).
+- **Update-channel integrity**: the auto-downloaded installer's SHA-256 is recorded at download time (inside the version marker), and "Install now" re-verifies marker completeness + a version newer than the running one + a matching file hash before executing — the trusted "install the official update" action can never execute an installer rewritten by a third party.
 - **Cross-skin isolation of settings values**: `settings.json` is intercepted by the skin:// protocol (including 8.3 short-name, ADS, and other bypass tricks), so skin A cannot read skin B's settings; `password` values never land on the page and are dispensed by `skin_get_setting` based on window identity.
 - **`.dskin` install hardening**: extraction guards against zip-slip and zip bombs (metered by actual decompressed bytes); size/file-count limits 64MB / 256MB / 5000; staged, rollback-style installation that leaves the old version intact on failure.
 

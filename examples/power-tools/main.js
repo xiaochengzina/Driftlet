@@ -232,7 +232,9 @@ function onFsPreview() {
   img.hidden = false;
   img.onerror = () => { img.hidden = true; showError('fs-result', t('resPreviewFailed')); };
   img.onload = () => showResult('fs-result', t('resPreviewOk'));
-  img.src = 'http://skin.localhost/__fs__?path=' + encodeURIComponent(path);
+  // 协议源口径与管理器/driftlet.js 的 fileUrl 一致：Windows = http://skin.localhost
+  const origin = navigator.userAgent.includes('Windows') ? 'http://skin.localhost' : 'skin://localhost';
+  img.src = origin + '/__fs__?path=' + encodeURIComponent(path);
 }
 
 /* ── 皮肤窗口配置（权限 control） ─────────────────────────── */

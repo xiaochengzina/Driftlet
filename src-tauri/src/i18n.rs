@@ -92,6 +92,7 @@ pub enum Key {
     RestoreSettingsFailed,
     OpenPackageFailed,
     PackageTooLarge,
+    PackageCreateFailed,
     NotValidZip,
     TooManyFiles,
     CreateTempDirFailed,
@@ -141,7 +142,7 @@ pub enum Key {
     PowerControlFailed,
     InvalidPowerAction,
     RecycleBinFailed,
-    DemoteFailed,
+    ElevatedNotice,
     // Only used in the non-Windows fallback arms.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     WindowsOnly,
@@ -239,6 +240,7 @@ fn zh(key: Key) -> &'static str {
         Key::RestoreSettingsFailed => "无法恢复用户设置: {}",
         Key::OpenPackageFailed => "无法打开皮肤包: {}",
         Key::PackageTooLarge => "皮肤包过大（超过 64 MB）",
+        Key::PackageCreateFailed => "打包失败: {}",
         Key::NotValidZip => "不是有效的皮肤包（无法作为 zip 打开）",
         Key::TooManyFiles => "皮肤包文件过多",
         Key::CreateTempDirFailed => "无法创建临时目录: {}",
@@ -285,7 +287,7 @@ fn zh(key: Key) -> &'static str {
         Key::PowerControlFailed => "电源操作失败：{}",
         Key::InvalidPowerAction => "无效的电源动作 '{}'",
         Key::RecycleBinFailed => "清空回收站失败：{}",
-        Key::DemoteFailed => "检测到 Driftlet 正以管理员权限运行，且自动降权失败（{}）。\n\nDriftlet 不需要管理员权限——请以普通方式重新启动（双击桌面或开始菜单图标）。",
+        Key::ElevatedNotice => "检测到 Driftlet 正以管理员权限运行。\n\n影响：声明 shell 权限的皮肤可静默以管理员权限执行命令（不经 UAC 弹窗）；从资源管理器拖 .dskin 到管理器会被系统拦截（可改用双击或文件选择器安装）。\n\n「是」= 继续运行（以后不再提示）；「否」= 退出。",
         Key::WindowsOnly => "该功能仅支持 Windows",
     }
 }
@@ -353,6 +355,7 @@ fn en(key: Key) -> &'static str {
         Key::RestoreSettingsFailed => "Failed to restore user settings: {}",
         Key::OpenPackageFailed => "Failed to open skin package: {}",
         Key::PackageTooLarge => "Skin package is too large (over 64 MB)",
+        Key::PackageCreateFailed => "Failed to create package: {}",
         Key::NotValidZip => "Not a valid skin package (cannot be opened as a zip)",
         Key::TooManyFiles => "Skin package contains too many files",
         Key::CreateTempDirFailed => "Failed to create temp directory: {}",
@@ -399,7 +402,7 @@ fn en(key: Key) -> &'static str {
         Key::PowerControlFailed => "Power operation failed: {}",
         Key::InvalidPowerAction => "Invalid power action '{}'",
         Key::RecycleBinFailed => "Failed to empty the recycle bin: {}",
-        Key::DemoteFailed => "Driftlet was launched with administrator rights, and automatic de-elevation failed ({}).\n\nDriftlet does not need administrator rights — please start it again normally (double-click the desktop or Start Menu icon).",
+        Key::ElevatedNotice => "Driftlet is running with administrator rights.\n\nConsequences: skins holding the shell permission can silently run commands with full administrator rights (no UAC prompt); dragging .dskin files from Explorer into the manager will be blocked by the system (use double-click or the file picker instead).\n\nYes = continue (never ask again); No = exit.",
         Key::WindowsOnly => "This feature is only supported on Windows",
     }
 }
@@ -489,6 +492,7 @@ mod tests {
             Key::InvalidSkinId,
             Key::ReplaceOldDirFailed,
             Key::InstallSkinFailed,
+            Key::PackageCreateFailed,
             Key::RestoreSettingsFailed,
             Key::OpenPackageFailed,
             Key::CreateTempDirFailed,
@@ -517,7 +521,6 @@ mod tests {
             Key::PowerControlFailed,
             Key::InvalidPowerAction,
             Key::RecycleBinFailed,
-            Key::DemoteFailed,
             Key::ManagerOnly,
             Key::BackupFormatUnsupported,
             Key::ReadBackupFailed,

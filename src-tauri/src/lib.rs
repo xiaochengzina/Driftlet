@@ -10,6 +10,7 @@ mod hotkey;
 #[cfg(debug_assertions)]
 mod hotreload;
 mod i18n;
+mod policy;
 mod skin;
 mod skin_api;
 mod tray;
@@ -111,12 +112,11 @@ pub fn run() {
     // run_command 普通权限/电源五条/WebView2 全都不吃提权），提权运行只会
     // 让皮肤拿到高完整性上下文、run_command 子进程全部提权、Explorer 拖放
     // 被 UIPI 拦截。必须在 Builder/single-instance 之前完成——降级 = 注册
-    // 一次性任务计划（/it 交互令牌）立即触发代起中完整性副本并退出本进程
-    // （此刻父进程什么都没占，无 handoff 竞态；子进程启动时自清任务）；
-    // 降级失败 = 原生消息框提示 + 硬退出（提权不可用是明确需求）。
-    // 令牌/explorer COM/runas 路线已实测堵死勿改回（详见 elevation.rs 头注释）。
+    // 提权启动提醒（不自动降级——任务计划/令牌 API 降级机械已全移除，见
+    // elevation.rs 头注的废弃路线清单）：检测到提权即弹原生消息框说明影响，
+    // 「是」= 写 allow_elevated 持久放行并继续，「否」= 退出。
     #[cfg(target_os = "windows")]
-    elevation::startup_demote();
+    elevation::startup_elevation_notice();
 
     tauri::Builder::default()
         // Must stay the first plugin: a second instance launched by
@@ -183,15 +183,33 @@ pub fn run() {
                 .unwrap_or_else(|e| {
                     fatal_startup_error(&format!("Failed to get app data directory: {}", e))
                 });
+
+            // 导入崩溃回滚必须赶在 resolve_portable_dir 之前（它的可写性探测
+            // 会创建目录，把「目录不存在」的崩溃现场抹成「两者都在」，回滚分支
+            // 沦为死代码——审查 A-H1）。对两种布局的候选位置各跑一次：
+            // .import-old 残留只会出现在上次导入实际运行的位置，另一处空转。
+            if let Some(exe_dir) = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            {
+                crate::backup::rollback_interrupted_import(
+                    &exe_dir.join("config"),
+                    &exe_dir.join("skins"),
+                );
+            }
+            crate::backup::rollback_interrupted_import(
+                &app_data_dir.join("config"),
+                &app_data_dir.join("skins"),
+            );
+
             let skins_dir = resolve_portable_dir(&app_data_dir, "skins");
             let config_dir = resolve_portable_dir(&app_data_dir, "config");
 
             // One-time migration of a config left by older versions in %APPDATA%.
             migrate_legacy_config(&app_data_dir, &config_dir, &skins_dir);
 
-            // 导入崩溃窗口回滚：上次备份导入在「新内容就位」阶段断电/崩溃时，
-            // 可能只剩 <name>.import-old 而数据目录缺失——启动即把旧数据挪回来
-            crate::backup::rollback_interrupted_import(&config_dir, &skins_dir);
+            // （回滚已提前到目录创建之前——见上；勿把 rollback_interrupted_import
+            // 挪回 resolve_portable_dir 之后）
 
             // 更新清理：新版本装上了（当前版本 ≥ 下载标记版本）→ 删掉更新
             // 目录里的安装包与标记（装完不留下次还用不到的旧安装包）
@@ -468,6 +486,7 @@ pub fn run() {
             commands::set_skin_custom_setting,
             commands::reset_skin_config,
             commands::pick_skin_package,
+            commands::package_skin,
             commands::inspect_skin_package,
             commands::install_skin_package,
             commands::remove_skin,
@@ -491,6 +510,7 @@ pub fn run() {
             commands::capture_skin_preview,
             commands::take_pending_package_install,
             commands::export_config,
+            commands::inspect_backup,
             commands::import_config,
             commands::open_log_window,
             commands::get_app_log,

@@ -204,7 +204,8 @@ pub fn get_skin_detail(window: tauri::WebviewWindow, app: AppHandle, skin_id: St
 /// 并发交错会让 registry 与 loaded_skins 状态分叉）。锁序固定：
 /// lifecycle_lock → install_lock（install 路径只持 install_lock 且不调
 /// 生命周期 impl，无反向路径）。impl 保持无锁——进程内调用方（reload 循环、
-/// 安装链路）已由外层串行。
+/// 安装链路、皮肤右键菜单——审查 M3 后菜单路径也在 spawn 内取这两把锁）
+/// 已由外层串行。
 async fn lifecycle_guards<'a>(state: &'a AppState) -> (impl Send + 'a, impl Send + 'a) {
     let a = state.lifecycle_lock.lock().await;
     let b = state.install_lock.lock().await;
@@ -220,7 +221,9 @@ pub async fn load_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: St
 }
 
 /// load_skin 的内部实现。进程内调用方（reload、皮肤右键菜单、包安装）不走
-/// IPC、没有可校验的调用窗口——它们的 IPC 入口已各自把关。
+/// IPC、没有可校验的调用窗口——它们的 IPC 入口已各自把关；生命周期串行由
+/// lifecycle_guards 保证（菜单路径在 spawn 闭包内取锁——审查 M3 前曾直调
+/// 无锁 impl，与热重载/管理器加载可竞态）。
 pub(crate) async fn load_skin_impl(app: AppHandle, skin_id: String) -> Result<(), String> {
     log::info!("load_skin called: {}", skin_id);
     let handle = app.clone();
@@ -685,13 +688,18 @@ pub(crate) fn set_skin_size_impl(app: &AppHandle, skin_id: &str, width: u32, hei
 #[tauri::command]
 pub async fn reset_skin_config(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<(), String> {
     require_manager(&window)?;
-    // 生命周期互斥：重置（删配置 + 重载）与并发 load/unload 不得交错
+    // 生命周期互斥：重置（删配置 + 重载）与并发 load/unload 不得交错；
+    // install_lock 同取——导入/安装/卸载（持 install_lock）换目录期间重置
+    // 不得插进来（审查 A-M1：曾只持 lifecycle_lock，与 install 族无互斥）
     let state = app.state::<AppState>();
-    let _lifecycle_guard = state.lifecycle_lock.lock().await;
+    let _guards = lifecycle_guards(&state).await;
     // 先删 settings 文件再删配置落盘：反向顺序下后者失败会「重置做一半」；
     // 文件删除失败仅告警（重置语义已达，残留文件下次写设置时覆盖）
     {
         let state = app.state::<AppState>();
+        // settings_lock：与 skin_set_setting 的 load→save 互斥——否则交错时
+        // 已删文件被在途写回「复活」（审查 A-M1；锁序 lifecycle→install→settings）
+        let _settings_guard = state.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(skin_dir) = find_skin_dir(&state, &skin_id) {
             // 衍生文件一并删：.bak 是损坏备份、.tmp 是原子写残留——重置后
             // 不该再有旧设置的任何痕迹
@@ -1104,7 +1112,11 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
             // to a dead hwnd (harmless but noisy PostMessage warning in
             // debug builds).  Errors are logged instead of returned.
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = reload_skin_impl(app, skin_id).await {
+                // 生命周期互斥（审查 M3）：与管理器命令/热重载同两把锁——
+                // impl 无锁、串行靠外层；锁序 lifecycle → install
+                let state = app.state::<AppState>();
+                let _guards = lifecycle_guards(&state).await;
+                if let Err(e) = reload_skin_impl(app.clone(), skin_id).await {
                     log::error!("skin menu reload failed: {}", e);
                 }
             });
@@ -1112,7 +1124,10 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
         factory::SKIN_MENU_UNLOAD => {
             // Fire-and-forget — same reason as SKIN_MENU_RELOAD.
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = unload_skin_impl(app, skin_id).await {
+                // 同 RELOAD 臂：先取生命周期锁再调无锁 impl（审查 M3）
+                let state = app.state::<AppState>();
+                let _guards = lifecycle_guards(&state).await;
+                if let Err(e) = unload_skin_impl(app.clone(), skin_id).await {
                     log::error!("skin menu unload failed: {}", e);
                 }
             });
@@ -1124,9 +1139,10 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
 
 /// 皮肤窗内 F12 / Ctrl+Shift+I 打开 DevTools（桥接 keydown 捕获后调用，
 /// capture 阶段注册防页面吞键）。浏览器加速键仍全局禁用，DevTools 经
-/// OpenDevToolsWindow 精确开锁。仅开发模式（设置页「高级」开关，运行时标志
-/// AppState.hot_reload_enabled）开启时生效；未开启静默 no-op——桥每次
-/// 按键都发，报错无处可去也无意义。
+/// OpenDevToolsWindow 精确开锁。由设置页「高级」开关（运行时标志
+/// AppState.hot_reload_enabled）门控——注意开关不经 cfg 门，release 构建
+/// 用户同样能打开（仅作用于皮肤自己的窗口，无提权面）；未开启静默
+/// no-op——桥每次按键都发，报错无处可去也无意义。
 #[tauri::command]
 pub fn open_skin_devtools(app: AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -1458,6 +1474,45 @@ pub async fn pick_skin_package(window: tauri::WebviewWindow, app: AppHandle) -> 
     }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))
 }
 
+/// 把已安装皮肤的文件夹打成 .dskin 分发包：保存对话框选输出位置后打包
+/// （与 tools/pack-skin 同口径：装载校验 + skip 清单 + Deflated zip）。
+/// 返回保存路径；用户取消返回 None。
+#[tauri::command]
+pub async fn package_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<Option<String>, String> {
+    require_manager(&window)?;
+    use tauri_plugin_dialog::DialogExt;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let dir = state.skins_dir.join(&skin_id);
+    if !dir.is_dir() {
+        return Err(trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]));
+    }
+    // 装载校验先行（manifest 合法 + entry 存在）——校验失败不出保存对话框
+    let manifest = loader::load_skin_manifest(&dir)?;
+    // 与 pack-skin 同名约定：<id>-<version>.dskin；无 version 退化为 <id>.dskin。
+    // manifest.id 是 Option（装载校验已保证已安装皮肤有 id），兜底回传 skin_id
+    let id = manifest.id.as_deref().unwrap_or(&skin_id);
+    let default_name = match &manifest.version {
+        Some(v) if !v.is_empty() => format!("{}-{}.dskin", id, v),
+        _ => format!("{}.dskin", id),
+    };
+    let handle = app.clone();
+    let filter_name = tr(&lang, Key::DskinFilterName);
+    let dest = tauri::async_runtime::spawn_blocking(move || {
+        handle.dialog().file()
+            .add_filter(filter_name, &["dskin"])
+            .set_file_name(&default_name)
+            .blocking_save_file()
+            .map(|p| p.to_string())
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))?;
+    let Some(dest) = dest else { return Ok(None) };
+    let path = std::path::PathBuf::from(&dest);
+    package::create_package(&dir, &path, &lang)?;
+    Ok(Some(dest))
+}
+
 // ─── Layout Backup (export / import) ───
 
 /// 导出布局备份：保存对话框选路径后，把 config/ + skins/ 打成一个 zip
@@ -1494,11 +1549,11 @@ pub async fn export_config(window: tauri::WebviewWindow, app: AppHandle) -> Resu
     Ok(Some(dest))
 }
 
-/// 导入布局备份：校验（体积/条目/zip-slip/必须含 config/config.json）→
-/// 卸载全部皮肤 → 暂存替换 config/ 与 skins/（失败整体回滚）→ 重建运行时
-/// 状态并按备份加载皮肤。用户取消返回 false。
+/// 导入布局备份第一步：选包 + 解包校验 + 返回包内皮肤清单与权限声明
+///（复审 A-M2——备份导入曾绕过 .dskin 向导的权限展示，审查确认后才许
+/// import_config 执行）。用户取消返回 None。
 #[tauri::command]
-pub async fn import_config(window: tauri::WebviewWindow, app: AppHandle) -> Result<bool, String> {
+pub async fn inspect_backup(window: tauri::WebviewWindow, app: AppHandle) -> Result<Option<crate::backup::BackupInspection>, String> {
     require_manager(&window)?;
     use tauri_plugin_dialog::DialogExt;
     let handle = app.clone();
@@ -1510,8 +1565,24 @@ pub async fn import_config(window: tauri::WebviewWindow, app: AppHandle) -> Resu
             .blocking_pick_file()
             .map(|p| p.to_string())
     }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))?;
-    let Some(picked) = picked else { return Ok(false) };
-    backup::import_backup(app, std::path::Path::new(&picked)).await?;
+    let Some(picked) = picked else { return Ok(None) };
+    let lang2 = lang.clone();
+    let info = tauri::async_runtime::spawn_blocking(move || {
+        crate::backup::inspect_backup(std::path::Path::new(&picked), &lang2)
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))??;
+    Ok(Some(info))
+}
+
+/// 导入布局备份第二步：执行导入（路径来自 inspect_backup 的审查结果——
+/// 前端审查确认框已展示包内皮肤与权限声明）。校验（体积/条目/zip-slip/
+/// 必须含 config/config.json）→ 卸载全部皮肤 → 暂存替换 config/ 与
+/// skins/（失败整体回滚）→ 重建运行时状态并按备份加载皮肤。
+#[tauri::command]
+pub async fn import_config(window: tauri::WebviewWindow, app: AppHandle, path: String) -> Result<bool, String> {
+    require_manager(&window)?;
+    backup::import_backup(app, std::path::Path::new(&path)).await?;
     Ok(true)
 }
 
@@ -1646,16 +1717,28 @@ pub fn get_app_config(window: tauri::WebviewWindow, app: AppHandle) -> Result<Ap
 
 // ─── Settings ───
 
+/// 自启动同步统一入口（pub(crate)：backup.rs 导入重建也走这里）。
+/// 并发开关竞态的幂等处理：auto-launch 的 `disable()` 在 Run 值不存在时
+/// 报 os error 2（注册表 DeleteValue 找不到值）——反复/并发点开关会撞出
+///（用户实测：设置页反复随机点选项，极小概率弹「系统找不到指定的文件」）。
+/// 串行化同向调用；「已关闭」按目标已达处理。enable 的 os error 2
+///（Run 键缺失 = 环境故障）与 is_enabled 读失败照常透传。
+pub(crate) fn sync_autostart(app: &AppHandle, on: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    static AUTOSTART_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = AUTOSTART_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = if on { app.autolaunch().enable() } else { app.autolaunch().disable() };
+    match r {
+        Ok(()) => Ok(()),
+        Err(e) if !on && e.to_string().contains("(os error 2)") => Ok(()), // 已关 = 目标态
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[tauri::command]
 pub fn set_autostart(window: tauri::WebviewWindow, app: AppHandle, on: bool) -> Result<(), String> {
     require_manager(&window)?;
-    use tauri_plugin_autostart::ManagerExt;
-
-    if on {
-        app.autolaunch().enable().map_err(|e| e.to_string())?;
-    } else {
-        app.autolaunch().disable().map_err(|e| e.to_string())?;
-    }
+    sync_autostart(&app, on)?;
 
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -1804,16 +1887,13 @@ pub async fn download_update(window: tauri::WebviewWindow, app: AppHandle, url: 
 
 /// 立即安装：启动已下载的安装包并整站退出（NSIS 需要 exe 不被占用才能
 /// 覆盖；安装器的 CheckIfAppIsRunning 会等本进程退掉）。安装包必须存在
-/// 于固定更新目录——只接受「我们刚下载的那一个」，不接受任意路径。
+/// 于固定更新目录且通过 verified_installer 核对（版本标记 + SHA-256——
+/// 「立即安装」是可信动作，不能执行被第三方改写过的安装包，审查 H2）。
 #[tauri::command]
 pub fn install_update(window: tauri::WebviewWindow, app: AppHandle) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
-    let installer = crate::update::update_dir(&state.config_dir)
-        .join(crate::update::INSTALLER_FILENAME);
-    if !installer.is_file() {
-        return Err("installer not downloaded yet".to_string());
-    }
+    let installer = crate::update::verified_installer(&state.config_dir)?;
     std::process::Command::new(&installer)
         .spawn()
         .map_err(|e| e.to_string())?;

@@ -57,11 +57,11 @@ export function closeOnMaskClick(overlay, close) {
  * 确认点击后先关弹窗再执行 onConfirm（可为 async）；
  * onCancel 仅在未确认关闭（取消按钮 / Esc / 点遮罩）时调用。
  */
-export function confirmDialog({ title, bodyHtml, hint, confirmText, danger = false, onCancel, onConfirm }) {
+export function confirmDialog({ title, bodyHtml, hint, confirmText, danger = false, wide = false, onCancel, onConfirm }) {
   const overlay = document.createElement('div');
   overlay.className = 'confirm-overlay';
   overlay.innerHTML = `
-    <div class="confirm-dialog">
+    <div class="confirm-dialog${wide ? ' wide' : ''}">
       <div class="confirm-icon${danger ? ' danger' : ''}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
       <h3>${title}</h3>
       <p>${bodyHtml}</p>

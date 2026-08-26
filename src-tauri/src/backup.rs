@@ -75,6 +75,18 @@ pub fn export_backup(config_dir: &Path, skins_dir: &Path, dest: &Path, lang: &st
             .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
 
         add_dir(&mut zip, config_dir, "config", opts, lang)?;
+        // 首次安装从未改过设置时磁盘上没有 config.json（启动只建目录、首次
+        // 改设置才落盘）——直接导出会产出不含 config/config.json 的包，导入
+        // 侧 validate_backup 必拒（「不是有效备份」，用户首装即导出即导入
+        // 实测命中）。缺则把默认配置补进包——该场景下内存配置与默认等价
+        //（所有设置变更即改即存，文件缺失 = 从未变更过）
+        if !config_dir.join("config.json").is_file() {
+            let default_json = serde_json::to_string(&crate::skin::types::AppConfig::default())
+                .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
+            zip.start_file("config/config.json", opts).map_err(fail)?;
+            zip.write_all(default_json.as_bytes())
+                .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
+        }
         add_dir(&mut zip, skins_dir, "skins", opts, lang)?;
         zip.finish().map_err(fail)?;
         Ok(())
@@ -163,6 +175,78 @@ fn add_dir(
 }
 
 // ─── Import ─────────────────────────────────────────────────────────────
+
+/// 导入前审查：备份包内的皮肤清单及其权限声明（复审 A-M2：备份导入曾绕过
+/// .dskin 安装引导页的权限展示，高权限皮肤可静默落地）。解包+校验与导入
+/// 同一条防线（extract_backup / validate_backup），只读不写。
+#[derive(serde::Serialize)]
+pub struct BackupSkinInfo {
+    pub id: String,
+    pub name: String,
+    pub name_en: Option<String>,
+    pub version: Option<String>,
+    pub permissions: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct BackupInspection {
+    /// 所选备份文件路径（确认后回传 import_config 执行）
+    pub path: String,
+    pub skins: Vec<BackupSkinInfo>,
+    /// 备份生成时的宿主版本（备份清单内记录；旧备份可能缺）
+    pub app_version: Option<String>,
+}
+
+pub fn inspect_backup(package_path: &Path, lang: &str) -> Result<BackupInspection, String> {
+    let extracted = extract_backup(package_path, lang)?;
+    validate_backup(extracted.path(), lang)?;
+    // 备份清单的应用版本（导出时写入，见 export_backup；缺失容忍）
+    let app_version = fs::read_to_string(extracted.path().join(MANIFEST_NAME))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("app_version")?.as_str().map(String::from));
+    let skins_root = extracted.path().join("skins");
+    let mut skins = Vec::new();
+    if skins_root.is_dir() {
+        for entry in fs::read_dir(&skins_root).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            // 暂存残留（.staging-* / .old / .import-old）不参与展示
+            let folder = entry.file_name().to_string_lossy().to_string();
+            if folder.starts_with('.') {
+                continue;
+            }
+            // 审查清单要如数列出包内皮肤——包括入口文件损坏/缺失、导入后
+            // 加载不上的（用户有权知道包里有它）：不走 loader 的完整装载校验
+            //（load_skin_manifest 会查 entry 存在性），只读 manifest 本体
+            let text = match fs::read_to_string(dir.join("skin.json")) {
+                Ok(t) if t.len() <= loader::MAX_MANIFEST_BYTES as usize => t,
+                _ => continue,
+            };
+            let Ok(manifest) =
+                serde_json::from_str::<crate::skin::types::SkinManifest>(text.trim_start_matches('\u{feff}'))
+            else {
+                continue;
+            };
+            skins.push(BackupSkinInfo {
+                id: loader::resolve_skin_id(&manifest, &folder),
+                name: manifest.name,
+                name_en: manifest.name_en,
+                version: manifest.version,
+                permissions: manifest.permissions,
+            });
+        }
+    }
+    skins.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(BackupInspection {
+        path: package_path.to_string_lossy().into_owned(),
+        skins,
+        app_version,
+    })
+}
 
 pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), String> {
     let lang = app.state::<AppState>().lang();
@@ -357,9 +441,15 @@ fn import_old_sibling(dir: &Path) -> PathBuf {
     ))
 }
 
-/// 导入崩溃窗口的启动回滚：②就位阶段断电/崩溃后，可能只剩 `<name>.import-old`
-/// 而 `<name>` 缺失或残缺——数据目录「凭空消失」。启动时检测：<name>.import-old
-/// 存在且 <name> 不存在则 rename 回滚；两者都在则视为已成功完成，丢弃 .import-old。
+/// 导入崩溃窗口的启动回滚。`.import-old` 存在 = 上次导入在就位/收尾阶段
+/// 中断（成功路径③会删掉它们）。此时 `<name>` 目录可能是缺失（①后未②）、
+/// 半成品（②中途崩）或完好（③删旧前崩）——三种形态一律把旧副本挪回去：
+/// 完好副本下用户重导一次即可；半成品副本下这是唯一的完好数据。
+/// （旧语义「两者都在 = 已成功，删 .import-old」会把②中途崩的半成品当成功、
+/// 把唯一完好数据静默删除——审查 A-H1。）
+/// **调用时必须赶在「会创建数据目录」的代码之前**（resolve_portable_dir 的
+/// 可写性探测会 create_dir_all）——否则目录恒存在，①后未②的崩溃现场被
+/// 抹成「两者都在」，回滚沦为死代码（A-H1 的另一半根因）。
 /// 返回回滚条数（日志用）。
 pub fn rollback_interrupted_import(config_dir: &Path, skins_dir: &Path) -> usize {
     let mut rolled = 0;
@@ -368,16 +458,15 @@ pub fn rollback_interrupted_import(config_dir: &Path, skins_dir: &Path) -> usize
         if !old.exists() {
             continue;
         }
-        if !dir.exists() {
-            match fs::rename(&old, dir) {
-                Ok(()) => {
-                    rolled += 1;
-                    log::warn!("import rollback: {:?} restored from interrupted import", dir);
-                }
-                Err(e) => log::error!("import rollback failed for {:?}: {}", dir, e),
+        if dir.exists() {
+            let _ = fs::remove_dir_all(dir);
+        }
+        match fs::rename(&old, dir) {
+            Ok(()) => {
+                rolled += 1;
+                log::warn!("import rollback: {:?} restored from interrupted import", dir);
             }
-        } else {
-            let _ = fs::remove_dir_all(&old);
+            Err(e) => log::error!("import rollback failed for {:?}: {}", dir, e),
         }
     }
     rolled
@@ -418,13 +507,9 @@ async fn rebuild_runtime(app: &AppHandle) {
     crate::tray::rebuild_tray_menu(app, &language);
 
     {
-        use tauri_plugin_autostart::ManagerExt;
-        let r = if autostart {
-            app.autolaunch().enable()
-        } else {
-            app.autolaunch().disable()
-        };
-        if let Err(e) = r {
+        // 与 set_autostart 命令同一入口：并发/残留态下的幂等同步
+        //（disable 在 Run 值不存在时报 os error 2，统一按目标已达处理）
+        if let Err(e) = crate::commands::sync_autostart(app, autostart) {
             log::warn!("import: failed to sync autostart: {}", e);
         }
     }
@@ -455,6 +540,77 @@ impl Drop for TempDirGuard {
 mod tests {
     use super::*;
 
+    /// 审查 A-H1：`.import-old` 存在即回滚——覆盖三种崩溃形态（目录缺失 /
+    /// 半成品并存 / 完好并存），不再以「两者都在」推断成功而删旧数据。
+    #[test]
+    fn rollback_restores_on_old_residue_in_all_crash_shapes() {
+        let root = TestDir::new("rollback");
+        let config_dir = root.0.join("config");
+        let skins_dir = root.0.join("skins");
+
+        // 形态 1：①后未②——目录缺失、只剩 .import-old
+        let old_cfg = import_old_sibling(&config_dir);
+        fs::create_dir_all(&old_cfg).unwrap();
+        fs::write(old_cfg.join("config.json"), r#"{"version":2}"#).unwrap();
+        assert_eq!(rollback_interrupted_import(&config_dir, &skins_dir), 1);
+        assert!(config_dir.join("config.json").is_file(), "旧数据必须回滚就位");
+        assert!(!old_cfg.exists(), "回滚后 .import-old 必须消失");
+
+        // 形态 2：②中途崩——半成品新目录与完好旧副本并存（旧语义会删旧留半）
+        fs::create_dir_all(&config_dir).unwrap(); // 半成品（无 config.json）
+        fs::create_dir_all(&old_cfg).unwrap();
+        fs::write(old_cfg.join("config.json"), r#"{"version":2}"#).unwrap();
+        assert_eq!(rollback_interrupted_import(&config_dir, &skins_dir), 1);
+        assert!(config_dir.join("config.json").is_file(), "半成品必须被旧副本覆盖");
+        assert!(!old_cfg.exists());
+
+        // 形态 3：③删旧前崩——新目录完好、旧副本也在（回滚旧副本=丢已完成
+        // 的导入，用户重导一次即可；这是安全方向的取舍）
+        fs::write(config_dir.join("config.json"), r#"{"version":3}"#).unwrap();
+        fs::create_dir_all(&old_cfg).unwrap();
+        fs::write(old_cfg.join("config.json"), r#"{"version":2}"#).unwrap();
+        assert_eq!(rollback_interrupted_import(&config_dir, &skins_dir), 1);
+        let text = fs::read_to_string(config_dir.join("config.json")).unwrap();
+        assert!(text.contains("\"version\":2"), "并存时旧副本优先（安全方向）");
+
+        // 无残留 = 零动作
+        assert_eq!(rollback_interrupted_import(&config_dir, &skins_dir), 0);
+    }
+
+    /// 审查 A-M2：导出→审查 往返——inspect_backup 必须能读回本应用导出的包
+    ///（含皮肤清单与权限声明），且通过 validate_backup 的 config 校验
+    #[test]
+    fn inspect_backup_roundtrips_export() {
+        let root = TestDir::new("inspect");
+        let (config_dir, skins_dir) = make_data_dirs(&root.0);
+        let dest = root.0.join("backup.zip");
+        export_backup(&config_dir, &skins_dir, &dest, "zh-CN").unwrap();
+        let info = inspect_backup(&dest, "zh-CN").unwrap_or_else(|e| panic!("inspect failed: {}", e));
+        assert_eq!(info.path, dest.to_string_lossy());
+        assert!(info.skins.iter().any(|s| s.id == "clock"), "包内皮肤必须列出");
+        assert_eq!(
+            info.app_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "宿主版本必须读回"
+        );
+    }
+
+    /// 首装路径（用户实测报告）：从未改过设置时 config.json 不在盘上——
+    /// 导出仍须产出含 config/config.json 的有效备份（导入校验的合法性标志）
+    #[test]
+    fn export_includes_config_json_when_never_saved() {
+        let root = TestDir::new("fresh-export");
+        let config_dir = root.0.join("config");
+        let skins_dir = root.0.join("skins");
+        fs::create_dir_all(&config_dir).unwrap(); // 无 config.json
+        fs::create_dir_all(&skins_dir).unwrap(); // 无皮肤
+        let dest = root.0.join("backup.zip");
+        export_backup(&config_dir, &skins_dir, &dest, "zh-CN").unwrap();
+        // inspect 内部即过 validate_backup——通过即有效备份
+        let info = inspect_backup(&dest, "zh-CN").unwrap();
+        assert!(info.skins.is_empty(), "无皮肤的备份清单为空");
+    }
+
     struct TestDir(PathBuf);
     impl TestDir {
         fn new(name: &str) -> Self {
@@ -484,7 +640,8 @@ mod tests {
         fs::create_dir_all(&config_dir).unwrap();
         fs::create_dir_all(&skins_dir).unwrap();
         fs::write(config_dir.join("config.json"), r#"{"version":2}"#).unwrap();
-        fs::write(skins_dir.join("skin.json"), r#"{"id":"clock"}"#).unwrap();
+        fs::write(skins_dir.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(skins_dir.join("index.html"), "<html></html>").unwrap();
         fs::write(skins_dir.join("settings.json"), r#"{"city":"shanghai"}"#).unwrap();
         // 应被跳过的暂存残留
         fs::create_dir_all(root.join("skins").join(".staging-junk")).unwrap();

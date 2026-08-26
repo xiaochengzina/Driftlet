@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * sys-monitor —— 免权限系统信息仪表板。
+ * sys-monitor —— 只读系统信息仪表板（sys_info 低危权限）。
  *
- * 演示文档 §5.2 中除 3 个音量/媒体相关外的 12 个只读系统信息命令（均无需声明 permissions）：
+ * 演示 12 个只读系统信息命令（均需声明 sys_info 低危权限）：
  *   速率类（每秒轮询）：get_cpu_info / get_gpu_info / get_memory_info /
  *     get_disks_info / get_network_info / get_processes / get_battery_info /
  *     get_idle_time / get_foreground_window_info
@@ -24,8 +24,8 @@
 const I18N = {
   'zh-CN': {
     title: '系统监视',
-    subtitle: '12 个免权限只读接口 · 速率类每秒轮询',
-    badgeNoPerm: '免权限',
+    subtitle: '12 个只读接口（sys_info 低危） · 速率类每秒轮询',
+    badgeLowRisk: '低危只读',
     bridgeOff: '桥不可用（纯浏览器预览）——系统信息仅在 Driftlet 内可见',
     card: {
       cpu: 'CPU', gpu: 'GPU', mem: '内存', disks: '磁盘', cspace: 'C: 卷空间',
@@ -36,6 +36,7 @@ const I18N = {
     cpuMeta: (p, l, mhz) => `${p} 物理核 / ${l} 线程 · ${mhz} MHz`,
     vram: (used, total, pct) => `显存 ${used} / ${total}（${pct}）`,
     usedOf: (used, total) => `${used} / ${total}`,
+    freeSuffix: '可用',
     diskRate: (r, w) => `读 ${r} 写 ${w}`,
     mac: (m) => `MAC ${m}`,
     localIps: (ips) => `本机 IP：${ips}`,
@@ -67,8 +68,8 @@ const I18N = {
   },
   en: {
     title: 'System Monitor',
-    subtitle: '12 permission-free read-only APIs · rates polled every second',
-    badgeNoPerm: 'No permissions',
+    subtitle: '12 read-only APIs (low-risk sys_info) · rates polled every second',
+    badgeLowRisk: 'Low-risk read-only',
     bridgeOff: 'Bridge unavailable (plain browser preview) — system info is only visible inside Driftlet',
     card: {
       cpu: 'CPU', gpu: 'GPU', mem: 'Memory', disks: 'Disks', cspace: 'Volume C:',
@@ -79,6 +80,7 @@ const I18N = {
     cpuMeta: (p, l, mhz) => `${p} physical / ${l} logical cores · ${mhz} MHz`,
     vram: (used, total, pct) => `VRAM ${used} / ${total} (${pct})`,
     usedOf: (used, total) => `${used} / ${total}`,
+    freeSuffix: 'free',
     diskRate: (r, w) => `R ${r}  W ${w}`,
     mac: (m) => `MAC ${m}`,
     localIps: (ips) => `Local IPs: ${ips}`,
@@ -382,7 +384,7 @@ function renderDiskSpace() {
   setBar('cspace-bar', c?.usage_pct);
   setText('cspace-pct', fmtPct(c?.usage_pct));
   setText('cspace-text', c
-    ? `${t('usedOf', fmtBytes(c.used), fmtBytes(c.total))} · ${fmtBytes(c.free)} ${lang === 'en' ? 'free' : '可用'}`
+    ? `${t('usedOf', fmtBytes(c.used), fmtBytes(c.total))} · ${fmtBytes(c.free)} ${t('freeSuffix')}`
     : '—');
 }
 
@@ -595,7 +597,7 @@ function renderOs() {
 function renderStaticTexts() {
   setText('skin-title', t('title'));
   setText('subtitle', t('subtitle'));
-  setText('perm-badge', t('badgeNoPerm'));
+  setText('perm-badge', t('badgeLowRisk'));
   setText('bridge-warn', t('bridgeOff'));
   document.querySelectorAll('h2[data-card]').forEach((h2) => {
     h2.textContent = t('card')[h2.dataset.card] || h2.dataset.card;

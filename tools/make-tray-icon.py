@@ -7,18 +7,19 @@
 # legible. src-tauri/src/tray.rs picks the exact size at runtime via
 # GetSystemMetrics(SM_CXSMICON).
 #
-# Design: logo-form badge (L) — rounded-square #2da0db tile + white
-# silhouette of the ORIGINAL logo bottle (exact shape and tilt, extracted
-# from icon/托盘图标/托盘图标_1024.png), inner elements removed. The tile
-# carries its own background, so it reads on both light and dark taskbars.
-# Other variants remain available as CLI args: L2 (parametric logo-form),
-# A (outlined), B1 (two-color), P1/P2/P3 (mono silhouettes), C1/C2/C3
-# (badge, upright parametric bottle).
+# Design: logo-form badge — rounded-square #2da0db tile + white bottle
+# silhouette, drawn parametrically in the logo's form language (variant L2,
+# the default — fully self-contained). Variant L (exact logo silhouette) is
+# still available but needs the original master icon/托盘图标/
+# 托盘图标_1024.png, which is NOT in this repo (kept out of version control);
+# run L only on a machine that has it. Other variants: A (outlined),
+# B1 (two-color), P1/P2/P3 (mono silhouettes), C1/C2/C3 (badge, upright
+# parametric bottle).
 # Replaces the old diagonal master-downscale pipeline
 # (tools/make-tray-pngs.ps1), which was unrecognizable at tray sizes.
 #
 # Requires Pillow (pip install pillow).
-# Usage: python tools/make-tray-icon.py [variant]   (default L)
+# Usage: python tools/make-tray-icon.py [variant]   (default L2)
 import math
 import os
 from PIL import Image, ImageDraw
@@ -170,6 +171,12 @@ def logo_bottle_mask():
         from PIL import ImageChops
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         path = os.path.join(root, "icon", "托盘图标", "托盘图标_1024.png")
+        if not os.path.isfile(path):
+            raise SystemExit(
+                "variant L needs the original master icon, which is not in "
+                "this repo:\n  " + path + "\nUse the default variant L2 "
+                "(parametric logo-form, self-contained) instead."
+            )
         a = Image.open(path).convert("RGBA").split()[3]
         a = a.point(lambda v: 255 if v > 64 else 0)
         inv = a.point(lambda v: 255 - v)
@@ -258,7 +265,7 @@ def render_badge(size, tile_color):
 
 if __name__ == "__main__":
     import sys
-    variant = sys.argv[1] if len(sys.argv) > 1 else "L"
+    variant = sys.argv[1] if len(sys.argv) > 1 else "L2"
     for s in SIZES:
         out = os.path.join(OUT_DIR, f"tray-{s}.png")
         render(s, variant).save(out)

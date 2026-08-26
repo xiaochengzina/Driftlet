@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]  # 开发仓库 master / 公开仓库 main（同一文件两仓库通用）
   pull_request:
 
 jobs:
@@ -18,3 +18,9 @@ jobs:
         run: npm ci && npm run build
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+      # AGENTS.md 约定 #2 的护栏：pack-skin 镜像漂移即失败（字段/上限/校验函数
+      # 对拍），再编译一次证明可构建
+      - name: pack-skin mirror check
+        run: python tools/check-pack-skin-mirror.py
+      - name: pack-skin builds
+        run: cargo build --release --manifest-path tools/pack-skin/Cargo.toml

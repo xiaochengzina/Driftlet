@@ -2,7 +2,7 @@
   "id": "deepseek-balance",
   "name": "DeepSeek 余额",
   "name_en": "DeepSeek Balance",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "author": "Driftlet",
   "description": "自动查询 DeepSeek API 账户余额：展示赠金与充值构成，低余额预警 + Windows 通知，一键打开充值页",
   "description_en": "Automatically queries your DeepSeek API account balance: granted/topped-up breakdown, low-balance warning + Windows notification, and one-click top-up page",
@@ -17,7 +17,7 @@
     "resizable": false,
     "opacity": 1.0
   },
-  "permissions": ["system"],
+  "permissions": ["open_link", "notify"],
   "settings": [
     { "key": "api_key", "type": "password", "label": "API Key", "label_en": "API Key",
       "group": "接入", "group_en": "Connection",

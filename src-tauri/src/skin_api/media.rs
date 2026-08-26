@@ -170,6 +170,13 @@ pub fn control(action: MediaAction) -> Result<bool, String> {
 /// 拖动进度条寻址：position_secs 为绝对秒数。源不支持寻址时返回 Ok(false)
 ///（不是错误——皮肤据此把进度条锁成只读）。
 pub fn seek(position_secs: f64) -> Result<bool, String> {
+    // 入参钳制（审查 L4）：非有限值归 0、范围钳 0–24h——负值/巨值不直达
+    // SMTC（Rust 的 as i64 本就饱和转换无 UB，这里钳的是语义边界）
+    let position_secs = if position_secs.is_finite() {
+        position_secs.clamp(0.0, 86_400.0)
+    } else {
+        0.0
+    };
     let mgr = Manager::RequestAsync()
         .map_err(|e| e.to_string())?
         .get()

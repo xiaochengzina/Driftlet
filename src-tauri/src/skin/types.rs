@@ -40,11 +40,12 @@ pub struct SkinManifest {
     pub entry: String,
     #[serde(default)]
     pub window: WindowDefaults,
-    /// 敏感能力声明（"registry" / "shell" / "system" / "clipboard" / "mic" /
-    /// "file_system" / "control"，对应 skin_api 的 PERM_* 常量）。皮肤调用对应的后端命令前
-    /// 必须在此声明，否则后端拒绝并返回 PermissionDenied。
-    /// 未知名一律忽略；只读系统信息命令、皮肤自身目录内的文件读写
-    /// （沙箱隔离）不需要声明。
+    /// 敏感能力声明（12 种："registry" / "shell" / "system" / "clipboard" /
+    /// "mic" / "file_system" / "control" / "media" / "notify" / "sys_info" /
+    /// "network" / "open_link"，对应 skin_api 的 PERM_* 常量）。皮肤调用对应的
+    /// 后端命令前必须在此声明，否则后端拒绝并返回 PermissionDenied。
+    /// 未知名一律忽略；皮肤自身目录内的文件读写（沙箱隔离）与自己 schema 的
+    /// 设置读写等免权限基线不需要声明。
     #[serde(default)]
     pub permissions: Vec<String>,
     /// Declarative custom settings; the manager renders one control per entry
@@ -379,6 +380,11 @@ pub struct AppConfig {
     /// 「不再提示更新」后取消也会关掉它。
     #[serde(default = "default_update_check")]
     pub update_check: bool,
+    /// 允许提权运行（持久放行标记）：降级失败/降无可降（真 Administrator）
+    /// 时用户在明示框选「继续」后写入——后续启动直接跳过降级不再提示
+    ///（elevation.rs 的 should_demote 读它）。
+    #[serde(default)]
+    pub allow_elevated: bool,
 }
 
 fn default_hot_reload() -> bool {
@@ -434,6 +440,7 @@ impl Default for AppConfig {
             hotkey_toggle_skins: default_hotkey_toggle_skins(),
             hot_reload: default_hot_reload(),
             update_check: default_update_check(),
+            allow_elevated: false,
         }
     }
 }

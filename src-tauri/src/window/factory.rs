@@ -919,7 +919,12 @@ pub fn create_skin_window(
     // Coordinates are logical pixels, matching the values stored in config.
     let window = WebviewWindowBuilder::new(app, &label, webview_url)
         .title(&skin.manifest.name)
-        .inner_size(config.width as f64 * zoom, config.height as f64 * zoom)
+        // 持久化配置的宽高同钳 [1,10000]——config.json 可手改，钳制不能只
+        // 拦 manifest 默认值一侧（复审 B-F5：巨型表面吃 GPU 内存/建窗失败）
+        .inner_size(
+            config.width.clamp(1, 10000) as f64 * zoom,
+            config.height.clamp(1, 10000) as f64 * zoom,
+        )
         .position(x as f64, y as f64)
         .decorations(false)
         .transparent(skin.manifest.window.transparent)
@@ -1240,6 +1245,14 @@ pub fn close_skin_window_nowait(app: &AppHandle, label: &str) -> Result<(), Stri
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(label);
+    // 拖动落盘防抖的簿记条目一并回收（此前按皮肤永不回收——复审 B-F6）；
+    // 在途定时器把「条目被清」按可写盘处理（见 debounced_config_flush）
+    if let Some(skin_id) = label.strip_prefix("skin-") {
+        DRAG_SAVE_STATE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(skin_id);
+    }
     if let Some(skin_id) = label.strip_prefix("skin-") {
         if let Some(window) = app.get_webview_window(label) {
             let state = app.state::<crate::AppState>();

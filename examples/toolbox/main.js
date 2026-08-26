@@ -8,7 +8,7 @@
  *   文件    skin_write_file / skin_read_file / skin_list_dir / skin_delete_file（免权限，仅限皮肤目录）
  *   注册表  read_registry_value（registry，只读）
  *   命令    run_command（shell：普通权限、隐藏窗口、超时杀进程）
- *   外链    open_external（system；.exe 等可执行目标会被拒绝——有专门的演示按钮）
+ *   外链    open_external（system；URI 白名单目标——本地路径一律拒绝，有专门的演示按钮）
  *   电源    lock_workstation / monitor_off / sleep / power_control / empty_recycle_bin
  *           （system；全部无路径参数——system 权限刻意没有「启动 exe」的通道）
  *   设置    skin_get_setting / skin_set_setting（免权限）
@@ -60,11 +60,11 @@ const I18N = {
     cmdArgsPlaceholder: '参数（空格分隔），如 /c ver',
     btnRun: '运行',
 
-    cardExternal: '打开链接 / 文件',
-    extPlaceholder: 'https://… 、mailto:… 、ms-settings:… 或本机绝对路径',
+    cardExternal: '打开链接',
+    extPlaceholder: 'https://… 、mailto:… 、ms-settings:…（本地路径一律拒绝）',
     btnOpen: '打开',
     btnOpenSettings: '打开系统设置页（ms-settings:）',
-    btnOpenDenied: '演示被拒绝（.exe 路径）',
+    btnOpenDenied: '演示被拒绝（本地路径）',
 
     cardPower: '电源与回收站',
     powerWarn: '以下按钮真实生效：锁屏/灭屏/睡眠立即执行；关机/重启/注销需连点两次确认（不带 force，未保存数据的应用可阻止）；清空回收站弹系统确认框。',
@@ -141,11 +141,11 @@ const I18N = {
     cmdArgsPlaceholder: 'Args (space-separated), e.g. /c ver',
     btnRun: 'Run',
 
-    cardExternal: 'Open Link / File',
-    extPlaceholder: 'https://…, mailto:…, ms-settings:… or an absolute local path',
+    cardExternal: 'Open Link',
+    extPlaceholder: 'https://…, mailto:…, ms-settings:… (local paths are always rejected)',
     btnOpen: 'Open',
     btnOpenSettings: 'Open a Settings page (ms-settings:)',
-    btnOpenDenied: 'Demo rejection (.exe path)',
+    btnOpenDenied: 'Demo rejection (local path)',
 
     cardPower: 'Power & Recycle Bin',
     powerWarn: 'These buttons take effect for real: lock / display-off / sleep run immediately; shutdown / restart / logoff need a second click to confirm (no force — apps with unsaved data may block); emptying the Recycle Bin shows the system confirmation.',
@@ -288,7 +288,7 @@ async function onWriteClipboard() {
   }
 }
 
-/* ── 文件（权限 files，仅限皮肤自身目录） ─────────────────── */
+/* ── 文件（免权限沙箱，仅限皮肤自身目录） ─────────────────── */
 
 async function onWriteNote() {
   if (!needBridge('file-result')) return;
@@ -400,7 +400,7 @@ function onRunCustom() {
   onRunCommand(command, args, timeoutMs);
 }
 
-/* ── 打开链接/文件（权限 system） ─────────────────────────── */
+/* ── 打开链接（权限 system；http(s) 目标另可用 open_link 低危） ──────── */
 
 /** 参数拆分支持引号："a b" 或 'a b' 整段为一个参数（此前纯空白拆分会把
     含空格的引号参数拆碎）。 */
@@ -419,7 +419,7 @@ async function onOpenExternal(target) {
     await window.__DESK_PP__.invoke('open_external', { target });
     showResult('ext-result', t('resOpened', target));
   } catch (err) {
-    // 目标不存在与打开失败返回同样的错误；.exe 等可执行目标明确拒绝
+    // 目标不存在与打开失败返回同样的错误；非 URI 白名单目标（本地路径等）明确拒绝
     showError('ext-result', err);
   }
 }
@@ -656,7 +656,8 @@ function bindButtons() {
   // Windows 设置页 URI（open_external 白名单含 ms-settings:）
   document.getElementById('btn-ext-settings').addEventListener('click',
     () => onOpenExternal('ms-settings:display'));
-  // 故意用一个可执行文件路径演示 open_external 的拒绝错误文案
+  // 故意用一个本地可执行文件路径演示 open_external 的拒绝错误文案
+  //（本地路径面已整体裁撤——任何非 URI 白名单目标都会被拒）
   document.getElementById('btn-ext-denied').addEventListener('click',
     () => onOpenExternal('C:\\Windows\\System32\\notepad.exe'));
 

@@ -1,22 +1,38 @@
-//! Skin-facing backend APIs: read-only system information plus the
-//! permission-gated capabilities.  Eight permissions, each gating its own
-//! command set:
+//! Skin-facing backend APIs: the permission-gated capabilities (twelve
+//! permissions in three display tiers — high / medium / low — tier is a
+//! wizard display concern only; enforcement is binary declared-or-not),
+//! plus the permission-free baseline:
 //!
-//!   * `registry`  — read_registry_value
-//!   * `shell`     — run_command
-//!   * `system`    — open_external / show_notification / lock_workstation /
+//!   * `shell`（高危） — run_command
+//!   * `file_system`（高危） — skin_read_any_file / skin_write_any_file /
+//!                   skin_list_any_dir / skin_create_any_dir /
+//!                   skin_delete_any_path（任意绝对路径；应用数据根禁变更）
+//!   * `system`（高危） — open_external（URI 目标；http(s) 另有 open_link
+//!                   低危通道；本地路径面已裁撤）/ lock_workstation /
 //!                   monitor_off / sleep / power_control / empty_recycle_bin
-//!   * `media`     — set_volume / set_mute / media_control / media_seek
-//!   * `clipboard` — read_clipboard_text / write_clipboard_text
-//!   * `mic`       — get_mic_spectrum
-//!   * `file_system` — skin_read_any_file / skin_write_any_file（任意绝对路径，高危）
-//!   * `control`   — skin_list_skins / skin_get_window_config /
+//!   * `registry`（中危） — read_registry_value
+//!   * `clipboard`（中危） — read_clipboard_text / write_clipboard_text
+//!   * `mic`（中危） — get_mic_spectrum
+//!   * `control`（中危） — skin_list_skins / skin_get_window_config /
 //!                   skin_set_window_config / skin_load / skin_unload /
 //!                   skin_reload / skin_hide / skin_show（作用于自己免权限）
+//!   * `media`（低危） — 读取（get_volume / get_media_info /
+//!                   get_audio_spectrum 环回）+ 控制（set_volume / set_mute /
+//!                   media_control / media_seek）同一族播控面同权
+//!   * `notify`（低危） — show_notification（从 system 拆出单列）
+//!   * `sys_info`（低危） — 只读系统信息 13 条：get_cpu_info / get_gpu_info /
+//!                   get_memory_info / get_disks_info / get_disk_space /
+//!                   get_network_info / get_os_info / get_battery_info /
+//!                   get_monitors / get_system_theme / get_processes /
+//!                   get_idle_time / get_foreground_window_info
+//!   * `network`（低危） — http_request（曾有此名未发布即取消；复活为低危
+//!                   新语义——闸的是绕 CORS 读响应，页面 fetch 仍在闸外）
+//!   * `open_link`（低危） — open_external 的 http(s) 目标（从 system 分层
+//!                   的低危通道；mailto/ms-settings/本地路径仍需 system）
 //!
-//! （皮肤自身目录内的文件读写不需要权限——fs.rs 的沙箱即边界；`http_request`
-//! 亦免权限——页面本有 fetch 通道，设闸挡不住有心者；曾有过的 `files`
-//! 权限已整体取消，该名字永不复活。）
+//! 免权限基线：皮肤自身目录内的文件读写（fs.rs 沙箱即边界）、自己 schema
+//! 的设置读写、skin_log / skin_console_log / skin_broadcast、control 族
+//! 「作用于自己」臂。曾有过的 `files` 权限已整体取消，该名字永不复活。
 //!
 //! Skins call these through `window.__DESK_PP__.invoke` — the bridge is a
 //! raw passthrough, so every command registered here is skin-callable.
@@ -163,16 +179,37 @@ pub struct MonitorInfo {
 
 pub const PERM_REGISTRY: &str = "registry";
 pub const PERM_SHELL: &str = "shell";
-/// State-changing system controls: open_external, show_notification,
-/// lock_workstation / monitor_off / sleep / power_control / empty_recycle_bin.
-///（音量与媒体控制挪进了 media——它们是同一族「当前在放什么」的播控面。
-/// 注意：system 刻意没有「启动 exe」的通道——可执行目标一律拒绝
-/// （open_external 黑名单），新命令也不得接收可执行路径参数；运行程序
-/// 只属于 shell 权限的 run_command。）
+/// State-changing system controls: open_external（URI 目标——http(s) 另
+/// 有 open_link 低危通道；本地路径面已裁撤）、lock_workstation /
+/// monitor_off / sleep / power_control / empty_recycle_bin。
+///（音量与媒体控制挪进了 media、系统通知挪进了 notify——前者是同一族
+/// 「当前在放什么」的播控面，后者是低危的可见打扰，均与电源动作不同级。
+/// 注意：system 刻意没有「启动 exe」的通道——open_external 只收 URI
+/// 白名单目标，其余五条命令无路径/无目标参数；运行程序只属于 shell
+/// 权限的 run_command。）
 pub const PERM_SYSTEM: &str = "system";
-/// Media + volume (set_volume / set_mute / media_control / media_seek)——
-/// 从 system 拆出单列：这一族「当前在放什么」的播控与开外链/通知不同级，中危
+/// Media + volume: reads (get_volume / get_media_info / get_audio_spectrum
+/// 环回) + control (set_volume / set_mute / media_control / media_seek)——
+/// 同一族「当前在放什么」的播控面，读取与控制同权（均低危）；
+/// media_info 曾单列读取、已并入本权限（名字退役，旧声明按未知名忽略）。
+/// 从 system 拆出单列：与开外链/电源动作不同级，纯打扰无数据面。
 pub const PERM_MEDIA: &str = "media";
+/// Toast notifications (show_notification)——从 system 拆出单列：可见打扰、
+/// 无数据面，低危
+pub const PERM_NOTIFY: &str = "notify";
+/// Read-only system & hardware info (13 probes: cpu / gpu / memory / disks /
+/// disk_space / network / os / battery / monitors / system_theme /
+/// processes / idle_time / foreground_window)——只读但含活动监视面（前台
+/// 窗口标题/进程/空闲），单列低危让向导可见。
+pub const PERM_SYS_INFO: &str = "sys_info";
+/// http_request——绕 CORS 读任意公开 URL 响应 + 任意方法/头。复活历史
+/// `network` 名为低危新语义：页面 fetch 的受限通道仍在闸外（无法闸），
+/// 向导可见性价值 = 用户知道皮肤会联网。
+pub const PERM_NETWORK: &str = "network";
+/// open_external 的 http(s) 目标（用默认浏览器打开网页链接）——从
+/// system 分层出的低危通道：mailto/ms-settings/本地路径目标仍需 system
+/// （文件关联面留在高危）；system 自身能力不受影响（全目标仍可用）。
+pub const PERM_OPEN_LINK: &str = "open_link";
 /// Clipboard read+write (read can expose what the user just copied).
 pub const PERM_CLIPBOARD: &str = "clipboard";
 /// Microphone input — eavesdropping risk, unlike the loopback spectrum
@@ -217,6 +254,25 @@ fn require_perm(
         return Err(trf(&lang, Key::PermissionDenied, &[skin.id.as_str(), perm]));
     }
     Ok((skin.id, skin.directory))
+}
+
+/// 声明了 perms 中任一权限即放行（分层闸门：open_external 的 http(s) 目标
+/// 过 open_link 低危或 system 高危）。拒绝时报错按首个权限名给出——分层
+/// 场景低危在前，提示用户该目标其实只需声明低危。
+fn require_any_perm(
+    state: &AppState,
+    window: &tauri::WebviewWindow,
+    perms: &[&str],
+) -> Result<(String, std::path::PathBuf), String> {
+    let lang = state.lang();
+    let skin = caller_skin(state, window)?;
+    if perms
+        .iter()
+        .any(|perm| skin.manifest.permissions.iter().any(|p| p == perm))
+    {
+        return Ok((skin.id, skin.directory));
+    }
+    Err(trf(&lang, Key::PermissionDenied, &[skin.id.as_str(), perms[0]]))
 }
 
 #[cfg_attr(target_os = "windows", allow(dead_code))] // only the non-Windows arms call it
@@ -293,14 +349,19 @@ pub struct CpuInfo {
 /// Array shape anticipates multi-socket machines; sysinfo aggregates all
 /// cores into one entry on typical PCs.  async：采样重负载不跑主线程。
 #[tauri::command]
-pub async fn get_cpu_info() -> Vec<CpuInfo> {
+pub async fn get_cpu_info(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Vec<CpuInfo>, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     let perf_pct = cpu_performance_pct();
     let mut guard = CPU_SYS.lock().unwrap_or_else(|e| e.into_inner());
     let sys = guard.get_or_insert_with(new_light_system);
     sys.refresh_cpu_all();
     let cpus = sys.cpus();
     let nominal_mhz = cpus.iter().map(|c| c.frequency()).max().unwrap_or(0);
-    vec![CpuInfo {
+    Ok(vec![CpuInfo {
         name: cpus.first().map(|c| c.brand().to_string()).unwrap_or_default(),
         physical_cores: sys.physical_core_count().unwrap_or(0),
         logical_cores: cpus.len(),
@@ -311,7 +372,7 @@ pub async fn get_cpu_info() -> Vec<CpuInfo> {
             .unwrap_or(nominal_mhz),
         usage: sys.global_cpu_usage(),
         usage_per_core: cpus.iter().map(|c| c.cpu_usage()).collect(),
-    }]
+    }])
 }
 
 // ─── Memory ───
@@ -352,15 +413,20 @@ pub struct MemoryInfo {
 }
 
 #[tauri::command]
-pub fn get_memory_info() -> MemoryInfo {
+pub fn get_memory_info(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<MemoryInfo, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     let mut guard = CPU_SYS.lock().unwrap_or_else(|e| e.into_inner());
     let sys = guard.get_or_insert_with(new_light_system);
     sys.refresh_memory();
-    MemoryInfo {
+    Ok(MemoryInfo {
         ram: MemoryGroup::new(sys.total_memory(), sys.used_memory()),
         swap: MemoryGroup::new(sys.total_swap(), sys.used_swap()),
         commit: commit_group(),
-    }
+    })
 }
 
 /// 已提交/提交限制走 psapi `GetPerformanceInfo`（与任务管理器同源）：
@@ -407,7 +473,12 @@ pub struct DiskInfo {
 }
 
 #[tauri::command]
-pub async fn get_disks_info() -> Vec<DiskInfo> {
+pub async fn get_disks_info(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Vec<DiskInfo>, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     let rates = sample_disk_rates();
 
     let mut guard = DISK_SAMPLER.lock().unwrap_or_else(|e| e.into_inner());
@@ -416,7 +487,7 @@ pub async fn get_disks_info() -> Vec<DiskInfo> {
     });
     sampler.disks.refresh();
 
-    sampler
+    Ok(sampler
         .disks
         .list()
         .iter()
@@ -440,7 +511,7 @@ pub async fn get_disks_info() -> Vec<DiskInfo> {
                 write_bps,
             }
         })
-        .collect()
+        .collect())
 }
 
 /// "C:\\" → Some("C:"); other mount styles → None (no PDH rates for those).
@@ -517,8 +588,14 @@ pub struct DiskSpace {
 /// Space of the volume holding `path` ("C:", "D:\\data", ...).  The disk
 /// whose mount point is the longest prefix of the probe wins.
 #[tauri::command]
-pub fn get_disk_space(app: AppHandle, path: String) -> Result<DiskSpace, String> {
-    let lang = app.state::<AppState>().lang();
+pub fn get_disk_space(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    path: String,
+) -> Result<DiskSpace, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
+    let lang = state.lang();
     let probe = std::path::Path::new(&path)
         .components()
         .fold(std::path::PathBuf::new(), |mut acc, c| {
@@ -588,7 +665,12 @@ pub struct NetworkInfo {
 }
 
 #[tauri::command]
-pub fn get_network_info() -> NetworkInfo {
+pub fn get_network_info(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<NetworkInfo, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     let mut guard = NET_SAMPLER.lock().unwrap_or_else(|e| e.into_inner());
     let sampler = guard.get_or_insert_with(|| NetSampler {
         nets: sysinfo::Networks::new_with_refreshed_list(),
@@ -638,7 +720,7 @@ pub fn get_network_info() -> NetworkInfo {
 
     sampler.primed = true;
     sampler.last = Instant::now();
-    NetworkInfo { adapters, local_ips }
+    Ok(NetworkInfo { adapters, local_ips })
 }
 
 // ─── GPU (Windows) ───
@@ -648,10 +730,14 @@ pub fn get_network_info() -> NetworkInfo {
 /// 同步重活挪 spawn_blocking（DXGI/D3D12 全同步阻塞 async worker，
 /// 高频轮询会停满 worker 池）。
 #[tauri::command]
-pub async fn get_gpu_info(app: AppHandle) -> Result<Vec<GpuInfo>, String> {
+pub async fn get_gpu_info(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Vec<GpuInfo>, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     #[cfg(target_os = "windows")]
     {
-        let _ = &app; // used only by the non-Windows arm
         tauri::async_runtime::spawn_blocking(gpu::collect)
             .await
             .map_err(|e| e.to_string())
@@ -662,13 +748,19 @@ pub async fn get_gpu_info(app: AppHandle) -> Result<Vec<GpuInfo>, String> {
     }
 }
 
-// ─── Audio spectrum (Windows) ───
+// ─── Audio spectrum (Windows; 环回读取归 media 低危，麦克风归 mic 中危) ───
 
 #[tauri::command]
-pub fn get_audio_spectrum(app: AppHandle, bands: Option<usize>) -> Result<Spectrum, String> {
+pub fn get_audio_spectrum(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    bands: Option<usize>,
+) -> Result<Spectrum, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_MEDIA)?;
     #[cfg(target_os = "windows")]
     {
-        let lang = app.state::<AppState>().lang();
+        let lang = state.lang();
         audio::spectrum(bands.unwrap_or(32), audio::Source::Loopback)
             .map_err(|e| trf(&lang, Key::AudioUnavailable, &[&e]))
     }
@@ -701,13 +793,17 @@ pub fn get_mic_spectrum(
     }
 }
 
-// ─── Status probes: battery / idle / foreground / monitors (read-only) ───
+// ─── Status probes: battery / idle / foreground / monitors（sys_info 低危）───
 
 #[tauri::command]
-pub fn get_battery_info(app: AppHandle) -> Result<BatteryInfo, String> {
+pub fn get_battery_info(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<BatteryInfo, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     #[cfg(target_os = "windows")]
     {
-        let _ = &app;
         status::battery()
     }
     #[cfg(not(target_os = "windows"))]
@@ -718,10 +814,14 @@ pub fn get_battery_info(app: AppHandle) -> Result<BatteryInfo, String> {
 
 /// Milliseconds since the last keyboard/mouse input.
 #[tauri::command]
-pub fn get_idle_time(app: AppHandle) -> Result<u64, String> {
+pub fn get_idle_time(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<u64, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     #[cfg(target_os = "windows")]
     {
-        let _ = &app;
         status::idle_ms()
     }
     #[cfg(not(target_os = "windows"))]
@@ -732,10 +832,14 @@ pub fn get_idle_time(app: AppHandle) -> Result<u64, String> {
 
 /// Currently focused window; null in the rare case there is none.
 #[tauri::command]
-pub fn get_foreground_window_info(app: AppHandle) -> Result<Option<ForegroundWindowInfo>, String> {
+pub fn get_foreground_window_info(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<ForegroundWindowInfo>, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     #[cfg(target_os = "windows")]
     {
-        let _ = &app;
         Ok(status::foreground_window())
     }
     #[cfg(not(target_os = "windows"))]
@@ -745,10 +849,14 @@ pub fn get_foreground_window_info(app: AppHandle) -> Result<Option<ForegroundWin
 }
 
 #[tauri::command]
-pub fn get_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
+pub fn get_monitors(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Vec<MonitorInfo>, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     #[cfg(target_os = "windows")]
     {
-        let _ = &app;
         Ok(status::monitors())
     }
     #[cfg(not(target_os = "windows"))]
@@ -759,13 +867,17 @@ pub fn get_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
 
 /// 检测 Windows 系统级浅色/深色主题（HKCU\…\Themes\Personalize 的
 /// AppsUseLightTheme：1 浅 0 深），返回 "light" / "dark"。只读系统信息，
-/// 免权限（与 §5.2 其他只读命令同组，无身份门槛）。系统主题变化不做
+/// 归 sys_info 低危（与同组只读探针同闸）。系统主题变化不做
 /// 推送——皮肤在需要时调用，或配合定时轮询/窗口可见事件刷新。
 #[tauri::command]
-pub fn get_system_theme(app: AppHandle) -> Result<String, String> {
+pub fn get_system_theme(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     #[cfg(target_os = "windows")]
     {
-        let _ = &app;
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
         let light = RegKey::predef(HKEY_CURRENT_USER)
@@ -1021,27 +1133,48 @@ pub async fn run_command(
 }
 
 
-// ─── OS / processes (read-only) ───
+// ─── OS / processes（sys_info 低危，只读）───
 
 #[tauri::command]
-pub fn get_os_info() -> system::OsInfo {
-    system::os_info()
+pub fn get_os_info(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<system::OsInfo, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
+    Ok(system::os_info())
 }
 
 #[tauri::command]
-pub async fn get_processes(sort: Option<String>, limit: Option<usize>) -> system::ProcessList {
+pub async fn get_processes(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    sort: Option<String>,
+    limit: Option<usize>,
+) -> Result<system::ProcessList, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_SYS_INFO)?;
     let mut guard = CPU_SYS.lock().unwrap_or_else(|e| e.into_inner());
     let sys = guard.get_or_insert_with(new_light_system);
-    system::processes(sys, sort.as_deref().unwrap_or("cpu"), limit.unwrap_or(10))
+    Ok(system::processes(
+        sys,
+        sort.as_deref().unwrap_or("cpu"),
+        limit.unwrap_or(10),
+    ))
 }
 
-// ─── Volume (Windows; get is read-only, set/mute need `system`) ───
+// ─── Volume (Windows; get 读取与 set/mute 控制同属 media 低危) ───
 
 #[tauri::command]
-pub fn get_volume(app: AppHandle) -> Result<VolumeInfo, String> {
+pub fn get_volume(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<VolumeInfo, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_MEDIA)?;
     #[cfg(target_os = "windows")]
     {
-        let lang = app.state::<AppState>().lang();
+        let lang = state.lang();
         volume::get_volume().map_err(|e| trf(&lang, Key::VolumeFailed, &[&e]))
     }
     #[cfg(not(target_os = "windows"))]
@@ -1087,10 +1220,15 @@ pub fn set_mute(app: AppHandle, window: tauri::WebviewWindow, muted: bool) -> Re
 // thread, hence async + spawn_blocking (same rule as run_command).
 
 #[tauri::command]
-pub async fn get_media_info(app: AppHandle) -> Result<Option<MediaInfo>, String> {
+pub async fn get_media_info(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<MediaInfo>, String> {
+    let state = app.state::<AppState>();
+    require_perm(&state, &window, PERM_MEDIA)?;
     #[cfg(target_os = "windows")]
     {
-        let lang = app.state::<AppState>().lang();
+        let lang = state.lang();
         let lang_inner = lang.clone();
         tauri::async_runtime::spawn_blocking(move || media::info())
             .await
@@ -1178,72 +1316,40 @@ pub fn write_clipboard_text(app: AppHandle, window: tauri::WebviewWindow, text: 
         .map_err(|e| trf(&lang, Key::ClipboardFailed, &[&e.to_string()]))
 }
 
-// ─── Open external link/file (permission: system) ───
+// ─── Open external link (permission: open_link 低危 / system 高危分层) ───
 
-/// http(s) / mailto / ms-settings 链接，或本地绝对路径（目录、文档等）。
-/// 拒绝：其他 scheme（file:/javascript: 等）、相对路径、UNC 路径
-/// （\\、// 前缀——可能触发 NTLM 认证外发）、可直接执行/被系统当代码
-/// 解析的扩展名（ShellExecute 打开等同于运行）。目标是否存在不做提前
+/// URI 白名单：http(s) / mailto / ms-settings（系统设置页 URI，由设置应用
+/// 处理，无代码执行面）。**本地路径面已整体裁撤**——ShellExecute 本地文件
+/// 靠「可执行扩展名黑名单」设防是负枚举（35 项清单追不上新执行面，且曾
+/// 被尾点/尾空格绕过），负枚举换不来安全；确有打开本地文件需要的皮肤走
+/// shell 权限的 run_command（高危、安装页明示）。目标是否存在不做提前
 /// 探测：不存在与打开失败统一报 OpenFailed，消除路径存在性探针。
-/// ms-settings: 是系统设置页 URI（由设置应用处理，无代码执行面）。
 fn is_open_target_allowed(target: &str) -> bool {
-    let t = target.trim();
-    let lower = t.to_ascii_lowercase();
-    if lower.starts_with("https://")
+    let lower = target.trim().to_ascii_lowercase();
+    lower.starts_with("https://")
         || lower.starts_with("http://")
         || lower.starts_with("mailto:")
         || lower.starts_with("ms-settings:")
-    {
-        return true;
-    }
-    if t.starts_with("\\\\") || t.starts_with("//") {
-        return false;
-    }
-    let path = std::path::Path::new(t);
-    if !path.is_absolute() {
-        return false;
-    }
-    // 尾点/尾空格绕过：Windows 路径规范化剥掉分量尾部的点与空格
-    //（"RUN.EXE." 落盘即 "RUN.EXE"），而 Path::extension() 在剥前看——
-    // "RUN.EXE." 的扩展名是 Some("")、"RUN.EXE " 是 Some("exe ")，均绕过
-    // 黑名单。分量尾点/尾空格一律拒绝（fs.rs 沙箱同款防护，此路径曾漏）。
-    for c in path.components() {
-        if let std::path::Component::Normal(s) = c {
-            match s.to_str() {
-                Some(s) if s.ends_with('.') || s.ends_with(' ') => return false,
-                _ => {}
-            }
-        }
-    }
-    !is_blocked_executable(path)
 }
 
-/// 可直接执行/被系统当代码解析、或能间接触发远程连接（NTLM 外泄面）的
-/// 扩展名黑名单（大小写不敏感）。
-fn is_blocked_executable(path: &std::path::Path) -> bool {
-    const BLOCKED: [&str; 35] = [
-        "exe", "bat", "cmd", "ps1", "vbs", "vbe", "js", "jse", "wsf", "wsh",
-        "msi", "msp", "scr", "com", "pif", "cpl", "lnk", "hta", "reg", "dll",
-        "msc", "jar", "url",
-        // 间接远程连接面：Explorer 搜索/库可指向远程共享（NTLM 哈希外泄）、
-        // ClickOnce 激活、msdt 诊断包、Internet 快捷方式变体
-        "search-ms", "library-ms", "application", "appref-ms", "diagcab", "website",
-        // 补充：.chm（hh.exe ActiveX 执行）、.settingcontent-ms（CVE-2018-8414
-        // 控制面板项加载）、.scf（命令执行 + NTLM 外泄）；.hlp 已随 Win10 移除、
-        // .wsc/.sct 需脚本宿主注册表键在，但同为可执行内容一并拒
-        "chm", "settingcontent-ms", "scf", "hlp", "wsc", "sct",
-    ];
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| BLOCKED.contains(&e.to_ascii_lowercase().as_str()))
+/// open_external 的分层闸门（纯函数，测试钉住）：http(s) 目标过
+/// open_link（低危）或 system（高危）任一；其余目标（mailto/ms-settings
+/// 等——本地路径连 is_open_target_allowed 的白名单都进不了）只过 system。
+fn open_external_required_perms(target: &str) -> &'static [&'static str] {
+    let lower = target.trim().to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        &[PERM_OPEN_LINK, PERM_SYSTEM]
+    } else {
+        &[PERM_SYSTEM]
+    }
 }
 
 #[tauri::command]
 pub fn open_external(app: AppHandle, window: tauri::WebviewWindow, target: String) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    require_perm(&state, &window, PERM_SYSTEM)?;
     let target = target.trim();
+    require_any_perm(&state, &window, open_external_required_perms(target))?;
     if !is_open_target_allowed(target) {
         return Err(trf(&lang, Key::InvalidTarget, &[target]));
     }
@@ -1296,7 +1402,7 @@ pub(crate) fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
         .map_err(|e| trf(lang, Key::OpenFailed, &[&e.to_string()]))
 }
 
-// ─── Toast notification (permission: system, Windows) ───
+// ─── Toast notification (permission: notify —— 低危，Windows) ───
 
 /// Startup identity setup for toasts: make sure the AUMID shortcut exists
 /// and points at the current exe (icon included).  Called once from setup so
@@ -1319,7 +1425,7 @@ pub async fn show_notification(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    require_perm(&state, &window, PERM_SYSTEM)?;
+    require_perm(&state, &window, PERM_NOTIFY)?;
     #[cfg(target_os = "windows")]
     {
         // COM + 写盘 IO 不堵 async worker（同步版曾在主线程 IPC 上下文
@@ -1462,8 +1568,10 @@ pub async fn empty_recycle_bin(app: AppHandle, window: tauri::WebviewWindow) -> 
 // ─── 任意路径文件读写（permission: file_system —— 高危）───
 //
 // 与 fs.rs 的沙箱命令（skin_read_file 等，免权限、限皮肤自身目录）不同：
-// 这两条接受任意**绝对路径**，整盘可读可写。错误一律透传系统错误文案
+// 这五条接受任意**绝对路径**，整盘可达。错误一律透传系统错误文案
 // （皮肤需要知道真实失败原因）；相对路径拒绝（没有可参照的工作目录）。
+// 写/建/删三条额外过 ensure_mutable_any_path：应用自身数据根
+//（skins_dir/config_dir）禁止变更——防改写 skin.json 自我提权。
 
 fn any_absolute_path(path: &str) -> Result<std::path::PathBuf, String> {
     let trimmed = path.trim();
@@ -1487,6 +1595,98 @@ fn any_absolute_path(path: &str) -> Result<std::path::PathBuf, String> {
     Ok(p)
 }
 
+/// 应用数据根变更保护（file_system 权限）：写 / 建 / 删三条命令的目标
+/// 不得落在禁写根内。没有这道防线时皮肤可改写自己的 skin.json 往
+/// permissions 里加项——require_perm 每次调用实时重扫 manifest，新权限
+/// 立即生效，等于绕过安装页承诺静默自我提权（config.json 被改、其他皮肤
+/// 被删同理）。读 / 列保留：高危权限「整盘可读」是安装页声明过的语义。
+///
+/// 禁写根四个（审查 H2 后从两个扩到四个）：
+///   - skins_dir / config_dir：防自我提权（上述原始动机）；
+///   - update_dir（<数据根>/update）：宿主会**执行**其中的安装包
+///    （install_update），皮肤可写 = 借「立即安装」这个可信动作把写能力
+///     升级为代码执行；
+///   - exe 所在目录（便携布局下是前三个根的父目录，冗余但显式）：覆盖
+///     Driftlet.exe 本体 / WebView2Loader.dll / 卸载器——改写任一 = 下次
+///     启动或卸载时代码执行。非便携回退布局（%APPDATA% 数据 + Program
+///     Files 程序）下四个根不相交，各自独立生效。
+fn ensure_mutable_any_path(
+    skins_dir: &std::path::Path,
+    config_dir: &std::path::Path,
+    p: &std::path::Path,
+) -> Result<(), String> {
+    // `..` 分量会让 resolve_location 的「最深现存祖先 + 词法重拼尾段」
+    // 失真（Windows 沿符号链接逐分量解析 `..`，非纯词法）——变更类目标
+    // 一律拒绝，调用方传规范形式即可（与 fs.rs 沙箱拒 `..` 同口径）。
+    if p
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!("path must not contain '..': {}", p.display()));
+    }
+    let resolved = resolve_location(p)
+        .ok_or_else(|| format!("cannot resolve path location: {}", p.display()))?;
+    let update_dir = crate::update::update_dir(config_dir);
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.to_path_buf()));
+    let mut roots = vec![skins_dir, config_dir, update_dir.as_path()];
+    if let Some(exe) = exe_dir.as_deref() {
+        roots.push(exe);
+    }
+    for root in roots {
+        let Some(canon_root) = resolve_location(root) else {
+            continue;
+        };
+        if path_starts_with_ci(&resolved, &canon_root) {
+            return Err(format!(
+                "path is inside Driftlet's own data directory and cannot be modified: {}",
+                p.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 解析路径的真实落点：全路径存在则 canonicalize（解析符号链接 / 8.3
+/// 短名 / 真实大小写）；目标尚不存在时 canonicalize 最深现存祖先后词法
+/// 重拼不存在的尾段——尾段分量均不存在、不可能是符号链接，重拼即真实
+/// 落点。调用方须已拒绝 `..` 分量。数据根本身缺失时同样适用（现存祖先
+/// 一路退到盘符根），缺失根也能解析出用于比较的形式。
+fn resolve_location(p: &std::path::Path) -> Option<std::path::PathBuf> {
+    if let Ok(c) = p.canonicalize() {
+        return Some(c);
+    }
+    let mut ancestor = p.parent();
+    loop {
+        let a = ancestor?;
+        match a.canonicalize() {
+            Ok(c) => return Some(c.join(p.strip_prefix(a).ok()?)),
+            Err(_) => ancestor = a.parent(),
+        }
+    }
+}
+
+/// 分量级前缀比较，Windows 下 ASCII 忽略大小写（NTFS 大小写不敏感，与
+/// fs.rs 受保护名单 eq_ignore_ascii_case 同口径）——canonicalize 已覆盖
+/// 现存分量的真实大小写，这里兜底不存在的尾段（含数据根缺失时的重拼
+/// 形式）。与 `starts_with` 同语义，相等也算包含。
+fn path_starts_with_ci(p: &std::path::Path, prefix: &std::path::Path) -> bool {
+    let mut got = p.components();
+    prefix.components().all(|want| {
+        got.next().is_some_and(|g| {
+            if cfg!(target_os = "windows") {
+                g.as_os_str()
+                    .to_str()
+                    .zip(want.as_os_str().to_str())
+                    .is_some_and(|(g, w)| g.eq_ignore_ascii_case(w))
+            } else {
+                g == want
+            }
+        })
+    })
+}
+
 #[tauri::command]
 pub async fn skin_read_any_file(
     app: AppHandle,
@@ -1504,21 +1704,15 @@ pub async fn skin_read_any_file(
     if meta.len() > fs::MAX_READ_BYTES {
         return Err(format!("file too large: {} bytes (max {})", meta.len(), fs::MAX_READ_BYTES));
     }
-    // TOCTOU 防线：metadata 检查后文件可能被换大——按上限+1 流式读，
-    // 超限即拒，不做无界整文件分配
-    let mut buf = Vec::new();
-    {
-        use std::io::Read;
-        std::fs::File::open(&p)
-            .map_err(|e| e.to_string())?
-            .take(fs::MAX_READ_BYTES + 1)
-            .read_to_end(&mut buf)
-            .map_err(|e| e.to_string())?;
-    }
-    if buf.len() as u64 > fs::MAX_READ_BYTES {
-        return Err(format!("file too large: > {} bytes (max {})", fs::MAX_READ_BYTES, fs::MAX_READ_BYTES));
-    }
-    let bytes = buf;
+    // TOCTOU 防线：metadata 检查后文件可能被换大——read_capped 按上限+1
+    // 流式读、按实际字节再审，不做无界分配（与沙箱版同一函数，审查 M2）
+    let bytes = match fs::read_capped(&p, fs::MAX_READ_BYTES) {
+        Ok(b) => b,
+        Err(fs::CapReadError::TooLarge) => {
+            return Err(format!("file too large: > {} bytes (max {})", fs::MAX_READ_BYTES, fs::MAX_READ_BYTES));
+        }
+        Err(fs::CapReadError::Io(e)) => return Err(e),
+    };
     if binary.unwrap_or(false) {
         use base64::Engine;
         Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
@@ -1549,6 +1743,7 @@ pub fn skin_write_any_file(
         return Err(format!("data too large: {} bytes (max {})", bytes.len(), fs::MAX_WRITE_BYTES));
     }
     let p = any_absolute_path(&path)?;
+    ensure_mutable_any_path(&state.skins_dir, &state.config_dir, &p)?;
     // 与沙箱版一致：缺失的父目录一并创建
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -1595,6 +1790,7 @@ pub fn skin_create_any_dir(
     let state = app.state::<AppState>();
     require_perm(&state, &window, PERM_FILE_SYSTEM)?;
     let p = any_absolute_path(&path)?;
+    ensure_mutable_any_path(&state.skins_dir, &state.config_dir, &p)?;
     std::fs::create_dir_all(&p).map_err(|e| e.to_string())
 }
 
@@ -1611,6 +1807,7 @@ pub fn skin_delete_any_path(
     let state = app.state::<AppState>();
     require_perm(&state, &window, PERM_FILE_SYSTEM)?;
     let p = any_absolute_path(&path)?;
+    ensure_mutable_any_path(&state.skins_dir, &state.config_dir, &p)?;
     let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
     if meta.is_dir() {
         if recursive.unwrap_or(false) {
@@ -1898,20 +2095,26 @@ pub fn skin_list_skins(app: AppHandle, window: tauri::WebviewWindow) -> Result<V
         .collect())
 }
 
-// ─── 通用 HTTP 请求（免权限）───
+// ─── 通用 HTTP 请求（permission: network —— 低危）───
 //
 // 突破页面 fetch 的 CORS 限制：任意 http(s) URL、自定义头、文本/二进制负载。
-// 免权限的理由：皮肤页面本就有 fetch 通道（no-cors POST 已能外发数据），
-// 单独设闸挡不住有心者，只做展示噪音；身份仍经 caller_skin 校验（未安装的
-// 皮肤快速失败）。阻塞式 ureq/rustls（与更新检测同栈）放 spawn_blocking。
+// `network` 权限名属复活（曾有此名、未发布即取消——当时理由「页面本有 fetch
+// 通道，设闸挡不住有心者只做展示噪音」对**外发数据**依然成立：no-cors POST
+// 谁也闸不住）；复活后的新语义闸的是**能力增量**——绕 CORS 读取任意公开
+// URL 的响应体 + 任意方法/请求头，这是 fetch 够不到的。向导可见性价值 =
+// 用户在安装页能看到皮肤会联网。页面 fetch 的受限通道仍在闸外（无法闸）。
+// 阻塞式 ureq/rustls（与更新检测同栈）放 spawn_blocking。
 // HTTP 错误状态（4xx/5xx）不 reject——状态码与响应体照返（皮肤常需要
 // 错误页内容）；网络层失败才 reject。响应体截断 4MB。binary: true 时请求体
 // 按 base64 解码发送、响应体按 base64 返回（图片/字体等二进制内容不被
 // UTF-8 替换字符毁损），响应头一并回传（Content-Type 等）。
 
-/// SSRF 防线：localhost 主机名与环回/链路本地/私有/未指定/广播 IP 字面量
-/// 一律拒绝（http_request 免权限，但这块内容页面 fetch 因 CORS 够不到，
-/// 构成实质能力增量）。
+/// SSRF 防线：localhost 主机名与环回/链路本地/私有/未指定/广播 IP 一律
+/// 拒绝（network 是低危权限，但这块内容页面 fetch 因 CORS 够不到，构成
+/// 实质能力增量）。覆盖形态：标准点分/IPv6 字面量 + inet_aton 数字字面量
+///（2130706433 / 0x7f000001 / 127.1 / 0177.0.0.1——IpAddr::parse 不认、
+/// OS 解析器会当成 IP 的形态，不拦即可借它们绕过全部段检查）。
+/// 调用方：http_request 发起前 + 每一次重定向跳转后逐跳复检。
 fn is_private_host(url: &str) -> bool {
     let Ok(u) = url.parse::<tauri::Url>() else {
         return true; // 解析失败按拒绝处理
@@ -1922,13 +2125,97 @@ fn is_private_host(url: &str) -> bool {
     }
     // IPv6 字面量在 URL 里带方括号（http://[::1]/x → host_str 可能带 []）——剥掉再解析
     let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let v4_blocked = |v4: std::net::Ipv4Addr| {
+        v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast()
+            || v4.octets()[0] == 0 // 0.0.0.0/8「本网络」段（is_unspecified 只盖 0.0.0.0）
+    };
     match bare.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(v4)) => {
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast()
+        Ok(std::net::IpAddr::V4(v4)) => v4_blocked(v4),
+        Ok(std::net::IpAddr::V6(v6)) => {
+            // 先查 v6 自身的 loopback/unspecified：to_ipv4 会把 v4 兼容形态
+            // ::1 折成 0.0.0.1（不在 v4 各私网段内）而漏拦（测试钉住）
+            if v6.is_loopback() || v6.is_unspecified() {
+                return true;
+            }
+            // IPv4-mapped/compatible（::ffff:127.0.0.1 等）经双栈 socket 实际
+            // 打到 v4 目标——折回 IPv4 走同一套段检查（复审 D-B：原臂只查
+            // loopback/unspecified，http://[::ffff:127.0.0.1]/ 穿透防线）
+            if let Some(v4) = v6.to_ipv4() {
+                return v4_blocked(v4);
+            }
+            false
         }
-        Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback() || v6.is_unspecified(),
-        Err(_) => false, // 域名放行（DNS 解析到内网的残余面不在本层）
+        Err(_) => match parse_inet_aton(bare) {
+            Some(v4) => v4_blocked(v4),
+            None => false, // 域名放行（DNS 解析到内网的残余面不在本层）
+        },
     }
+}
+
+/// inet_aton 语义还原数字 IP 字面量：纯十进制（2130706433）、十六进制
+///（0x7f000001）、短点分（127.1——前 n-1 段各占 8 位、尾段占剩余位）、
+/// 八进制（0177.0.0.1，前导 0）都是 OS 解析器（getaddrinfo/inet_aton）
+/// 接受而 IpAddr::parse 拒绝的形态。返回还原出的 IPv4 地址；非数字字面量
+/// 形态（普通域名）返回 None。段值溢出（如 999.1.1.1）返回 None——OS
+/// 会把这种串当域名解析并失败，无 SSRF 面。
+fn parse_inet_aton(host: &str) -> Option<std::net::Ipv4Addr> {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
+    }
+    let mut nums: Vec<u64> = Vec::with_capacity(parts.len());
+    for p in parts {
+        let (digits, radix) = if let Some(hex) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
+            (hex, 16)
+        } else if p.len() > 1 && p.starts_with('0') {
+            (&p[1..], 8)
+        } else {
+            (p, 10)
+        };
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+            return None;
+        }
+        nums.push(u64::from_str_radix(digits, radix).ok()?);
+    }
+    // 位宽规则：n 段时前 n-1 段各占 8 位，尾段占剩余位（1 段 = 32 位整数值）
+    let last_bits = (5 - nums.len() as u32) * 8;
+    let mut value: u64 = 0;
+    for (i, &n) in nums.iter().enumerate() {
+        if i + 1 == nums.len() {
+            if n >= (1u64 << last_bits) {
+                return None;
+            }
+            value = (value << last_bits) | n;
+        } else {
+            if n > 0xFF {
+                return None;
+            }
+            value = (value << 8) | n;
+        }
+    }
+    Some(std::net::Ipv4Addr::from(value as u32))
+}
+
+/// 逐跳解析重定向目标并复检（纯函数，测试钉住）：相对 Location 按当前
+/// URL join；scheme 限 http/https（跳到 file: 等一律拒绝）；目标主机过
+/// is_private_host（含 inet_aton 字面量形态）——SSRF 防线对全链每一跳
+/// 生效，不让 302 成为进内网的跳板（审查 H1）。
+fn resolve_redirect_url(current: &str, location: &str) -> Result<String, String> {
+    let base = current
+        .parse::<tauri::Url>()
+        .map_err(|e| format!("cannot parse current url: {}", e))?;
+    let next = base
+        .join(location.trim())
+        .map_err(|e| format!("bad redirect location {:?}: {}", location, e))?;
+    let next_str = next.to_string();
+    let lower = next_str.to_ascii_lowercase();
+    if !lower.starts_with("https://") && !lower.starts_with("http://") {
+        return Err(format!("redirect to non-http(s) URL is not allowed: {}", next_str));
+    }
+    if is_private_host(&next_str) {
+        return Err(format!("redirect to local/private address is not allowed: {}", next_str));
+    }
+    Ok(next_str)
 }
 
 /// http_request 的返回结构
@@ -1943,6 +2230,37 @@ pub struct HttpResponseInfo {
     pub truncated: bool,
 }
 
+/// 重定向跳转时的请求头处理（纯函数，测试钉住）：
+/// - 跨源跳（scheme/host/port 任一变化）：剥 authorization / cookie /
+///   proxy-authorization——皮肤给 api.a.com 配的令牌不得因 302 泄漏给
+///   第三方主机（ureq 自动跟随时代的内建行为——其 RedirectAuthHeaders
+///   默认 Never + 恒剥 cookie/content-length；手动跟跳后须自行维持，
+///   否则相对改动前是安全回退，复审 D-A）；
+/// - 转 GET 丢体（301/302/303）：另剥 content-length / content-type——
+///   体没了头还在会让服务器等 body 挂起。
+fn headers_for_hop(
+    headers: &[(String, String)],
+    cross_origin: bool,
+    body_dropped: bool,
+) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(k, _)| {
+            let k = k.to_ascii_lowercase();
+            if body_dropped && (k == "content-length" || k == "content-type") {
+                return false;
+            }
+            if cross_origin
+                && matches!(k.as_str(), "authorization" | "cookie" | "proxy-authorization")
+            {
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect()
+}
+
 #[tauri::command]
 pub async fn http_request(
     app: AppHandle,
@@ -1955,15 +2273,15 @@ pub async fn http_request(
     binary: Option<bool>,
 ) -> Result<HttpResponseInfo, String> {
     let state = app.state::<AppState>();
-    caller_skin(&state, &window)?;
+    require_perm(&state, &window, PERM_NETWORK)?;
 
     let url = url.trim().to_string();
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err(format!("only http(s) URLs are allowed: {}", url));
     }
-    // SSRF 防线：免权限不等于能读内网——localhost/环回/链路本地/私有网段的
-    // 响应体一律不给出（页面 fetch 受 CORS 本就够不到这些内容，「免权限
-    // 因为 fetch 已有通道」的论证不覆盖这一增量）。
+    // SSRF 防线：低危不等于能读内网——localhost/环回/链路本地/私有网段的
+    // 响应体一律不给出（页面 fetch 受 CORS 本就够不到这些内容，「低危」
+    // 不覆盖这一增量）。
     if is_private_host(&url) {
         return Err(format!("requests to local/private addresses are not allowed: {}", url));
     }
@@ -1993,25 +2311,59 @@ pub async fn http_request(
     };
 
     tauri::async_runtime::spawn_blocking(move || {
-        // 重定向上限 3（默认 10——跟穿到内网的跳板面收窄；SSRF 主机段在
-        // 发起前已拦，重定向目标段由 ureq 逐跳同规则校验不到的残面接受此
-        // 代价上限）
-        let agent = ureq::AgentBuilder::new().redirects(3).build();
-        let mut req = agent.request(&method, &url)
-            .set("User-Agent", concat!("Driftlet/", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_millis(timeout));
-        for (k, v) in &headers {
-            req = req.set(k, v);
-        }
-        let result = match &body_bytes {
-            Some(b) => req.send_bytes(b),
-            None => req.call(),
-        };
-        // HTTP 错误状态照返（ureq 把 4xx/5xx 归入 Err::Status，拆出来当正常响应）
-        let resp = match result {
-            Ok(r) => r,
-            Err(ureq::Error::Status(_, r)) => r,
-            Err(e) => return Err(e.to_string()),
+        // SSRF 防线覆盖重定向全链：ureq 自动跟随的跳数不经过 is_private_host
+        //（公网站点 302 → 169.254.169.254 云元数据 / 127.0.0.1 本机服务即可
+        // 整体绕过——审查 H1），故 redirects(0) 关掉自动跟随，手动逐跳解析
+        // Location 并复检 scheme + 私网判定，上限 3 跳。方法传递按浏览器
+        // 语义：303（及 301/302 的非 GET/HEAD）转 GET 丢体；307/308 原样重发。
+        // 请求头逐跳经 headers_for_hop 过滤：跨源剥授权类头、丢体剥体头
+        //（复审 D-A——自动跟随时代 ureq 内建此行为，手动跟跳须自行维持）。
+        let agent = ureq::AgentBuilder::new().redirects(0).build();
+        let mut current_url = url;
+        let mut current_method = method;
+        let mut current_body = body_bytes;
+        let mut hop_headers = headers;
+        let mut hops = 0u32;
+        let resp = loop {
+            let mut req = agent.request(&current_method, &current_url)
+                .set("User-Agent", concat!("Driftlet/", env!("CARGO_PKG_VERSION")))
+                .timeout(std::time::Duration::from_millis(timeout));
+            for (k, v) in &hop_headers {
+                req = req.set(k, v);
+            }
+            let result = match &current_body {
+                Some(b) => req.send_bytes(b),
+                None => req.call(),
+            };
+            // HTTP 错误状态照返（ureq 把 4xx/5xx 归入 Err::Status，拆出来当
+            // 正常响应）；redirects(0) 下 3xx 同样是普通响应，走重定向分支
+            let resp = match result {
+                Ok(r) => r,
+                Err(ureq::Error::Status(_, r)) => r,
+                Err(e) => return Err(e.to_string()),
+            };
+            let location = match resp.status() {
+                301 | 302 | 303 | 307 | 308 => resp.header("Location").map(String::from),
+                _ => None,
+            };
+            let Some(location) = location else { break resp };
+            if hops >= 3 {
+                return Err(format!("too many redirects (max 3): {}", current_url));
+            }
+            hops += 1;
+            let next = resolve_redirect_url(&current_url, &location)?;
+            let cross_origin = tauri::Url::parse(&current_url).map(|u| u.origin())
+                != tauri::Url::parse(&next).map(|u| u.origin());
+            let body_dropped = resp.status() == 303
+                || ((resp.status() == 301 || resp.status() == 302)
+                    && current_method != "GET"
+                    && current_method != "HEAD");
+            if body_dropped {
+                current_method = "GET".to_string();
+                current_body = None;
+            }
+            hop_headers = headers_for_hop(&hop_headers, cross_origin, body_dropped);
+            current_url = next;
         };
         let status = resp.status();
         // 响应头收集（同名多头只取首个值——Set-Cookie 这类场景皮肤自行斟酌）
@@ -2185,6 +2537,10 @@ fn current_geometry(state: &AppState, skin_id: &str) -> ((i32, i32), (u32, u32))
 }
 
 // ─── Hardware probe (manual) ───
+//
+// （曾有 probe_hardware_info 直调 get_cpu_info 等信息命令——这些命令已纳入
+// sys_info/media 权限门、需要活的皮肤窗口，探针随之移除；硬件信息
+// 目检改用 sys-monitor 示例皮肤。以下两个 PDH 探针直调内部函数不受影响。）
 
 #[cfg(test)]
 mod tests {
@@ -2200,12 +2556,82 @@ mod tests {
         assert!(super::is_private_host("http://0.0.0.0/x"));
         assert!(!super::is_private_host("https://example.com/x"));
         assert!(!super::is_private_host("https://8.8.8.8/x"));
+        // IPv4-mapped IPv6（复审 D-B）：双栈下实际打到 v4 目标，必须同规则
+        assert!(super::is_private_host("http://[::ffff:127.0.0.1]/x"));
+        assert!(super::is_private_host("http://[::ffff:169.254.169.254]/x"));
+        assert!(!super::is_private_host("http://[::ffff:8.8.8.8]/x"));
+        // inet_aton 数字字面量形态：IpAddr::parse 不认但 OS 会当成 IP——
+        // 还原后按同一套段检查（审查 H1 配套加固）
+        assert!(super::is_private_host("http://2130706433/x")); // 127.0.0.1 纯十进制
+        assert!(super::is_private_host("http://0x7f000001/x")); // 127.0.0.1 十六进制
+        assert!(super::is_private_host("http://127.1/x")); // 127.0.0.1 短点分
+        assert!(super::is_private_host("http://0177.0.0.1/x")); // 八进制段
+        assert!(super::is_private_host("http://2852039166/x")); // 169.254.169.254
+        assert!(!super::is_private_host("http://134744072/x")); // 8.8.8.8 公网放行
+        // 溢出段字面量（999.1.1.1）连 WHATWG URL 解析都过不了（特殊 scheme
+        // 对类 IPv4 主机名严格）→ 走「解析失败按拒绝」；域名形态不误伤
+        assert!(super::is_private_host("http://999.1.1.1/x"));
+        assert!(!super::is_private_host("http://example.123.com/x"));
+    }
+
+    /// 重定向请求头过滤（复审 D-A）：跨源剥授权类头、丢体剥体头
+    #[test]
+    fn redirect_headers_stripped() {
+        let h = || -> Vec<(String, String)> {
+            vec![
+                ("Authorization".into(), "Bearer t".into()),
+                ("Cookie".into(), "s=1".into()),
+                ("Content-Length".into(), "5".into()),
+                ("Content-Type".into(), "text/plain".into()),
+                ("X-Custom".into(), "keep".into()),
+            ]
+        };
+        // 同源同跳：全保留
+        assert_eq!(super::headers_for_hop(&h(), false, false).len(), 5);
+        // 跨源：授权类剥掉，自定义保留
+        let out = super::headers_for_hop(&h(), true, false);
+        assert!(!out.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+        assert!(!out.iter().any(|(k, _)| k.eq_ignore_ascii_case("cookie")));
+        assert!(out.iter().any(|(k, _)| k == "X-Custom"));
+        // 丢体（含同源）：体头剥掉
+        let out = super::headers_for_hop(&h(), false, true);
+        assert!(!out.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-length")));
+        assert!(!out.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")));
+        assert!(out.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+        // 跨源 + 丢体：两类都剥
+        let out = super::headers_for_hop(&h(), true, true);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    /// 重定向目标逐跳复检（审查 H1：302 跳板曾是 SSRF 防线的整体绕过）
+    fn redirect_targets_rechecked() {
+        // 相对路径 join 到当前 URL
+        assert_eq!(
+            super::resolve_redirect_url("https://example.com/a/b", "c").unwrap(),
+            "https://example.com/a/c"
+        );
+        assert!(super::resolve_redirect_url("https://example.com/", "//cdn.example.com/x").is_ok());
+        assert!(super::resolve_redirect_url("https://example.com/", "https://cdn.example.com/x").is_ok());
+        // 跳本机/内网一律拒绝（含数字字面量跳板）
+        assert!(super::resolve_redirect_url("https://example.com/", "http://127.0.0.1/x").is_err());
+        assert!(super::resolve_redirect_url(
+            "https://example.com/",
+            "http://169.254.169.254/latest/meta-data"
+        )
+        .is_err());
+        assert!(super::resolve_redirect_url("https://example.com/", "http://2130706433/").is_err());
+        assert!(super::resolve_redirect_url("https://example.com/", "http://localhost/admin").is_err());
+        // 非 http(s) scheme 拒绝
+        assert!(super::resolve_redirect_url("https://example.com/", "file:///c:/windows").is_err());
+        assert!(super::resolve_redirect_url("https://example.com/", "javascript:alert(1)").is_err());
     }
 
     #[test]
     fn open_target_validation() {
         assert!(super::is_open_target_allowed("https://example.com"));
         assert!(super::is_open_target_allowed("http://example.com"));
+        assert!(super::is_open_target_allowed("  HTTPS://example.com  "));
         assert!(super::is_open_target_allowed("mailto:a@b.c"));
         // Windows 设置页 URI（由设置应用处理，无代码执行面）
         assert!(super::is_open_target_allowed("ms-settings:display"));
@@ -2213,38 +2639,173 @@ mod tests {
         assert!(!super::is_open_target_allowed("file:///c:/windows"));
         assert!(!super::is_open_target_allowed("javascript:alert(1)"));
         assert!(!super::is_open_target_allowed("relative/path.txt"));
-        // 存在性不再提前探测：不存在的普通路径也放行，由打开失败统一报错
-        assert!(super::is_open_target_allowed("C:\\no-such-file-driftlet.xyz"));
-        // 可执行扩展名（含大小写变体）一律拒绝；exe 本体也不例外
-        let abs = std::env::current_exe().unwrap();
-        assert!(!super::is_open_target_allowed(abs.to_str().unwrap()));
-        assert!(!super::is_open_target_allowed("C:\\tools\\RUN.EXE"));
-        assert!(!super::is_open_target_allowed("C:\\tools\\script.Ps1"));
-        assert!(!super::is_open_target_allowed("C:\\tools\\app.lnk"));
-        assert!(!super::is_open_target_allowed("C:\\tools\\doc.hta"));
-        // UNC 路径（两种前缀）一律拒绝
+        // 本地路径面整体裁撤（负枚举的黑名单追不上执行面）：文档、目录、
+        // 可执行文件、UNC 一律拒绝——需要开本地文件的皮肤走 shell 权限
+        assert!(!super::is_open_target_allowed("C:\\docs\\a.pdf"));
+        assert!(!super::is_open_target_allowed("C:\\no-such-file-driftlet.xyz"));
+        assert!(!super::is_open_target_allowed("C:\\tools"));
         assert!(!super::is_open_target_allowed("\\\\server\\share\\doc.pdf"));
         assert!(!super::is_open_target_allowed("//server/share/doc.pdf"));
-        // 尾点/尾空格绕过（Windows 规范化剥尾部后真执行）
-        assert!(!super::is_open_target_allowed("C:\\tools\\RUN.EXE."));
-        assert!(!super::is_open_target_allowed("C:\\tools\\RUN.EXE "));
-        // 补入的可解析为代码的类型
-        assert!(!super::is_open_target_allowed("C:\\tools\\help.chm"));
-        assert!(!super::is_open_target_allowed("C:\\tools\\x.SettingContent-ms"));
-        assert!(!super::is_open_target_allowed("C:\\tools\\x.scf"));
+        let abs = std::env::current_exe().unwrap();
+        assert!(!super::is_open_target_allowed(abs.to_str().unwrap()));
     }
 
     #[test]
-    #[ignore = "hardware probe — run manually with --nocapture"]
-    fn probe_hardware_info() {
-        let _ = tauri::async_runtime::block_on(super::get_cpu_info());
-        let _ = tauri::async_runtime::block_on(super::get_disks_info());
-        let _ = super::get_network_info();
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        println!("CPU   : {:#?}", tauri::async_runtime::block_on(super::get_cpu_info()));
-        println!("MEM   : {:#?}", super::get_memory_info());
-        println!("DISKS : {:#?}", tauri::async_runtime::block_on(super::get_disks_info()));
-        println!("NET   : {:#?}", super::get_network_info());
+    fn open_external_gate_tiers() {
+        // http(s) 目标：open_link 低危或 system 高危任一；其余目标只过 system
+        assert_eq!(
+            super::open_external_required_perms("https://example.com"),
+            &["open_link", "system"][..]
+        );
+        assert_eq!(
+            super::open_external_required_perms("  HTTP://example.com/a?b=c "),
+            &["open_link", "system"][..]
+        );
+        for target in [
+            "mailto:a@b.c",
+            "ms-settings:display",
+            "C:\\docs\\a.pdf",
+            "ftp://example.com",
+            "file:///c:/windows",
+        ] {
+            assert_eq!(
+                super::open_external_required_perms(target),
+                &["system"][..],
+                "{target} must require system"
+            );
+        }
+    }
+
+    fn guard_temp_base(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("driftlet-guard-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    fn make_data_roots(base: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let skins = base.join("skins");
+        let config = base.join("config");
+        std::fs::create_dir_all(skins.join("clock")).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(skins.join("clock").join("skin.json"), "{}").unwrap();
+        std::fs::write(config.join("config.json"), "{}").unwrap();
+        (skins, config)
+    }
+
+    #[test]
+    fn mutable_guard_blocks_data_roots() {
+        let base = guard_temp_base("roots");
+        let (skins, config) = make_data_roots(&base);
+        // 已存在文件（改写自己 skin.json = 自我提权路径）、尚未存在的
+        // 文件/目录、根目录自身、深层新路径一律拒绝
+        for target in [
+            skins.join("clock").join("skin.json"),
+            skins.join("clock").join("evil.js"),
+            skins.join("new-skin").join("skin.json"),
+            skins.clone(),
+            config.join("config.json"),
+            config.join("deep").join("new.txt"),
+            config.clone(),
+        ] {
+            assert!(
+                super::ensure_mutable_any_path(&skins, &config, &target).is_err(),
+                "{:?} must be blocked",
+                target
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn mutable_guard_allows_outside_paths() {
+        let base = guard_temp_base("outside");
+        let (skins, config) = make_data_roots(&base);
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("ok.txt"), "x").unwrap();
+
+        assert!(super::ensure_mutable_any_path(&skins, &config, &outside.join("ok.txt")).is_ok());
+        // 尚不存在的深层目标（最深现存祖先重拼尾段）
+        assert!(super::ensure_mutable_any_path(&skins, &config, &outside.join("new").join("deep.txt")).is_ok());
+        // 前缀陷阱：分量级比较不会把 skins-evil / config.json 当成数据根
+        assert!(super::ensure_mutable_any_path(&skins, &config, &base.join("skins-evil")).is_ok());
+        assert!(super::ensure_mutable_any_path(&skins, &config, &base.join("config.json")).is_ok());
+        // `..` 分量一律拒绝（哪怕词法上指向数据根之外）。
+        // 必须从字符串构造测试路径：PathBuf::join("..") 在 verbatim 基底
+        //（canonicalize 的产物）上会直接把 `..` 词法消掉（pop 尾部分量），
+        // 生产路径无此问题——皮肤路径来自 JSON 字符串解析，`..` 原样进入
+        let dotdot = std::path::PathBuf::from(format!(
+            r"{}\outside\..\outside\ok.txt",
+            base.display()
+        ));
+        assert!(super::ensure_mutable_any_path(&skins, &config, &dotdot).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn mutable_guard_blocks_case_variants_and_missing_roots() {
+        let base = guard_temp_base("case");
+        let (skins, config) = make_data_roots(&base);
+        // NTFS 大小写不敏感：现存分量经 canonicalize 拿真实大小写
+        assert!(super::ensure_mutable_any_path(
+            &skins,
+            &config,
+            &base.join("SKINS").join("clock").join("skin.json")
+        )
+        .is_err());
+
+        // 数据根缺失（尚未创建）：现存祖先重拼后，尾段大小写变体也要拦
+        //（否则皮肤可预植 skins/<id>/skin.json 绕过安装页权限确认）
+        let gone = base.join("gone");
+        let missing_skins = gone.join("skins");
+        let missing_config = gone.join("config");
+        assert!(super::ensure_mutable_any_path(
+            &missing_skins,
+            &missing_config,
+            &gone.join("SKINS").join("planted").join("skin.json")
+        )
+        .is_err());
+        assert!(super::ensure_mutable_any_path(
+            &missing_skins,
+            &missing_config,
+            &gone.join("Config").join("config.json")
+        )
+        .is_err());
+        // 缺失根的相邻路径不误伤
+        assert!(super::ensure_mutable_any_path(
+            &missing_skins,
+            &missing_config,
+            &gone.join("other").join("ok.txt")
+        )
+        .is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 更新下载目录入禁写根（审查 H2）：皮肤改写 update/ 下的安装包 +
+    /// 版本标记，用户点「立即安装」即执行任意代码。目录尚不存在也要拦
+    ///（现存祖先重拼尾段的形态）。
+    #[test]
+    fn mutable_guard_blocks_update_dir() {
+        let base = guard_temp_base("update");
+        let (skins, config) = make_data_roots(&base);
+        let update = base.join("update"); // update_dir(config) = config 的父目录 / update
+        for target in [
+            update.join("Driftlet-update-setup.exe"),
+            update.join("downloaded-version.json"),
+            update.join("new").join("deep.exe"),
+            update.clone(),
+        ] {
+            assert!(
+                super::ensure_mutable_any_path(&skins, &config, &target).is_err(),
+                "{:?} must be blocked",
+                target
+            );
+        }
+        // 相邻同前缀目录不误伤（update-evil 不是 update）
+        assert!(super::ensure_mutable_any_path(&skins, &config, &base.join("update-evil")).is_ok());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -11,3 +11,5 @@ public/skin-temp/
 *.log
 __pycache__/
 tools/win32-probes/out/
+
+src-tauri/vendor/*/Cargo.lock

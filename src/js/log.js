@@ -153,7 +153,7 @@ function renderAll() {
 
 function renderShell() {
   document.getElementById('app').innerHTML = `
-    <div class="titlebar">
+    <div class="titlebar" data-tauri-drag-region="deep">
       <div class="brand">
         <div class="brand-logo"><img src="/logo.png" alt="Driftlet" draggable="false" /></div>
         <span class="brand-name">Driftlet</span>

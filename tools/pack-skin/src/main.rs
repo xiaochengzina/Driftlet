@@ -135,7 +135,8 @@ struct SkinSettingDef {
     filters: Vec<String>,
 }
 
-/// 对应安装端 WindowDefaults（width/height 等类型不符会被拒绝）
+/// 对应安装端 WindowDefaults（width/height 等类型不符会被拒绝）；值域钳制
+/// 在 validate 段做提示式镜像（安装端归一化不改包内容，打包侧只提示）
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 struct WindowDefaults {
@@ -214,6 +215,23 @@ fn is_valid_entry_name(entry: &str) -> bool {
         && !entry.contains('/')
         && !entry.contains('\\')
         && !entry.contains(':')
+}
+
+/// 镜像安装端 update.rs 的 parse_version：数字前缀截断、非数字起始段计 0
+///（"v1.2.3" → [1,2,3]、"1.2-beta" → [1,2]、"1.0.x" → [1,0,0]）。
+/// 安装端用同一函数「提示不拦截」，打包侧同口径后两端正反都无分歧。
+fn parse_version(s: &str) -> Vec<u64> {
+    s.trim()
+        .trim_start_matches(['v', 'V'])
+        .split('.')
+        .map(|part| {
+            part.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0)
+        })
+        .collect()
 }
 
 /// 递归收集要打包的文件（相对路径）；读取目录/条目出错记入 errs，不再静默跳过
@@ -333,17 +351,52 @@ fn main() {
         _ => {}
     }
     if let Some(v) = manifest.min_host_version.as_deref() {
-        // 宽松数字段格式（与安装端 update::is_newer 的解析口径一致：1.2 / 1.2.3 / v1.2.3）
-        let valid = v
+        // 与安装端 update::parse_version 同口径（见本文件 parse_version
+        // 镜像）——安装端「提示不拦截」，旧的严格数字段校验会拦下安装端本可
+        // 接受的 "1.2-beta" / "1.0.x" 等写法（能装却打不出包）。非纯数字
+        // 点分形式只作创作规范提示，不拦截。
+        let segs = parse_version(v);
+        let strict = v
             .trim()
             .trim_start_matches(['v', 'V'])
             .split('.')
             .all(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()));
-        if !valid {
-            fail(&format!(
-                "min_host_version 格式非法（应为 \"1.0.5\" 这类数字段版本号）：\"{}\"",
-                v
-            ));
+        if !strict {
+            eprintln!(
+                "提示：min_host_version \"{}\" 不是纯数字点分形式（如 \"1.0.5\"）——安装端将按 {:?} 解析",
+                v, segs
+            );
+        }
+    }
+    // 窗口默认值归一化镜像（安装端 loader.rs 加载时钳制：宽高 [1,10000]、
+    // opacity 非有限/越界回落 [0.1,1.0]、zoom [0.5,2.0] 非有限归 1.0、
+    // refresh_seconds ≤24h）：打包不改包内容，但声明值会被钳时提示创作者
+    // 「安装生效值 ≠ 声明值」（所见即所得；归一化非拒绝，无放行分歧）
+    {
+        let w = &manifest.window;
+        let cw = w.width.clamp(1, 10000);
+        let ch = w.height.clamp(1, 10000);
+        let cop = if w.opacity.is_finite() { w.opacity.clamp(0.1, 1.0) } else { 1.0 };
+        let czoom = if w.zoom.is_finite() { w.zoom.clamp(0.5, 2.0) } else { 1.0 };
+        let crs = w.refresh_seconds.map(|s| s.min(86400));
+        let mut notes = Vec::new();
+        if cw != w.width {
+            notes.push(format!("width {} → {}", w.width, cw));
+        }
+        if ch != w.height {
+            notes.push(format!("height {} → {}", w.height, ch));
+        }
+        if cop != w.opacity {
+            notes.push(format!("opacity {} → {}", w.opacity, cop));
+        }
+        if czoom != w.zoom {
+            notes.push(format!("zoom {} → {}", w.zoom, czoom));
+        }
+        if crs != w.refresh_seconds {
+            notes.push(format!("refresh_seconds {:?} → {:?}", w.refresh_seconds, crs));
+        }
+        if !notes.is_empty() {
+            eprintln!("提示：window 默认值超出范围，安装端加载时将归一化为：{}", notes.join("、"));
         }
     }
 

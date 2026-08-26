@@ -6,6 +6,7 @@ import API from './api.js';
 import showToast from './toast.js';
 import { t, getLang, applyLang } from './i18n.js';
 import { esc, confirmDialog } from './dom.js';
+import { renderPermChipsHTML } from './perms.js';
 
 // 当前打开的设置面板实例（供语言切换后原地重绘；关闭时清空）
 let openSettings = null;
@@ -323,22 +324,54 @@ export default class Settings {
         exportBtn.disabled = false;
       }
     };
-    importBtn.onclick = () => {
-      // 确认框 + 原生选择对话框存续期间禁止重复点击，防叠开
+    importBtn.onclick = async () => {
+      // 导入两段式（复审 A-M2）：先选包并审查内容（后端解包校验 + 返回
+      // 皮肤清单与权限声明），确认框与安装引导页同口径展示权限后才执行——
+      // 备份导入不再绕过权限审查
       importBtn.disabled = true;
+      let info = null;
+      try {
+        info = await API.inspectBackup();
+      } catch (err) {
+        showToast(t('common.setFailed') + String(err), 'error');
+        importBtn.disabled = false;
+        return;
+      }
+      if (!info) {
+        showToast(t('common.canceled'), 'info');
+        importBtn.disabled = false;
+        return;
+      }
+      // 含高危权限声明时正文顶部加警示行（确认框本身恒为危险样式——
+      // 覆盖全部配置与皮肤）
+      const hasHigh = info.skins.some(s =>
+        (s.permissions || []).some(p => ['shell', 'system', 'file_system'].includes(p)));
+      const highWarn = hasHigh
+        ? `<p class="backup-review-highwarn">${t('settings.backupReviewHighWarn')}</p>`
+        : '';
+      const skinRows = info.skins.length === 0
+        ? `<p class="backup-review-empty">${t('settings.backupReviewEmpty')}</p>`
+        : info.skins.map(s => `<div class="backup-skin-row">
+            <span class="backup-skin-name">${esc(s.name)}<span class="backup-skin-id">${esc(s.id)}${s.version ? ' v' + esc(s.version) : ''}</span></span>
+            ${renderPermChipsHTML(s.permissions)}
+          </div>`).join('');
       confirmDialog({
         title: t('settings.backupImportTitle'),
-        bodyHtml: t('settings.backupImportBody'),
+        bodyHtml: `${t('settings.backupImportBody')}
+          ${highWarn}
+          <div class="backup-review-list">${skinRows}</div>`,
         hint: t('settings.backupImportHint'),
         confirmText: t('settings.backupImport'),
-        danger: true,
-        // 未确认而关闭（取消 / Esc / 点遮罩）：解除按钮禁用
+        // 内容型确认（皮肤清单 + 权限胶囊）用宽档；图标/按钮语义色跟内容走
+        //（含高危权限才 danger 红，否则 accent 蓝——与删除确认页语义一致）
+        wide: true,
+        danger: hasHigh,
         onCancel: () => { importBtn.disabled = false; },
         onConfirm: async () => {
-          // 确认后文件选择器仍在交互，按钮保持禁用直至导入流程结束
+          // 确认后导入流程进行中，按钮保持禁用直至结束
           let keepDisabled = false;
           try {
-            const done = await API.importConfig();
+            const done = await API.importConfig(info.path);
             if (done) {
               showToast(t('settings.backupImported'), 'success');
               keepDisabled = true; // 成功即 reload：800ms 窗口内不得二次提交导入

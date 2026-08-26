@@ -150,6 +150,8 @@ interface DriftletMediaInfo {
   status: 'playing' | 'paused' | 'stopped' | string;
   position_secs: number;
   duration_secs: number;
+  /** 源是否支持拖动寻址（media_seek 的前置探测；false 时进度条锁只读） */
+  seekable: boolean;
   cover_base64: string | null;
   cover_mime: string | null;
 }
@@ -262,18 +264,15 @@ declare const Driftlet: {
   /** 宿主版本号（桥缺失时为空串） */
   readonly hostVersion: string;
 
+  // ── 系统信息读取（权限 sys_info，低危）──
   getCpuInfo(): Promise<DriftletCpuInfo[]>;
   getGpuInfo(): Promise<DriftletGpuInfo[]>;
   getMemoryInfo(): Promise<DriftletMemoryInfo>;
   getDisksInfo(): Promise<DriftletDiskInfo[]>;
   getDiskSpace(path: string): Promise<DriftletDiskSpace>;
   getNetworkInfo(): Promise<DriftletNetworkInfo>;
-  getAudioSpectrum(bands?: number): Promise<DriftletSpectrum>;
   getOsInfo(): Promise<DriftletOsInfo>;
   getProcesses(sort?: 'cpu' | 'memory', limit?: number): Promise<DriftletProcessList>;
-  getVolume(): Promise<DriftletVolumeInfo>;
-  /** 无播放会话时 resolve null（不是错误） */
-  getMediaInfo(): Promise<DriftletMediaInfo | null>;
   getBatteryInfo(): Promise<DriftletBatteryInfo>;
   /** 距用户上次键鼠输入的毫秒数 */
   getIdleTime(): Promise<number>;
@@ -281,6 +280,12 @@ declare const Driftlet: {
   getMonitors(): Promise<DriftletMonitorInfo[]>;
   /** Windows 系统级主题（AppsUseLightTheme 注册表值）："light" / "dark" */
   getSystemTheme(): Promise<'light' | 'dark' | string>;
+
+  // ── 音频与播放状态读取（权限 media，低危，读取与控制同权；麦克风归 mic）──
+  getVolume(): Promise<DriftletVolumeInfo>;
+  /** 无播放会话时 resolve null（不是错误） */
+  getMediaInfo(): Promise<DriftletMediaInfo | null>;
+  getAudioSpectrum(bands?: number): Promise<DriftletSpectrum>;
 
   /** 读文本；binary: true 时返回 base64（≤32MB） */
   readFile(path: string, binary?: boolean): Promise<string>;
@@ -311,13 +316,15 @@ declare const Driftlet: {
   setMute(muted: boolean): Promise<void>;
   /** 权限 media；无播放会话时 reject */
   mediaControl(action: 'play' | 'pause' | 'play_pause' | 'next' | 'previous'): Promise<boolean>;
+  /** 权限 media；绝对秒数寻址——源不支持寻址（getMediaInfo().seekable === false）时 resolve false */
+  mediaSeek(positionSecs: number): Promise<boolean>;
   /** 权限 clipboard */
   readClipboardText(): Promise<string>;
   /** 权限 clipboard */
   writeClipboardText(text: string): Promise<void>;
-  /** 权限 system；http(s)://、mailto:、ms-settings:（Windows 设置页）或本机绝对路径（可执行文件/UNC 被拒） */
+  /** http(s) 目标：权限 open_link（低危）或 system；mailto: / ms-settings: 目标：权限 system。URI 白名单制——本地路径一律拒绝（打开本地文件走 shell 权限的 runCommand） */
   openExternal(target: string): Promise<void>;
-  /** 权限 system；title ≤64、body ≤256 字符（超长截断） */
+  /** 权限 notify（低危）；title ≤64、body ≤256 字符（超长截断） */
   showNotification(title: string, body?: string): Promise<void>;
   /** 权限 system：锁定当前会话（等同 Win+L） */
   lockWorkstation(): Promise<void>;
@@ -357,7 +364,7 @@ declare const Driftlet: {
   unloadSkin(skinId?: string): Promise<void>;
   /** 重载皮肤；省略 id = 自己（免权限，fire-and-forget 同上），指定他人需 control */
   reloadSkin(skinId?: string): Promise<void>;
-  /** 免权限：通用 HTTP 请求（仅 http/https；HTTP 4xx/5xx 照返状态与响应体，网络层失败才 reject） */
+  /** 权限 network（低危）：通用 HTTP 请求（仅 http/https；HTTP 4xx/5xx 照返状态与响应体，网络层失败才 reject） */
   httpRequest(url: string, opts?: {
     method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
     headers?: Record<string, string>;

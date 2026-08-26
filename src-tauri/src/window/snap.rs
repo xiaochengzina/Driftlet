@@ -117,11 +117,14 @@ pub fn snap_drag(
 
     // 超宽/超高兜底：窗口 ≥ 工作区 − 2·gap 时 `right−gap−w` 落在工作区
     // 左侧之外——吸过去窗口被推出屏（报告实证：超宽窗拖近右缘被吸出屏）。
-    // 放不下时屏幕候选整轴剔除（窗口间候选不受影响）
+    // 放不下时屏幕候选整轴剔除（窗口间候选不受影响）。
+    // 复审 B-F2：剔除用空切片表达——曾用 [i32::MIN, i32::MIN] 哨兵，
+    // pick_axis 的 (c - raw).abs() 在 raw ≥ 0 时溢出（release 环绕成负值
+    // 反过阈值过滤，窗口被吸附到 -2³¹；debug 直接 panic）
     let fits_w = w + 2 * gap <= work.right - work.left;
     let fits_h = h + 2 * gap <= work.bottom - work.top;
-    let screen_x = if fits_w { [work.left + gap, work.right - gap - w] } else { [i32::MIN, i32::MIN] };
-    let screen_y = if fits_h { [work.top + gap, work.bottom - gap - h] } else { [i32::MIN, i32::MIN] };
+    let screen_x: &[i32] = if fits_w { &[work.left + gap, work.right - gap - w] } else { &[] };
+    let screen_y: &[i32] = if fits_h { &[work.top + gap, work.bottom - gap - h] } else { &[] };
 
     let mut win_x = Vec::new();
     let mut win_y = Vec::new();
@@ -339,6 +342,21 @@ mod tests {
     /// gap = 0 的整窗吸附
     fn drag(moving: SnapRect, others: &[SnapRect]) -> (SnapRect, bool, bool) {
         snap_drag(moving, WORK, others, 0, T)
+    }
+
+    #[test]
+    fn oversized_window_screen_candidates_excluded() {
+        // B-F2：窗口比工作区宽时屏幕候选整轴剔除——拖到 left=0 不得被吸到
+        // 哨兵位（旧实现用 i32::MIN，(c-raw).abs() 溢出后反而通过阈值过滤）
+        let huge = rect(0, 300, 4000, 100); // 4000 > 1920 工作区宽
+        let (out, sx, _) = drag(huge, &[]);
+        assert_eq!(out.left, 0, "超宽窗不得吸附（候选剔除）");
+        assert!(!sx);
+        // 窗口间候选不受超宽影响
+        let other = rect(500, 300, 200, 100);
+        let (out, sx, _) = drag(rect(505, 305, 4000, 100), &[other]);
+        assert_eq!(out.left, 500, "窗口候选对齐照旧");
+        assert!(sx);
     }
 
     #[test]

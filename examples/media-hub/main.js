@@ -3,14 +3,15 @@
 /**
  * media-hub —— 音量 / 媒体 / 频谱 / 通知接口演示。
  *
- * 四张卡片演示 8 个后端命令：
- *   音量卡片：get_volume（免权限，启动读 + 每次操作后刷新）、
- *             set_volume（滑块 change 时才调用）/ set_mute（开关）——需 system 权限；
- *   媒体卡片：get_media_info（1 秒轮询；无播放会话返回 null，不是错误）、
- *             media_control（返回布尔 = 播放器是否接受；无会话时 reject）——需 system 权限；
- *   频谱卡片：get_audio_spectrum（系统环回，免权限，40ms 轮询，页面隐藏时暂停）、
+ * 四张卡片演示 9 个后端命令：
+ *   音量卡片：get_volume（media 低危，启动读 + 每次操作后刷新）、
+ *             set_volume（滑块 change 时才调用）/ set_mute（开关）——同需 media 权限；
+ *   媒体卡片：get_media_info（media 低危，1 秒轮询；无播放会话返回 null，不是错误）、
+ *             media_control（返回布尔 = 播放器是否接受；无会话时 reject）/
+ *             media_seek（进度条可拖时按绝对秒寻址，dragend 才调用）——同需 media 权限；
+ *   频谱卡片：get_audio_spectrum（系统环回，media 低危，40ms 轮询，页面隐藏时暂停）、
  *             get_mic_spectrum（麦克风，需 mic 权限；停止轮询约 30 秒后设备自动释放）；
- *   通知卡片：show_notification（Windows toast，需 system 权限）。
+ *   通知卡片：show_notification（Windows toast，需 notify 低危权限）。
  *
  * 约定：动态文本一律 textContent / DOM API，不拼 innerHTML；
  * 命令 reject 的可读文案显示在对应卡片的错误行里（权限模型的现场演示）；
@@ -24,12 +25,12 @@ const I18N = {
     subtitle: '音量 / 媒体 / 频谱 / 通知接口演示',
     bridgeOff: '桥不可用：纯浏览器调试中，后端命令无法调用',
     volHeading: '系统音量',
-    volNote: 'get_volume 免权限；set_volume / set_mute 需 system 权限；滑块松手（change）时才调用 set_volume',
+    volNote: 'get_volume / set_volume / set_mute 均需 media 低危权限；滑块松手（change）时才调用 set_volume',
     mute: '静音',
     unmute: '取消静音',
     volStatus: (pct, muted) => `当前音量 ${pct}%${muted ? ' · 已静音' : ''}`,
     mediaHeading: '正在播放',
-    mediaNote: 'get_media_info 每秒轮询；无播放会话时返回 null（不是错误）；media_control 需 system 权限',
+    mediaNote: 'get_media_info 需 media 低危权限，每秒轮询；无播放会话时返回 null（不是错误）；media_control 同需 media 权限',
     noSession: '无播放会话',
     noTitle: '（无标题）',
     noTimeline: '本播放器不上报进度',
@@ -45,26 +46,26 @@ const I18N = {
     srcLoop: '系统声音',
     srcMic: '麦克风',
     peak: (v) => `峰值 ${v}`,
-    specNoteLoop: 'get_audio_spectrum 免权限（WASAPI 环回，采集系统正在播放的声音）；40ms 轮询，页面隐藏时自动暂停',
+    specNoteLoop: 'get_audio_spectrum 需 media 低危权限（WASAPI 环回，采集系统正在播放的声音）；40ms 轮询，页面隐藏时自动暂停',
     specNoteMic: 'get_mic_spectrum 需 mic 权限（真实拾音，涉及隐私）；停止轮询约 30 秒后设备自动释放',
     notifyHeading: '系统通知',
     notifyBtn: '发送演示通知',
     notifyOk: '通知已发送：Windows toast，操作中心可见，来源显示为 Driftlet',
     demoTitle: '媒体控制台',
     demoBody: '这是一条来自 media-hub 皮肤的演示通知。',
-    notifyNote: 'show_notification 需 system 权限；请克制频率——用户被刷屏后会直接关掉整个应用的通知权限',
+    notifyNote: 'show_notification 需 notify 低危权限；请克制频率——用户被刷屏后会直接关掉整个应用的通知权限',
   },
   en: {
     title: 'Media Hub',
     subtitle: 'Volume, media, spectrum & notification API demo',
     bridgeOff: 'Bridge unavailable: debugging in a plain browser — backend commands cannot be called',
     volHeading: 'System Volume',
-    volNote: 'get_volume needs no permission; set_volume / set_mute require the system permission; the slider only calls set_volume on change (release)',
+    volNote: 'get_volume / set_volume / set_mute all require the low-risk media permission; the slider only calls set_volume on change (release)',
     mute: 'Mute',
     unmute: 'Unmute',
     volStatus: (pct, muted) => `Volume ${pct}%${muted ? ' · muted' : ''}`,
     mediaHeading: 'Now Playing',
-    mediaNote: 'get_media_info polls every second; returns null (not an error) when there is no playback session; media_control requires the system permission',
+    mediaNote: 'get_media_info requires the low-risk media permission and polls every second; returns null (not an error) when there is no playback session; media_control requires the same media permission',
     noSession: 'No playback session',
     noTitle: '(untitled)',
     noTimeline: 'This player doesn\'t report progress',
@@ -80,14 +81,14 @@ const I18N = {
     srcLoop: 'System audio',
     srcMic: 'Microphone',
     peak: (v) => `Peak ${v}`,
-    specNoteLoop: 'get_audio_spectrum needs no permission (WASAPI loopback — captures what the system is playing); 40ms polling, auto-paused while the page is hidden',
+    specNoteLoop: 'get_audio_spectrum requires the low-risk media permission (WASAPI loopback — captures what the system is playing); 40ms polling, auto-paused while the page is hidden',
     specNoteMic: 'get_mic_spectrum requires the mic permission (real capture, privacy-sensitive); the device auto-releases ~30s after polling stops',
     notifyHeading: 'Notification',
     notifyBtn: 'Send demo notification',
     notifyOk: 'Notification sent: a Windows toast, visible in Action Center, sourced from Driftlet',
     demoTitle: 'Media Hub',
     demoBody: 'This is a demo notification from the media-hub skin.',
-    notifyNote: 'show_notification requires the system permission; keep the frequency low — spammed users will simply turn off notifications for the whole app',
+    notifyNote: 'show_notification requires the low-risk notify permission; keep the frequency low — spammed users will simply turn off notifications for the whole app',
   },
 };
 
@@ -209,7 +210,11 @@ function renderMedia() {
   const coverImg = $('media-cover');
   const coverPh = $('media-cover-ph');
   if (has && m.cover_base64) {
-    coverImg.src = `data:${m.cover_mime || 'image/jpeg'};base64,${m.cover_base64}`;
+    // 纵深（审查前端 H）：cover_mime 虽由后端按 magic bytes 嗅探白名单产生，
+    // 前端落 data: URI 前再白名单一次——非预期类型一律回退 jpeg
+    const COVER_MIMES = ['image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'];
+    const mime = COVER_MIMES.includes(m.cover_mime) ? m.cover_mime : 'image/jpeg';
+    coverImg.src = `data:${mime};base64,${m.cover_base64}`;
     coverImg.hidden = false;
     coverPh.hidden = true;
   } else {
@@ -254,7 +259,8 @@ function renderMedia() {
 let mediaBusy = false; // 防重入：上一次轮询未返回时不叠加
 
 async function pollMedia() {
-  if (mediaBusy) return;
+  // 页面隐藏时暂停轮询（与 specTick 同口径）：省 CPU 与无谓的 SMTC 查询
+  if (document.hidden || mediaBusy) return;
   mediaBusy = true;
   try {
     mediaState = await call('get_media_info'); // 无会话返回 null（不是错误）
@@ -278,7 +284,7 @@ async function sendMediaControl(action) {
   } catch (err) {
     if (gen !== mediaGen) return;
     feedbackToken = '';
-    feedbackErr = String(err); // 例如：无播放会话 / 未声明 system 权限
+    feedbackErr = String(err); // 例如：无播放会话 / 未声明 media 权限
   }
   renderMedia();
   pollMedia(); // 操作后立即刷新一次媒体状态
@@ -386,7 +392,7 @@ async function sendNotification() {
     notifyErr = '';
   } catch (err) {
     notifyOkShown = false;
-    notifyErr = String(err); // 例如：未声明 system 权限
+    notifyErr = String(err); // 例如：未声明 notify 权限
   }
   renderNotify();
 }
@@ -425,7 +431,7 @@ $('vol-slider').addEventListener('change', async () => {
     await call('set_volume', { volumePct: Number($('vol-slider').value) });
     volErr = '';
   } catch (err) {
-    volErr = String(err); // 例如：未声明 system 权限
+    volErr = String(err); // 例如：未声明 media 权限
   }
   await refreshVolume(); // 无论成败都回读真实状态（失败时滑块回弹）
 });
@@ -469,7 +475,7 @@ let lastSeekAt = 0;
       await call('media_seek', { positionSecs: (Number(seekEl.value) / 1000) * dur });
       mediaErr = '';
     } catch (err) {
-      mediaErr = String(err); // 例如：未声明 system 权限 / 源不支持寻址
+      mediaErr = String(err); // 例如：未声明 media 权限 / 源不支持寻址
     }
     pollMedia();
   });
@@ -488,8 +494,10 @@ $('btn-notify').addEventListener('click', () => sendNotification());
   renderAll();      // 无桥时各区域在此渲染「桥不可用」占位
   drawSpectrum();   // 全零初始帧
   if (!canInvoke) return;
-  await refreshVolume(); // get_volume 免权限：启动读一次
+  await refreshVolume(); // get_volume（media）：启动读一次
   await pollMedia();
   setInterval(pollMedia, 1000); // 媒体信息 1 秒轮询
+  // 恢复可见立刻补查一次（隐藏期间轮询暂停，否则最长等 1 秒才刷新）
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pollMedia(); });
   setInterval(specTick, 40);    // 频谱 40ms 轮询（文档建议 30–50ms）
 })();

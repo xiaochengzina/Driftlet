@@ -527,6 +527,26 @@ mod tests {
     }
 
     #[test]
+    fn bridge_escapes_script_close_in_baked_strings() {
+        // B-F1：serde_json 不转义 '/'——"</script>" 序列必须被转义为 <\/，
+        // 防标签提前闭合（加载路径另有 load_config 归一化第一道闸）
+        let out = inject_bridge(
+            "<html></html>".to_string(),
+            1.0,
+            false,
+            false,
+            "{}",
+            "zh</script><script>alert(1)</script>",
+            "light",
+        );
+        assert!(
+            !out.contains("</script><script>alert(1)"),
+            "恶意 language 不得原样进桥"
+        );
+        assert!(out.contains("<\\/script>"), "闭合序列必须被转义");
+    }
+
+    #[test]
     fn bridge_hooks_console_forwarding() {
         let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN", "light");
         assert!(out.contains("skin_console_log"), "桥必须注入 console 转发 hook");
@@ -586,15 +606,20 @@ fn bridge_script(locked: bool, resizable: bool, settings_json: &str, language: &
     // 管理器界面语言烘焙进桥：皮肤可据此让自己的界面跟随管理器语言（与锁定
     // 态同理，必须在 serve 时烘焙而非创建后 eval，防竞态）。运行时切换由
     // set_language 命令 eval 更新并派发 desk-language-changed 事件。
-    let language_json = serde_json::to_string(language).unwrap_or_else(|_| "\"zh-CN\"".into());
+    // 烘焙进 <script> 的 JSON 字符串字面量统一过 </ 转义——serde_json 不转义
+    // '/'，"</script>" 序列会提前闭合标签（baked_settings_json 同款防护；
+    // 审查 B-F1：language 经加载路径曾是未归一的自由字符串——注入向量，
+    // 现已双闸：load_config 归一化 + 此处转义兜底）
+    let esc = |json: String| json.replace("</", "<\\/");
+    let language_json = esc(serde_json::to_string(language).unwrap_or_else(|_| "\"zh-CN\"".into()));
     // 当前生效主题烘焙进桥（auto 已在后端折算成具体 light/dark）：皮肤据此
     // 跟随管理器昼夜配色。运行时切换由 set_theme 命令 eval 更新并派发
     // desk-theme-changed 事件。
-    let theme_json = serde_json::to_string(theme).unwrap_or_else(|_| "\"light\"".into());
+    let theme_json = esc(serde_json::to_string(theme).unwrap_or_else(|_| "\"light\"".into()));
     // 宿主版本烘焙进桥：皮肤据此做能力探测（新控件/新命令在老宿主上自行降级），
     // 与 min_host_version 的安装期提示互补。版本号不随运行期变化，无需事件同步。
     let host_version_json =
-        serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"unknown\"".into());
+        esc(serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"unknown\"".into()));
     format!(
         r#"window.__DESK_PP__={{  setOpacity:function(v){{document.documentElement.style.opacity=v;}},
   positionLocked: {locked},

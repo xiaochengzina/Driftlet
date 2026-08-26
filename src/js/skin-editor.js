@@ -245,6 +245,21 @@ export default class SkinEditor {
       return;
     }
 
+    // 步进器：data-key 在容器 div 上——原地刷新显示值与 −/＋ 禁用态
+    //（标量控件里唯一不走下方 input 赋值路径的一种，复审 C-F6）
+    if (ctrl.classList.contains('cfg-stepper')) {
+      const num = Number(value ?? 0);
+      const min = ctrl.dataset.min === '' ? null : Number(ctrl.dataset.min);
+      const max = ctrl.dataset.max === '' ? null : Number(ctrl.dataset.max);
+      const valEl = ctrl.querySelector('.cfg-step-val');
+      if (valEl) valEl.textContent = num;
+      const dec = ctrl.querySelector('[data-dir="-1"]');
+      const inc = ctrl.querySelector('[data-dir="1"]');
+      if (dec) dec.disabled = min != null && num <= min;
+      if (inc) inc.disabled = max != null && num >= max;
+      return;
+    }
+
     // 赋值型：data-key 在 input/select/textarea 元素自身上
     const type = ctrl.dataset.type;
     if (type === 'boolean') {
@@ -364,10 +379,10 @@ export default class SkinEditor {
             <div><label>${t('editor.size')}</label></div>
             <div class="num-inputs">
               <label>${t('editor.width')} <input type="number" id="cfg-width"
-                value="${cfg.width}" min="50" max="4000"
+                value="${cfg.width}" min="1" max="10000"
                 ${!d.loaded ? 'disabled' : ''}></label>
               <label>${t('editor.height')} <input type="number" id="cfg-height"
-                value="${cfg.height}" min="50" max="4000"
+                value="${cfg.height}" min="1" max="10000"
                 ${!d.loaded ? 'disabled' : ''}></label>
             </div>
           </div>
@@ -435,6 +450,7 @@ export default class SkinEditor {
             ${d.loaded ? `<button class="action-btn" id="btn-capture">${t('editor.capture')}</button>` : ''}
             ${d.loaded ? `<button class="action-btn" id="btn-onscreen">${t('editor.bringOnscreen')}</button>` : ''}
             <button class="action-btn" id="btn-openfolder">${t('editor.openFolder')}</button>
+            <button class="action-btn" id="btn-package">${t('editor.packageSkin')}</button>
             <button class="action-btn danger" id="btn-reset">${t('editor.resetData')}</button>
             ${!d.loaded ? `<button class="action-btn danger" id="btn-delete">${t('common.deleteSkin')}</button>` : ''}
           </div>
@@ -950,6 +966,13 @@ export default class SkinEditor {
     this.container.querySelector('#btn-openfolder')?.addEventListener('click', () => {
       API.openSkinFolder(this.skinId)
         .then(() => this.showToast(t('app.folderOpened'), 'success'))
+        .catch(err => this.showToast(String(err), 'error'));
+    });
+    // 打包 .dskin：后端出保存对话框（默认 <id>-<version>.dskin），
+    // 取消返回 null 静默；成功 toast 落盘路径
+    this.container.querySelector('#btn-package')?.addEventListener('click', () => {
+      API.packageSkin(this.skinId)
+        .then(out => { if (out) this.showToast(t('editor.packagedTo', { path: out }), 'success'); })
         .catch(err => this.showToast(String(err), 'error'));
     });
     this.container.querySelector('#btn-reset')?.addEventListener('click', () => {

@@ -1,10 +1,10 @@
 // Build a multi-size .ico from PNG files (PNG-compressed entries, Vista+).
-// Usage: node make-ico.js <out.ico> <png1> <png2> ...
+// Usage: node make-ico.cjs <out.ico> <png1> <png2> ...
 const fs = require("fs");
 
 const [out, ...inputs] = process.argv.slice(2);
 if (!out || inputs.length === 0) {
-  console.error("usage: node make-ico.js <out.ico> <png...>");
+  console.error("usage: node make-ico.cjs <out.ico> <png...>");
   process.exit(1);
 }
 

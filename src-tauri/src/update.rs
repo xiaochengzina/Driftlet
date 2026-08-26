@@ -117,7 +117,8 @@ pub fn update_dir(config_dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// 阻塞式下载安装包到更新目录：先写 .tmp 再 rename 就位（中断只留一个
-/// .tmp，下次下载覆盖，不堆积）。成功后写版本标记。调用方放 spawn_blocking。
+/// .tmp，下次下载覆盖，不堆积）。成功后写版本标记（含 SHA-256——
+/// 「立即安装」执行前复核用）。调用方放 spawn_blocking。
 pub fn download_installer(
     config_dir: &std::path::Path,
     url: &str,
@@ -144,16 +145,35 @@ pub fn download_installer(
             .map_err(|e| e.to_string())?;
         let mut reader = std::io::Read::take(resp.into_reader(), MAX_INSTALLER_BYTES + 1);
         let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-        let written = std::io::copy(&mut reader, &mut file).map_err(|e| e.to_string())?;
+        // 边下边算 SHA-256：哈希与落盘内容同源，随后写进版本标记
+        let mut hasher = sha2::Sha256::new();
+        let mut written: u64 = 0;
+        {
+            use sha2::Digest;
+            use std::io::{Read, Write};
+            let mut buf = [0u8; 64 * 1024];
+            loop {
+                let n = Read::read(&mut reader, &mut buf).map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                written += n as u64;
+            }
+        }
         if written == 0 || written > MAX_INSTALLER_BYTES {
             return Err(format!("bad installer size: {} bytes", written));
         }
         drop(file);
         std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
-        // 版本标记：启动清理按它判定这次下载对应的版本装上了没有
+        // 版本标记：启动清理按 version 判定装上了没有；sha256 供
+        // 「立即安装」执行前复核（verified_installer）
+        use sha2::Digest;
+        let sha256 = hex_lower(&hasher.finalize());
         std::fs::write(
             dir.join(MARKER_FILENAME),
-            serde_json::json!({ "version": version }).to_string(),
+            serde_json::json!({ "version": version, "sha256": sha256 }).to_string(),
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -162,6 +182,62 @@ pub fn download_installer(
         let _ = std::fs::remove_file(&tmp);
     }
     result.map(|_| dest)
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
+/// 「立即安装」执行前的核对：返回的安装包必须是我们自己下载的那一份——
+/// 版本标记存在、标记版本新于当前运行版本、文件 SHA-256 与下载时记录的
+/// 哈希一致，三者缺一即拒（用户走「重新下载」自愈，下载是自动的）。
+/// 防的是可信动作（用户点「立即安装」）执行被第三方改写过的安装包：
+/// 更新目录已入 file_system 禁写根（审查 H2 的正面修复），本核对是
+/// 纵深——哈希一票否决，与改写途径无关（含旧版下载的无哈希标记：
+/// fail closed）。
+pub fn verified_installer(config_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let dir = update_dir(config_dir);
+    let dest = dir.join(INSTALLER_FILENAME);
+    if !dest.is_file() {
+        return Err("installer not downloaded yet".to_string());
+    }
+    let marker = std::fs::read_to_string(dir.join(MARKER_FILENAME))
+        .map_err(|_| "download marker missing; please download again".to_string())?;
+    let marker: serde_json::Value = serde_json::from_str(&marker).map_err(|e| e.to_string())?;
+    let version = marker.get("version").and_then(|v| v.as_str()).unwrap_or("");
+    let sha256 = marker.get("sha256").and_then(|v| v.as_str()).unwrap_or("");
+    if version.is_empty() || sha256.is_empty() {
+        return Err("download marker incomplete; please download again".to_string());
+    }
+    if !is_newer(version, env!("CARGO_PKG_VERSION")) {
+        return Err("downloaded installer is not newer than the running version".to_string());
+    }
+    let actual = sha256_file(&dest)?;
+    if !actual.eq_ignore_ascii_case(sha256) {
+        return Err("installer checksum mismatch; please download again".to_string());
+    }
+    Ok(dest)
+}
+
+/// 流式计算文件 SHA-256（小写十六进制）
+fn sha256_file(p: &std::path::Path) -> Result<String, String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut file = std::fs::File::open(p).map_err(|e| e.to_string())?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_lower(&hasher.finalize()))
 }
 
 /// 启动清理：当前版本 ≥ 标记版本（= 新版本装上了）→ 删安装包与标记。
@@ -187,7 +263,6 @@ pub fn cleanup_downloaded_installer(config_dir: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::{is_newer, parse_version};
-
     #[test]
     fn parses_common_shapes() {
         assert_eq!(parse_version("1.2.3"), vec![1, 2, 3]);
@@ -210,5 +285,58 @@ mod tests {
         assert!(!is_newer("1.0.3", "1.0.4"));
         assert!(!is_newer("1.1.0", "1.1"));
         assert!(!is_newer("v1.0.4", "1.0.4"));
+    }
+
+    /// verified_installer 的核对面（审查 H2）：无标记 / 标记缺 sha256 /
+    /// 版本不新 / 哈希不符一律拒绝，全对才放行；放行后篡改文件再拒。
+    #[test]
+    fn verified_installer_checks_marker_and_hash() {
+        let base = std::env::temp_dir().join(format!("driftlet-upd-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let config = base.join("config");
+        let upd = super::update_dir(&config);
+        std::fs::create_dir_all(&upd).unwrap();
+        let installer = upd.join(super::INSTALLER_FILENAME);
+        let marker = upd.join(super::MARKER_FILENAME);
+        std::fs::write(&installer, b"fake-installer").unwrap();
+        let good_sha = {
+            use sha2::Digest;
+            let mut h = sha2::Sha256::new();
+            h.update(b"fake-installer");
+            super::hex_lower(&h.finalize())
+        };
+        let future = "999.0.0";
+
+        // 无版本标记 → 拒（安装包可能来自任何途径）
+        assert!(super::verified_installer(&config).is_err());
+        // 旧版下载的标记没有 sha256 字段 → fail closed（重新下载自愈）
+        std::fs::write(&marker, serde_json::json!({ "version": future }).to_string()).unwrap();
+        assert!(super::verified_installer(&config).is_err());
+        // 哈希不符（安装包被改写）→ 拒
+        std::fs::write(
+            &marker,
+            serde_json::json!({ "version": future, "sha256": "00" }).to_string(),
+        )
+        .unwrap();
+        assert!(super::verified_installer(&config).is_err());
+        // 标记版本不新于当前运行版本 → 拒（陈旧残留不应可执行）
+        std::fs::write(
+            &marker,
+            serde_json::json!({ "version": "0.0.1", "sha256": good_sha }).to_string(),
+        )
+        .unwrap();
+        assert!(super::verified_installer(&config).is_err());
+        // 全部核对通过 → 放行（哈希大小写差异容忍）
+        std::fs::write(
+            &marker,
+            serde_json::json!({ "version": future, "sha256": good_sha.to_uppercase() }).to_string(),
+        )
+        .unwrap();
+        assert_eq!(super::verified_installer(&config).unwrap(), installer);
+        // 放行后文件被改一个字节 → 哈希一票否决
+        std::fs::write(&installer, b"fake-installer!").unwrap();
+        assert!(super::verified_installer(&config).is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

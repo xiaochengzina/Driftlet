@@ -3,7 +3,7 @@
 > [中文版](皮肤开发指南.md) | English
 
 > The complete API documentation and specification for skin creators. After reading this document you can develop, debug, package, and publish a Driftlet skin on your own.
-> This document covers Driftlet 1.0. For internal implementation details (mechanisms that must not regress), see `docs/critical-mechanisms.md`.
+> This document covers Driftlet 1.x (currently 1.1.2). For internal implementation details (mechanisms that must not regress), see `docs/critical-mechanisms.md`.
 
 ---
 
@@ -150,12 +150,12 @@ The `skin.json` file itself must not exceed **1 MB** (larger files are refused a
 | `entry` | No | Entry HTML file name, default `index.html`; must be a **plain file name** — `..`, `/`, `\`, `:` are not allowed. **Exception: an `http(s)://` URL = a web skin** (the window loads the site page directly, see §2.2) |
 | `author` | No | Author, shown on the card and the config panel |
 | `version` | No | Version number, e.g. `"1.0.0"`; update packages use it to decide upgrade/downgrade — strongly recommended to always set it |
-| `min_host_version` | No | Minimum host version, e.g. `"1.0.6"`; if the host is older, the install wizard warns that "some features may not work" (installation is NOT blocked). Runtime feature detection: see `hostVersion` in §5.1 |
+| `min_host_version` | No | Minimum host version, e.g. `"1.0.5"`; if the host is older, the install wizard warns that "some features may not work" (installation is NOT blocked). Runtime feature detection: see `hostVersion` in §5.1 |
 | `description` | No | One-line description |
 | `description_en` | No | English description (same selection rules as `name_en`) |
 | `bilingual` | No | Chinese/English bilingual declaration, default `false`; when `true`, the various `*_en` English strings take effect, see §4.5 |
 | `window` | No | Window defaults, see §2.2 |
-| `permissions` | No | Sensitive capability declarations (`registry` / `shell` / `system` / `clipboard` / `mic` / `file_system` / `control`), see §2.3 |
+| `permissions` | No | Sensitive capability declarations (12 kinds: `shell` / `system` / `file_system` / `registry` / `clipboard` / `mic` / `control` / `media` / `notify` / `sys_info` / `network` / `open_link`), see §2.3 |
 | `settings` | No | Custom settings declarations, see Chapter 4 |
 
 A skin's unique identifier (skin id) = the **`id` field** of `skin.json`:
@@ -191,22 +191,26 @@ Before a skin can call "sensitive capability" backend commands (§5.3), it must 
 
 | Permission | Risk | Commands unlocked |
 |------|------|-----------|
-| `registry` | Medium risk | `read_registry_value` (read-only) |
 | `shell` | High risk | `run_command` (normal privileges, hidden window) |
-| `system` | High risk | `open_external` / `show_notification` / `lock_workstation` / `monitor_off` / `sleep` / `power_control` / `empty_recycle_bin` (change system state: open external links/files, send system notifications, lock screen / display off / sleep / shutdown / restart / sign out, empty the Recycle Bin. **Note: `system` has no "launch an exe" channel** — running programs belongs exclusively to `run_command` under the `shell` permission) |
-| `media` | Medium risk | `set_volume` / `set_mute` / `media_control` / `media_seek` (volume adjust + media playback control and seek — one family of playback controls, listed separately) |
+| `system` | High risk | `open_external` / `lock_workstation` / `monitor_off` / `sleep` / `power_control` / `empty_recycle_bin` (change system state: open web/mail/Settings links (`open_external` accepts only these three URI schemes and always rejects local paths), lock screen / display off / sleep / shutdown / restart / sign out, empty the Recycle Bin. **Note: `system` has no "launch an exe" channel** — running programs belongs exclusively to `run_command` under the `shell` permission) |
+| `file_system` | High risk | `skin_read_any_file` / `skin_write_any_file` / `skin_list_any_dir` / `skin_create_any_dir` / `skin_delete_any_path` (read / write / list / create / delete at arbitrary absolute paths — beyond the skin-folder sandbox, the whole disk is reachable; UNC network paths are always rejected; write/create/delete inside the app's own data directories are refused — four forbidden roots: `skins/`, `config/`, `update/` (the update directory), and the exe's program directory (covering Driftlet.exe itself / WebView2Loader.dll / the uninstaller; in the portable layout it is the parent of the other three roots, redundant but explicit, while in the non-portable fallback layout the four roots are disjoint and each applies independently), judged via `ensure_mutable_any_path` — so a skin cannot rewrite its own skin.json to self-grant permissions or swap the update installer — while read/list stay unrestricted; failures reject with the raw system error) |
+| `registry` | Medium risk | `read_registry_value` (read-only) |
 | `clipboard` | Medium risk | `read_clipboard_text` / `write_clipboard_text` (reading may expose sensitive content the user just copied) |
 | `mic` | Medium risk | `get_mic_spectrum` (microphone input — unlike system loopback, this is real audio capture and privacy-sensitive) |
-| `file_system` | High risk | `skin_read_any_file` / `skin_write_any_file` / `skin_list_any_dir` / `skin_create_any_dir` / `skin_delete_any_path` (read / write / list / create / delete at arbitrary absolute paths — beyond the skin-folder sandbox, the whole disk is reachable; UNC network paths are always rejected; failures reject with the raw system error) |
 | `control` | Medium risk | `skin_list_skins` / `skin_get_window_config` / `skin_set_window_config` / `skin_load` / `skin_unload` / `skin_reload` / `skin_hide` / `skin_show` (enumerate installed skins, read/modify any skin's window config, lifecycle and visibility — position, size, placement, lock, etc., other skins included) |
+| `media` | Low risk | `get_volume` / `get_media_info` / `get_audio_spectrum` (read volume, now-playing media info, and the system output spectrum) + `set_volume` / `set_mute` / `media_control` / `media_seek` (control volume and media playback/seek — one family of playback controls; reads and control share one permission) |
+| `notify` | Low risk | `show_notification` (pop a toast in the Windows notification center — visible annoyance only, no data exposure; split out of `system`) |
+| `sys_info` | Low risk | `get_cpu_info` / `get_gpu_info` / `get_memory_info` / `get_disks_info` / `get_disk_space` / `get_network_info` / `get_os_info` / `get_battery_info` / `get_monitors` / `get_system_theme` / `get_processes` / `get_idle_time` / `get_foreground_window_info` (read-only system and hardware status — including activity information such as the process list, foreground window title, and input idle time) |
+| `network` | Low risk | `http_request` (arbitrary HTTP requests — read responses beyond CORS with any method/headers; the page's restricted `fetch` channel stays ungated) |
+| `open_link` | Low risk | `open_external` for http/https targets (opens web links in the default browser — a low-risk lane split out of `system`; `mailto:` / `ms-settings:` targets still require `system` — local paths are always rejected: `open_external` accepts only the URI whitelist (http(s)/mailto/ms-settings)) |
 
-"Risk" is the two-tier grading shown on the install wizard (see below) — display-only; backend enforcement remains a binary "declared / undeclared" check regardless of tier.
+"Risk" is the three-tier grading shown on the install wizard (see below) — display-only; backend enforcement remains a binary "declared / undeclared" check regardless of tier.
 
 Rules:
 
 - **Declare only the permissions you actually use**; unknown names are ignored.
-- Read-only system info commands (§5.2) and settings read/write commands (§5.4) need no declaration; neither does file read/write inside the skin folder (`skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file`) — the fs sandbox already confines every operation to the skin's own install folder (absolute paths and `..` rejected, canonicalize containment check, symlink-escape protection, `skin.json`/`settings.json*` read-only protection, and DOS device-name rejection (`CON`/`NUL`/`COM1-9`/`LPT1-9`, with or without an extension)). The old `files` permission has been removed entirely; a leftover `"files"` declaration in an old skin is treated as an unknown name and ignored — harmless.
-- **Permission declarations are visible to users**: when installing/updating a skin, the install wizard lists every declared permission one by one, flagged in two risk tiers — `shell`, `system`, and `file_system` as "High risk" (red warning badge), `registry`, `clipboard`, `mic`, and `control` as "Medium risk" (yellow warning badge); the removed `files` declaration is silently skipped and not shown. Declaring permissions you don't use lowers users' willingness to install.
+- Settings read/write commands (§5.4), skin-folder file read/write (`skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file`), and logging/broadcast need no declaration — the fs sandbox already confines every file operation to the skin's own install folder (absolute paths and `..` rejected, canonicalize containment check, symlink-escape protection, `skin.json`/`settings.json*` read-only protection, and DOS device-name rejection (`CON`/`NUL`/`COM1-9`/`LPT1-9`, with or without an extension)). The old `files` permission has been removed entirely; a leftover `"files"` declaration in an old skin is treated as an unknown name and ignored — harmless. Read-only system info commands (§5.2) fall under the low-risk `sys_info` permission and must be declared; audio and playback-state reads (`get_volume` / `get_media_info` / `get_audio_spectrum`) fall under the low-risk `media` permission (reads and control share it).
+- **Permission declarations are visible to users**: when installing/updating a skin, the install wizard lists every declared permission one by one, flagged in three risk tiers — `shell`, `system`, and `file_system` as "High risk" (red warning badge), `registry`, `clipboard`, `mic`, and `control` as "Medium risk" (yellow warning badge), and `media`, `notify`, `sys_info`, `network`, `open_link` as "Low risk" (blue badge); the removed `files` declaration is silently skipped and not shown. Declaring permissions you don't use lowers users' willingness to install.
 - From the user's perspective: a skin declaring `shell` is equivalent to being able to run local programs — state honestly on the release page which permissions the skin uses and what for.
 
 ---
@@ -431,24 +435,25 @@ Injected by the app before the page loads; ready to use when skin scripts run. T
 
 | Command | Permission | Purpose |
 |------|------|------|
-| `get_cpu_info` / `get_gpu_info` / `get_memory_info` | — | CPU / GPU / memory |
-| `get_disks_info` / `get_disk_space` | — | Disk list / space of a volume |
-| `get_network_info` | — | Adapter rates and local IPs |
-| `get_audio_spectrum` | — | System loopback spectrum |
-| `get_os_info` / `get_processes` | — | OS info / process list |
-| `get_volume` / `get_media_info` | — | Volume read / now playing |
-| `get_battery_info` / `get_idle_time` | — | Battery / input idle time |
-| `get_foreground_window_info` / `get_monitors` | — | Foreground window / monitors |
-| `get_system_theme` | — | Windows system light/dark theme (`"light"` / `"dark"`) |
+| `get_cpu_info` / `get_gpu_info` / `get_memory_info` | `sys_info` | CPU / GPU / memory |
+| `get_disks_info` / `get_disk_space` | `sys_info` | Disk list / space of a volume |
+| `get_network_info` | `sys_info` | Adapter rates and local IPs |
+| `get_audio_spectrum` | `media` | System loopback spectrum |
+| `get_os_info` / `get_processes` | `sys_info` | OS info / process list |
+| `get_volume` / `get_media_info` | `media` | Volume read / now playing |
+| `get_battery_info` / `get_idle_time` | `sys_info` | Battery / input idle time |
+| `get_foreground_window_info` / `get_monitors` | `sys_info` | Foreground window / monitors |
+| `get_system_theme` | `sys_info` | Windows system light/dark theme (`"light"` / `"dark"`) |
 | `skin_read_file` / `skin_write_file` / `skin_list_dir` / `skin_delete_file` | — | Skin-folder file I/O (sandboxed) |
 | `skin_get_setting` / `skin_set_setting` | — | Read / write your own declared settings |
 | `skin_log` | — | Send an explicit host-log message (console output is forwarded automatically, §5.4) |
 | `skin_hide` / `skin_show` | self: free / `control` (others) | Hide / show a skin window (omit id = self) |
 | `skin_broadcast` | — | Inter-skin event broadcast (`desk-skin-message`, reaches all loaded skins incl. self) |
-| `http_request` | — | Arbitrary HTTP request (beyond CORS; pages already have fetch) |
+| `http_request` | `network` | Arbitrary HTTP request (read responses beyond CORS; the page's restricted fetch stays ungated) |
 | `read_registry_value` | `registry` | Registry read-only |
 | `run_command` | `shell` | Run a command (normal privileges, hidden window) |
-| `open_external` / `show_notification` | `system` | Open external target (incl. `ms-settings:` Settings pages) / toast notification |
+| `open_external` | http(s): `open_link` or `system`; others: `system` | Open an external target — URI whitelist (http(s)/mailto/ms-settings); local paths are always rejected |
+| `show_notification` | `notify` | Toast notification |
 | `lock_workstation` / `monitor_off` / `sleep` / `power_control` / `empty_recycle_bin` | `system` | Lock screen / display off / sleep / shutdown·restart·sign out / empty Recycle Bin |
 | `set_volume` / `set_mute` / `media_control` / `media_seek` | `media` | Volume / mute / media transport / media seek |
 | `read_clipboard_text` / `write_clipboard_text` | `clipboard` | Clipboard read / write |
@@ -478,9 +483,14 @@ const settings = window.__DESK_PP__?.settings || {};
 const cpu = window.__DESK_PP__?.invoke ? await window.__DESK_PP__.invoke('get_cpu_info') : null;
 ```
 
-The public commands a skin can call fall into three groups: §5.2 system info (read-only, no permission needed), §5.3 sensitive capabilities (require `permissions` declarations), §5.4 settings read/write. All other commands are unreachable (§5.5).
+The public commands a skin can call fall into three groups: §5.2 system info (read-only, low-risk `sys_info` / `media`), §5.3 sensitive capabilities (require `permissions` declarations), §5.4 permission-free commands (settings read/write, logging, visibility, broadcast). All other commands are unreachable (§5.5).
 
-### 5.2 System Info (Read-Only, No Permission Needed)
+### 5.2 System Info (Read-Only) — Low-Risk Permissions `sys_info` / `media`
+
+Every command in this section is read-only and changes no system state, gated by two low-risk permissions (an undeclared call rejects with e.g. `皮肤 'my-skin' 未声明权限 'sys_info'`):
+
+- **`sys_info`**: every command in this section except the three below — hardware and system status (including activity information such as the process list, foreground window title, and input idle time);
+- **`media`**: `get_audio_spectrum`, `get_volume`, and `get_media_info` — audio and playback-state reads (same permission as the media control commands in §5.3: reads and control share it, both low risk).
 
 **Rate-type readings (CPU/GPU usage, disk/network speed) = the delta between two samples; the first call returns 0 (baseline)** — poll once per second; don't call just once.
 
@@ -569,7 +579,7 @@ const net = await window.__DESK_PP__.invoke('get_network_info');
 // }
 ```
 
-#### `get_audio_spectrum`
+#### `get_audio_spectrum` (`media`)
 
 Real-time spectrum of the sound the system is playing (WASAPI loopback capture, no microphone needed). The first call starts the capture thread automatically; after polling stops for about 30 seconds the audio device is released, and polling again restarts it:
 
@@ -606,14 +616,14 @@ const top = await window.__DESK_PP__.invoke('get_processes', { sort: 'cpu', limi
 
 `sort`: `"cpu"` (default) / `"memory"` (any other value falls back to `"cpu"`); `limit` defaults to 10, clamped to 1–100. `cpu` is a whole-machine percentage 0–100 (100 = all cores fully busy, same accounting as Task Manager), **the first call returns 0 (baseline)**.
 
-#### `get_volume`
+#### `get_volume` (`media`)
 
 ```js
 const v = await window.__DESK_PP__.invoke('get_volume');
 // { volume_pct: 100.0, muted: false }   // system master volume and mute state
 ```
 
-#### `get_media_info`
+#### `get_media_info` (`media`)
 
 The media currently playing (SMTC — most players such as NetEase Cloud Music, QQ Music, Spotify, and browser videos integrate with it). **Returns `null` when there is no playback session (not an error)**:
 
@@ -632,7 +642,7 @@ const m = await window.__DESK_PP__.invoke('get_media_info');
 
 Fields the player didn't report are empty strings; progress may likewise be 0. `position_secs` is a snapshot of the player's last report and does not advance on its own during playback (reporting cadence varies by player — interpolate yourself if you need a smooth progress bar). **Session picking = enumerate + prefer** (playing > has progress > has metadata), not what Windows considers the "current" session — in multi-session scenarios (e.g. a browser plus NetEase Cloud Music) you get the real one.
 
-**Progress-bar seeking** (`media` permission, `media_seek`): positions by absolute seconds; when `seekable` is false (media-center-style controls often disable seeking) it returns `false` — not an error — so a skin should keep the progress bar read-only in that case:
+**Progress-bar seeking** (`media` permission, `media_seek`): positions by absolute seconds (input clamped to 0–86400 s, non-finite values become 0); when `seekable` is false (media-center-style controls often disable seeking) it returns `false` — not an error — so a skin should keep the progress bar read-only in that case:
 
 ```js
 const ok = await window.__DESK_PP__.invoke('media_seek', { positionSecs: 120.5 });
@@ -757,7 +767,9 @@ const r = await window.__DESK_PP__.invoke('run_command', {
 - launch failures (command not found, etc.) reject;
 - suited for one-shot query commands; processes needing interaction don't work; grandchild processes of long-running processes may not be cleaned up by the timeout, and output can be incomplete while a grandchild holds the output pipes — use with care.
 
-#### System Volume & Media Control (permission `media`)
+#### System Volume & Media Control (Permission `media`, Low Risk)
+
+The three read commands (`get_volume` / `get_media_info` / `get_audio_spectrum`, see §5.2) and the control commands in this section share the single `media` permission — reads and control alike:
 
 ```js
 await window.__DESK_PP__.invoke('set_volume', { volumePct: 60 });  // 0–100, out-of-range values are clamped (media)
@@ -777,24 +789,19 @@ await window.__DESK_PP__.invoke('write_clipboard_text', { text: 'hello' });
 
 Text only. What you read is the user's current clipboard — it may contain sensitive content they just copied, so only call it when you genuinely need it; that's also why it requires its own permission.
 
-#### Opening Links/Files (Permission `system`)
+#### Opening Links (http(s): `open_link` Low Risk or `system`; other URI targets: `system` High Risk)
 
-Opens with the system default program (browser / file association):
+Opens with the system default program (browser / mail client / the system Settings app). **Tiered gating**: when the target is an `http(s)://` web link, declaring either `open_link` (low risk) or `system` (high risk) suffices; `mailto:` and `ms-settings:` targets require `system` (high risk) — `system` itself is unaffected (all targets remain available to it):
 
 ```js
 await window.__DESK_PP__.invoke('open_external', { target: 'https://example.com' });
-await window.__DESK_PP__.invoke('open_external', { target: 'D:\\docs\\report.pdf' });
 ```
 
-Allowed targets: `http(s)://`, `mailto:`, `ms-settings:` (Windows Settings-page URIs, e.g. `ms-settings:display` — handled by the system Settings app, no code-execution surface), local absolute paths (files or folders). Explicitly rejected:
+Only the three-scheme URI whitelist is allowed: `http(s)://`, `mailto:`, and `ms-settings:` (Windows Settings-page URIs, e.g. `ms-settings:display` — handled by the system Settings app, no code-execution surface). Everything else is always rejected — local absolute paths, relative paths, UNC paths, and other schemes such as `file:` / `javascript:` — with a uniform `InvalidTarget` error; failed opens (missing page, no handler) return `OpenFailed` without distinguishing the cause.
 
-- **Executables / types the system resolves as code or remote references** (`.exe` `.bat` `.cmd` `.ps1` `.vbs` `.vbe` `.js` `.jse` `.wsf` `.wsh` `.msi` `.msp` `.msc` `.scr` `.com` `.pif` `.cpl` `.lnk` `.hta` `.reg` `.dll` `.jar` `.url` `.search-ms` `.library-ms` `.application` `.appref-ms` `.diagcab` `.website` `.chm` `.settingcontent-ms` `.scf` `.hlp` `.wsc` `.sct`) — to run programs, use `run_command` with the `shell` permission, so users get a correct expectation of capabilities; the last six (Explorer search/library files, ClickOnce, diagnostic packages, etc.) can indirectly point at remote shares — same NTLM-leak surface as UNC paths, so they are rejected too;
-- **UNC paths** (`\\host\share` form; accessing one triggers an SMB connection);
-- **Path components with trailing dots/spaces** (Windows normalization strips them before executing — `"RUN.EXE."` and `"RUN.EXE "` are the same file as `"RUN.EXE"`; always rejected);
-- relative paths and schemes like `file:` / `javascript:`;
-- nonexistent targets and open failures return the same error, indistinguishable.
+**The local-path face has been removed entirely**: `open_external` no longer accepts any local path — defending ShellExecute on local files with an executable-extension blacklist was negative enumeration (the list never kept up with the execution surface and was once bypassed via trailing dots/spaces); a URI whitelist removes the whole surface. Skins that genuinely need to open local files should use `run_command` under the `shell` permission (high risk, shown on the install page).
 
-#### System Notifications (Permission `system`)
+#### System Notifications (Permission `notify`, Low Risk)
 
 Pops a Windows toast notification (visible in the Action Center, shown as coming from Driftlet):
 
@@ -817,7 +824,7 @@ await window.__DESK_PP__.invoke('power_control', { action: 'shutdown' }); // shu
 await window.__DESK_PP__.invoke('empty_recycle_bin');                   // empty the Recycle Bin
 ```
 
-- All of them take **no path/target parameters** — the `system` permission deliberately has no "launch an exe" channel (same line of defense as `open_external`'s executable blacklist); to run programs use `run_command` under the `shell` permission;
+- All of them take **no path/target parameters** — the `system` permission deliberately has no "launch an exe" channel (same line of defense as `open_external` accepting only the URI whitelist); to run programs use `run_command` under the `shell` permission;
 - `power_control` does not force anything: apps with unsaved data may block the shutdown/restart and the user sees the system-level "apps are preventing shutdown" screen — a skin cannot bypass it to silently discard data;
 - `empty_recycle_bin` performs the same regular emptying as Explorer (system confirmation box + progress + sound) — the final say over the destructive action stays with the user; a skin cannot empty silently. When the bin is already empty it succeeds immediately without the box;
 - `sleep` rejects with a readable error on machines where sleep is disabled by system policy;
@@ -825,7 +832,7 @@ await window.__DESK_PP__.invoke('empty_recycle_bin');                   // empty
 
 #### Microphone Spectrum (Permission `mic`)
 
-Same pipeline and same return structure as `get_audio_spectrum` (system loopback, no permission needed), but captures **microphone input**:
+Same pipeline and same return structure as `get_audio_spectrum` (system loopback, `media` permission), but captures **microphone input**:
 
 ```js
 const { bands, peak } = await window.__DESK_PP__.invoke('get_mic_spectrum', { bands: 32 });
@@ -849,7 +856,8 @@ await window.__DESK_PP__.invoke('skin_delete_any_path', { path: 'D:\\notes\\todo
 await window.__DESK_PP__.invoke('skin_delete_any_path', { path: 'D:\\notes\\archive', recursive: true });
 ```
 
-- **Absolute paths only** — relative paths are rejected (there is no working directory to resolve them against); **UNC network paths are always rejected** (`\\host\share` access triggers SMB connections and NTLM outbound — same rationale as `open_external` rejecting UNC);
+- **Absolute paths only** — relative paths are rejected (there is no working directory to resolve them against); **UNC network paths are always rejected** (`\\host\share` access triggers SMB connections and NTLM credential outbound); mutation targets containing `..` components are rejected as well;
+- **The app's own data directories are off-limits for mutation (four forbidden roots)**: write/create/delete targets are judged via `ensure_mutable_any_path` and always refused when they land inside Driftlet's own data directories — `skins/`, `config/`, `update/` (the update directory), and the exe's program directory (covering Driftlet.exe itself / WebView2Loader.dll / the uninstaller; in the portable layout it is the parent of the other three roots, redundant but explicit, while in the non-portable fallback layout the four roots are disjoint and each applies independently). Otherwise a skin could rewrite its own `skin.json` to add `permissions` entries and silently break the install wizard's promise (permissions are re-scanned live on every call, so the change would take effect immediately), or swap the update installer to turn "Install now" into code execution. Reading and listing are not affected (whole-disk read is the declared semantics of this permission);
 - Unlike the permission-free `skin_read_file` sandbox: these five have **no directory boundary** — the whole disk is reachable, so use them only when genuinely needed;
 - Failures reject with the raw system error (file not found, access denied, …) without wrapping — a skin may surface it to the user as-is;
 - Missing parent directories are created automatically on write (to create an empty directory use `skin_create_any_dir`);
@@ -903,7 +911,28 @@ await window.__DESK_PP__.invoke('skin_reload', { skinId: 'pomodoro' });
 - When the target is **yourself** (a skin unloading/reloading itself): permission-free, and the command is fire-and-forget — the calling window is destroyed right after, so the return value is unreliable (same mechanism as the right-click menu's Reload/Unload);
 - Load/unload/reload all emit the usual `skin-loaded` / `skin-unloaded` events, so the manager's list and config page stay in sync.
 
-### 5.4 Settings Read/Write Commands (No Permission Needed)
+#### `http_request` — Arbitrary HTTP Requests (Permission `network`, Low Risk)
+
+Goes beyond the page `fetch`'s CORS limits — any http(s) URL, custom headers, text/binary payloads. `network` is a low-risk permission: what it gates is the **capability delta** (reading arbitrary public URL responses beyond CORS, with any method/headers — the part page `fetch` cannot reach); sending data out cannot be gated anyway (`no-cors` POST), and the page's restricted `fetch` channel stays ungated:
+
+```js
+const res = await window.__DESK_PP__.invoke('http_request', {
+  url: 'https://api.example.com/data',
+  method: 'GET',                 // default GET; GET/POST/PUT/PATCH/DELETE/HEAD
+  headers: { 'Accept': 'application/json' },
+  // body: '...',                // optional payload; with binary: true it is base64-decoded before sending
+  // timeoutMs: 15000,           // default 15s, clamped 1–60s
+  // binary: true,               // binary channel: request body sent as base64, response body returned as base64
+});
+// → { status, body, headers, truncated }; body truncated at 4MB (truncated=true)
+```
+
+- **HTTP error statuses do not reject**: 4xx/5xx return `status` and `body` as usual (error-page bodies are often useful); only transport failures (DNS, connection, timeout) reject;
+- **Local/internal addresses are always rejected (SSRF guard)**: `localhost` hostnames and loopback/link-local/private/unspecified/broadcast IPs (127.x, `::1`, 10.x, 172.16–31, 192.168.x, 169.254.x, 0.0.0.0, …) cannot be requested, and numeric IP literals (`2130706433` / `0x7f000001` / `127.1`, … — inet_aton forms) are caught by the same rules after being resolved back to their IPv4 address — low risk does not mean the internal network is readable; **redirects are re-checked per hop** (scheme and private-address test on every hop, max 3 hops) — so a 302 cannot be a corridor past the guard;
+- `binary: true` is for binary content like images/fonts — the text channel lossy-replaces invalid UTF-8 (binary data would be corrupted);
+- response headers come back in `headers` (only the first value of a repeated header is kept) — `Content-Type` etc.
+
+### 5.4 Permission-Free Commands (Settings Read/Write / Logging / Visibility / Broadcast)
 
 #### `skin_get_setting` — Read Your Own Setting Value by Key
 
@@ -974,27 +1003,7 @@ document.addEventListener('desk-skin-message', (e) => {
 - `channel` is 1–64 chars; `payload` is any JSON value (≤16KB serialized);
 - you also receive your own broadcasts (filter by `from` when needed);
 - it only delivers DOM events and touches no host state, hence permission-free; a skin being unloaded won't receive (its window is gone from the registry).
-
-#### `http_request` — Arbitrary HTTP Requests (Permission-Free)
-
-Goes beyond the page `fetch`'s CORS limits — any http(s) URL, custom headers, text/binary payloads. Rationale for being free: pages already have the `fetch` channel (a `no-cors` POST can already send data out), so a separate gate would only stop the honest and add display noise:
-
-```js
-const res = await window.__DESK_PP__.invoke('http_request', {
-  url: 'https://api.example.com/data',
-  method: 'GET',                 // default GET; GET/POST/PUT/PATCH/DELETE/HEAD
-  headers: { 'Accept': 'application/json' },
-  // body: '...',                // optional payload; with binary: true it is base64-decoded before sending
-  // timeoutMs: 15000,           // default 15s, clamped 1–60s
-  // binary: true,               // binary channel: request body sent as base64, response body returned as base64
-});
-// → { status, body, headers, truncated }; body truncated at 4MB (truncated=true)
-```
-
-- **HTTP error statuses do not reject**: 4xx/5xx return `status` and `body` as usual (error-page bodies are often useful); only transport failures (DNS, connection, timeout) reject;
-- **Local/internal addresses are always rejected (SSRF guard)**: `localhost` hostnames and loopback/link-local/private/unspecified/broadcast IPs (127.x, `::1`, 10.x, 172.16–31, 192.168.x, 169.254.x, 0.0.0.0, …) cannot be requested — permission-free does not mean the internal network is readable; redirects are followed at most 3 times;
-- `binary: true` is for binary content like images/fonts — the text channel lossy-replaces invalid UTF-8 (binary data would be corrupted);
-- response headers come back in `headers` (only the first value of a repeated header is kept) — `Content-Type` etc.
+- **Permission-free means unauthenticated: channel names are public to every loaded skin, and any skin can post to any channel** — don't treat broadcast content as trusted input (don't act on a channel name alone); validate `from` and `payload` like any other event source on the page.
 
 ### 5.5 Call Boundary (Commands Skins Can't Reach)
 
@@ -1021,7 +1030,7 @@ Driftlet's design premise: **a skin is third-party, network-capable local code**
 | Boundary | Description |
 |------|------|
 | Manager command isolation | Any manager command called from a skin window is rejected by the backend (§5.5); a skin cannot install/uninstall/tamper with other skins or the global config |
-| Permission declarations | Sensitive capabilities (§5.3) must be declared in skin.json and are **shown to the user one by one at install time** (flagged in two risk tiers: `shell`/`system` high risk, `registry`/`clipboard`/`mic` medium risk); undeclared means rejected |
+| Permission declarations | Sensitive capabilities (§5.2–§5.3) must be declared in skin.json and are **shown to the user one by one at install time** (flagged in three risk tiers: `shell`/`system`/`file_system` high risk, `registry`/`clipboard`/`mic`/`control` medium risk, `media`/`notify`/`sys_info`/`network`/`open_link` low risk); undeclared means rejected |
 | File sandbox | File read/write is confined to the skin's own folder (`..`, absolute paths, colon path segments, and symlink escapes rejected; 32MB/16MB read/write caps); `skin.json` and the user's `settings.json` are read-only to every skin — the sandbox itself is the boundary, so file read/write needs no permission declaration |
 | Settings isolation | `settings.json` is never served over `skin://` (including 8.3 short names, NTFS streams, and other variants); a skin's setting values are unreachable by other skins |
 | Password protection | `password`-type setting values are never injected at serve time (always empty strings in the baked `__DESK_PP__.settings`); only the owning skin window can read them via `skin_get_setting`; a manager-side save is synced into that same window (same domain, no privilege crossed) |
@@ -1040,7 +1049,7 @@ The platform can't see inside skin pages; the following are on you:
 - **Prevent XSS**: assign dynamic content (user input, task text, network responses) via `textContent`, or escape it before putting it into `innerHTML` — skin setting values and task lists are all user-editable; splicing them straight into HTML is an injection. The example skin `controls-demo` renders everything via `textContent` and demonstrates this correctly.
 - **Only load scripts and resources you trust**: skin pages have no CSP protection — one hijacked CDN script gets your full page capabilities (including the command channel of declared permissions). Bundle resources locally where possible.
 - **Minimize permissions**: declare only what you actually use — the install page shows users the declaration list; over-declaring directly hurts install willingness and user safety.
-- **Declare purposes honestly**: explain what each permission is for on the release page; `shell` and `system` are flagged high risk, `registry`, `clipboard`, and `mic` medium risk.
+- **Declare purposes honestly**: explain what each permission is for on the release page; `shell`, `system`, and `file_system` are flagged high risk, `registry`, `clipboard`, `mic`, and `control` medium risk, and `media`, `notify`, `sys_info`, `network`, and `open_link` low risk.
 
 ---
 
@@ -1112,7 +1121,7 @@ Source lives in `tools/pack-skin/` (Rust); rebuild with `cargo build --release`.
 
 ### 8.3 Install/Update Behavior on the User Side
 
-- Both entry points (the manager's "+ Add Skin", double-clicking a `.dskin`) share the same install wizard: it first validates whether it's a legal skin package (can `skin.json` be found and parsed, does `id` exist, does the entry file exist), clearly stating the reason if invalid; the confirmation page shows the skin's name, version, author, description, and **all permission declarations** (flagged in two risk tiers: `shell`/`system` high risk, `registry`/`clipboard`/`mic` medium risk).
+- Both entry points (the manager's "+ Add Skin", double-clicking a `.dskin`) share the same install wizard: it first validates whether it's a legal skin package (can `skin.json` be found and parsed, does `id` exist, does the entry file exist), clearly stating the reason if invalid; the confirmation page shows the skin's name, version, author, description, and **all permission declarations** (flagged in three risk tiers: high-risk red / medium-risk yellow / low-risk blue).
 - When the same `id` is already installed, version numbers decide: higher version → "Update", same version → "Reinstall" (overwrite), lower version → "Downgrade" — all labeled on the confirmation page.
 - **Update/reinstall/downgrade all keep the user's settings data**: window config is stored per `id` in the global config.json, decoupled from skin files; user values from the "Skin Settings" tab live in `settings.json` in the skin folder — taken out before install and written back after replacement (user values win over a same-named file in the package). New setting items use defaults; data of removed setting items lapses automatically.
 - `settings.json` (including `.bak` / `.tmp`) is **user data and should never enter a distribution package** — `pack-skin.exe` excludes it automatically; don't include it in manual packaging either (even if it slips in, it gets overwritten by the user's existing values at install time).
@@ -1145,18 +1154,18 @@ Go through these one by one before packaging:
 
 ## 10. Example Skins
 
-The repo ships seven example skins. `controls-demo` is the reference implementation of the settings system and page conventions; `sys-monitor` / `media-hub` / `toolbox` together cover all backend commands callable by skins (§5.2–§5.4) and are the reference for API usage; `deepseek-balance` is the reference for networked query skins; `power-tools` demonstrates the `file_system` (high risk) and `control` (medium risk) permissions; `web-view` is the reference for iframe-embedded web skins (zero permissions). Strongly recommended to read their code before starting:
+The repo ships seven example skins. `controls-demo` is the reference implementation of the settings system and page conventions; `sys-monitor` / `media-hub` / `toolbox` together cover most backend commands callable by skins (§5.2–§5.4; `http_request` under `network` has no demo skin) and are the reference for API usage; `deepseek-balance` is the reference for networked query skins; `power-tools` demonstrates the `file_system` (high risk) and `control` (medium risk) permissions; `web-view` is the reference for iframe-embedded web skins (zero permissions). Strongly recommended to read their code before starting:
 
 | Skin | What it demonstrates |
 |------|----------|
 | `examples/controls-demo` | All 22 setting control types + groups + descriptions + Chinese/English bilingual (§4.5), HTML/CSS/JS split with relative-path references, the manager's modern material (cool paper background + floating white cards + soft shadows; three light background tints: cool paper / warm white / mist blue), the fill + internal scroll paradigm, the schema read via `fetch('skin.json')` on a relative path with control labels/groups/options rendered per the bridge language, `desk-language-changed` driving the UI language to follow the manager instantly (§4.5), setting values live-applied in the demo area (accent color / progress bar / status dot / font / background tint / panel density / stepper-driven ticker interval), `password`-type values read via `skin_get_setting`, and rendering entirely with DOM APIs / `textContent` |
-| `examples/sys-monitor` | The full §5.2 read-only system-info set: CPU (total bar + per-thread mini bars) / GPU / memory / disks (incl. per-volume space) / network (rates + local IPs) / OS / top-5 processes (sortable by CPU or memory) / battery / idle time / foreground window / monitors; rate readings poll every 1s (first call is a zero baseline), static info reads once at startup, polling pauses while the page is hidden. **Zero permission declarations** |
-| `examples/media-hub` | Volume read/set/mute, SMTC media info (cover / progress / status / seekable) and playback control (play_pause/next/previous) + draggable progress-bar seeking (`media_seek`, locks read-only when the source doesn't support it), dual-source spectrum from system loopback and microphone (live canvas bars + peak line, paused while hidden, device auto-released ~30s after polling stops), toast notifications; permissions `system` + `media` + `mic` |
-| `examples/toolbox` | Clipboard read/write, skin-directory file write/read/list/delete, read-only registry (preset + custom keys), command execution (preset `ver`/`ipconfig` + custom, showing code/stdout/stderr), opening links (including a rejected `.exe` target demo), `skin_get_setting` / `skin_set_setting` (the only read channel for `password` values, writing settings back, syncing manager-side edits via `desk-setting-changed`); permissions `registry` / `shell` / `clipboard` / `system` |
-| `examples/deepseek-balance` | Reference for networked skins: direct `fetch` of an external REST API (DeepSeek balance query — the server returns CORS allow headers, §3.4), the API key stored in a `password` setting and read via `skin_get_setting` (§4.3), the official whale logo (icon region cropped out of the wordmark SVG, inlined with `currentColor` so it tints with the theme), scheduled auto-queries (configurable interval) + pause while hidden / catch-up query on becoming visible + a manual refresh button, a configurable low-balance warning line (amber figure + badge), a Windows notification on dropping below the line (edge-triggered, re-arms after recovery), one-click top-up page via `open_external`, OK / low-balance / query-failed / unconfigured status badge, live-applied accent color and topped-up-balance toggle (granted balance shown only when present), Chinese/English bilingual; permission `system` |
+| `examples/sys-monitor` | The full §5.2 read-only system-info set: CPU (total bar + per-thread mini bars) / GPU / memory / disks (incl. per-volume space) / network (rates + local IPs) / OS / top-5 processes (sortable by CPU or memory) / battery / idle time / foreground window / monitors; rate readings poll every 1s (first call is a zero baseline), static info reads once at startup, polling pauses while the page is hidden. Permission `sys_info` (low risk) |
+| `examples/media-hub` | Volume read/set/mute, SMTC media info (cover / progress / status / seekable; 1s polling, paused while the page is hidden with a catch-up poll when it becomes visible again) and playback control (play_pause/next/previous) + draggable progress-bar seeking (`media_seek`, locks read-only when the source doesn't support it), dual-source spectrum from system loopback and microphone (live canvas bars + peak line, paused while hidden, device auto-released ~30s after polling stops), toast notifications; permissions `media` + `mic` + `notify` |
+| `examples/toolbox` | Clipboard read/write, skin-directory file write/read/list/delete, read-only registry (preset + custom keys), command execution (preset `ver`/`ipconfig` + custom, showing code/stdout/stderr), opening links (URI whitelist http(s)/mailto/ms-settings, including a rejected local-path demo), `skin_get_setting` / `skin_set_setting` (the only read channel for `password` values, writing settings back, syncing manager-side edits via `desk-setting-changed`); permissions `registry` / `shell` / `clipboard` / `system` |
+| `examples/deepseek-balance` | Reference for networked skins: direct `fetch` of an external REST API (DeepSeek balance query — the server returns CORS allow headers, §3.4), the API key stored in a `password` setting and read via `skin_get_setting` (§4.3), the official whale logo (icon region cropped out of the wordmark SVG, inlined with `currentColor` so it tints with the theme), scheduled auto-queries (configurable interval) + pause while hidden / catch-up query on becoming visible + a manual refresh button, a configurable low-balance warning line (amber figure + badge), a Windows notification on dropping below the line (edge-triggered, re-arms after recovery), one-click top-up page via `open_external`, OK / low-balance / query-failed / unconfigured status badge, live-applied accent color and topped-up-balance toggle (granted balance shown only when present), Chinese/English bilingual; permissions `open_link` + `notify` (all low risk) |
 | `examples/power-tools` | Demo of the two high-risk permissions: arbitrary absolute-path file read/write (`skin_read_any_file` / `skin_write_any_file` — failures reject with the raw system error; binary via base64), and reading/patching any skin's window config (`skin_get_window_config` / `skin_set_window_config` — whole-patch validation, one-sided position/size merging, zoom before size); permissions `file_system` (high-risk red) + `control` (medium-risk yellow) |
 | `examples/web-view` | Reference for iframe-embedded web skins (zero permissions): a local shell (drag-bar title strip + refresh button + status dot) embedding any site page in an iframe — the site URL is a setting (switching it in the manager swaps the page live), the bridge is fully functional (dragging / right-click menu / settings), cookies are shared with the WebView2 user-data folder (persist after one login), timed reload by reassigning the same src (cross-origin frames can't touch contentWindow) + an auto-refresh toggle (off = manual refresh only), pause while hidden / catch-up on visible, and a guidance empty state when unconfigured; requires the target site to allow framing (no `X-Frame-Options` / `frame-ancestors` restriction) |
 
 The seven skins `controls-demo` / `sys-monitor` / `media-hub` / `toolbox` / `deepseek-balance` / `power-tools` / `web-view` also follow: bilingual UI that follows the manager language, dynamic content rendered exclusively via `textContent` / DOM APIs, no crashes when the bridge is missing (plain-browser preview), and rejected-command error text displayed inline in the corresponding card.
 
-`controls-demo`, `sys-monitor`, and `web-view` declare no `permissions` — every capability they use is permission-free.
+`controls-demo` and `web-view` declare no `permissions` — every capability they use is in the permission-free baseline; `sys-monitor` declares only the low-risk `sys_info`.

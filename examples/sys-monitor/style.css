@@ -74,7 +74,7 @@ body {
   white-space: nowrap;
 }
 
-/* 「免权限」卖点标注：实色绿砖改软绿胶囊（管理器信号灯语言） */
+/* 「低危只读」标注：软绿胶囊（管理器信号灯语言） */
 .badge {
   flex: none;
   display: inline-flex;

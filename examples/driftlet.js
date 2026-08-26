@@ -34,23 +34,25 @@ window.Driftlet = (() => {
     /** 宿主版本号（如 "1.0.5"）：能力探测用，按数字段比较 */
     get hostVersion() { return bridge()?.hostVersion || ''; },
 
-    // ── 系统信息（只读，免权限）。速率类读数首次调用返回 0（基线），建议每秒轮询 ──
+    // ── 系统信息（只读，sys_info 低危）。速率类读数首次调用返回 0（基线），建议每秒轮询 ──
     getCpuInfo: () => call('get_cpu_info'),
     getGpuInfo: () => call('get_gpu_info'),
     getMemoryInfo: () => call('get_memory_info'),
     getDisksInfo: () => call('get_disks_info'),
     getDiskSpace: (path) => call('get_disk_space', { path }),
     getNetworkInfo: () => call('get_network_info'),
-    getAudioSpectrum: (bands) => call('get_audio_spectrum', { bands }),
     getOsInfo: () => call('get_os_info'),
     getProcesses: (sort, limit) => call('get_processes', { sort, limit }),
-    getVolume: () => call('get_volume'),
-    getMediaInfo: () => call('get_media_info'),       // 无播放会话时 resolve null
     getBatteryInfo: () => call('get_battery_info'),
     getIdleTime: () => call('get_idle_time'),
     getForegroundWindowInfo: () => call('get_foreground_window_info'),
     getMonitors: () => call('get_monitors'),
     getSystemTheme: () => call('get_system_theme'),   // Windows 系统级 "light"/"dark"（AppsUseLightTheme）
+
+    // ── 音频与播放状态读取（media 低危，读取与控制同权；麦克风归 mic）──
+    getVolume: () => call('get_volume'),
+    getMediaInfo: () => call('get_media_info'),       // 无播放会话时 resolve null
+    getAudioSpectrum: (bands) => call('get_audio_spectrum', { bands }),
 
     // ── 皮肤目录文件（免权限；沙箱限自身目录，binary: true 时 base64 收发）──
     readFile: (path, binary) => call('skin_read_file', { path, binary }),
@@ -75,10 +77,11 @@ window.Driftlet = (() => {
     setVolume: (volumePct) => call('set_volume', { volumePct }),    // media（0–100，越界钳制）
     setMute: (muted) => call('set_mute', { muted }),                // media
     mediaControl: (action) => call('media_control', { action }),    // media
+    mediaSeek: (positionSecs) => call('media_seek', { positionSecs }), // media（绝对秒数寻址；源不支持寻址时 resolve false）
     readClipboardText: () => call('read_clipboard_text'),           // clipboard
     writeClipboardText: (text) => call('write_clipboard_text', { text }), // clipboard
-    openExternal: (target) => call('open_external', { target }),    // system（http(s)/mailto/ms-settings: 或本机绝对路径；.exe 等可执行目标拒绝）
-    showNotification: (title, body) => call('show_notification', { title, body }), // system
+    openExternal: (target) => call('open_external', { target }),    // URI 白名单：http(s) 目标 open_link 或 system；mailto/ms-settings 需 system；本地路径一律拒绝
+    showNotification: (title, body) => call('show_notification', { title, body }), // notify（低危）
     lockWorkstation: () => call('lock_workstation'),                // system（等同 Win+L）
     monitorOff: () => call('monitor_off'),                          // system（灭屏，任意输入唤醒）
     sleep: () => call('sleep'),                                     // system（系统进入睡眠）
@@ -91,14 +94,16 @@ window.Driftlet = (() => {
     createAnyDir: (path) => call('skin_create_any_dir', { path }), // file_system（含多级，已存在视为成功）
     deleteAnyPath: (path, recursive) => call('skin_delete_any_path', { path, recursive }), // file_system（目录树须 recursive: true）
     // file_system：外部文件的引用 URL（<img src> / CSS url() 直接用，不经 JS 内存）
-    fileUrl: (path) => 'http://skin.localhost/__fs__?path=' + encodeURIComponent(path),
+    // 协议源口径与管理器一致（api.js）：Windows = http://skin.localhost，其余平台 skin://localhost
+    fileUrl: (path) => (navigator.userAgent.includes('Windows') ? 'http://skin.localhost' : 'skin://localhost')
+      + '/__fs__?path=' + encodeURIComponent(path),
     listSkins: () => call('skin_list_skins'),       // control（已安装皮肤清单：id/name/version/loaded/hidden）
     getWindowConfig: (skinId) => call('skin_get_window_config', { skinId }),  // 省略 id = 自己，免权限；他人需 control
     setWindowConfig: (skinId, patch) => call('skin_set_window_config', { skinId, patch }), // 省略 id = 改自己全键免权限；他人需 control
     loadSkin: (skinId) => call('skin_load', { skinId }),        // 省略 id = 自己免权限；他人需 control
     unloadSkin: (skinId) => call('skin_unload', { skinId }),    // 同上（目标是自己时 fire-and-forget，返回值不可依赖）
     reloadSkin: (skinId) => call('skin_reload', { skinId }),    // 同上
-    httpRequest: (url, opts) => call('http_request', {          // 免权限（突破 CORS；页面本有 fetch 通道）
+    httpRequest: (url, opts) => call('http_request', {          // network 低危（绕 CORS 读响应；页面 fetch 的受限通道仍在闸外）
       url,
       method: opts?.method,
       headers: opts?.headers,

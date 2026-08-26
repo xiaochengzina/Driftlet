@@ -96,6 +96,11 @@ const API = {
     return invoke('pick_skin_package');
   },
 
+  /** 把已安装皮肤文件夹打成 .dskin：返回保存路径；用户取消返回 null */
+  packageSkin(skinId) {
+    return invoke('package_skin', { skinId });
+  },
+
   inspectSkinPackage(packagePath) {
     return invoke('inspect_skin_package', { packagePath });
   },
@@ -164,13 +169,18 @@ const API = {
   },
 
   // 布局备份：导出 config/ + skins/ 为 zip（返回保存路径，取消为 null）；
-  // 导入备份 zip（返回是否已导入，取消为 false）
+  // 导入分两段——inspectBackup 选包并返回包内皮肤清单与权限声明（取消为
+  // null），importConfig(path) 在审查确认后执行导入
   exportConfig() {
     return invoke('export_config');
   },
 
-  importConfig() {
-    return invoke('import_config');
+  inspectBackup() {
+    return invoke('inspect_backup');
+  },
+
+  importConfig(path) {
+    return invoke('import_config', { path });
   },
 
   // 皮肤热重载开关（仅开发构建生效）
