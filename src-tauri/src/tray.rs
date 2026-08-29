@@ -144,12 +144,9 @@ fn build_skins_submenu(app: &AppHandle, lang: &str) -> tauri::Result<tauri::menu
         .into_iter()
         .filter(|s| loaded.contains(&s.id))
         .map(|s| {
-            let name = if lang == "en" && s.manifest.bilingual {
-                s.manifest.name_en.clone().unwrap_or_else(|| s.manifest.name.clone())
-            } else {
-                s.manifest.name.clone()
-            };
-            (s.id, name)
+            // 显示名走 SkinManifest::display_name 单一口源（界面语言优先、
+            // 缺失回退另一语言——单语言皮肤两种界面都显示其提供的文案）
+            (s.id, s.manifest.display_name(&lang))
         })
         .collect();
     named.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));

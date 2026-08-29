@@ -220,7 +220,8 @@ interface DriftletHttpResponse {
 /** skin_list_skins 的条目结构 */
 interface DriftletSkinListEntry {
   id: string;
-  name: string;
+  /** 中文皮肤名（旧字段名 name 经管理器 alias 解析进这里） */
+  name_zh: string;
   name_en?: string | null;
   version?: string | null;
   author?: string | null;

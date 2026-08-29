@@ -117,11 +117,12 @@ Full example:
 ```json
 {
   "id": "my-skin",
-  "name": "My Skin",
+  "name_zh": "我的皮肤",
+  "name_en": "My Skin",
   "version": "1.0.0",
   "author": "You",
-  "description": "A simple desktop widget",
-  "bilingual": false,
+  "description_zh": "一个简单的桌面挂件",
+  "description_en": "A simple desktop widget",
   "entry": "index.html",
   "window": {
     "width": 300,
@@ -145,15 +146,14 @@ The `skin.json` file itself must not exceed **1 MB** (larger files are refused a
 | Field | Required | Description |
 |------|------|------|
 | `id` | Required for packaging/distribution | Unique skin ID; rules below |
-| `name` | Yes | Skin name, shown in the manager's list and config panel |
-| `name_en` | No | English skin name (preferred in the English UI when `bilingual: true`; falls back to `name` if empty), see §4.5 |
+| `name_zh` | No (recommended) | Chinese skin name, shown in the manager's list and config panel. The **legacy field name `name` is still accepted** (equivalent alias); filling only `name_zh` or only `name_en` suffices for a single-language skin, see §4.5 |
+| `name_en` | No | English skin name: preferred in the English UI; when the Chinese field is missing/empty the UI falls back to it. Symmetric naming with `name_zh`, see §4.5 |
 | `entry` | No | Entry HTML file name, default `index.html`; must be a **plain file name** — `..`, `/`, `\`, `:` are not allowed. **Exception: an `http(s)://` URL = a web skin** (the window loads the site page directly, see §2.2) |
 | `author` | No | Author, shown on the card and the config panel |
 | `version` | No | Version number, e.g. `"1.0.0"`; update packages use it to decide upgrade/downgrade — strongly recommended to always set it |
 | `min_host_version` | No | Minimum host version, e.g. `"1.0.5"`; if the host is older, the install wizard warns that "some features may not work" (installation is NOT blocked). Runtime feature detection: see `hostVersion` in §5.1 |
-| `description` | No | One-line description |
+| `description_zh` | No | One-line description (**the legacy field name `description` is still accepted**) |
 | `description_en` | No | English description (same selection rules as `name_en`) |
-| `bilingual` | No | Chinese/English bilingual declaration, default `false`; when `true`, the various `*_en` English strings take effect, see §4.5 |
 | `window` | No | Window defaults, see §2.2 |
 | `permissions` | No | Sensitive capability declarations (12 kinds: `shell` / `system` / `file_system` / `registry` / `clipboard` / `mic` / `control` / `media` / `notify` / `sys_info` / `network` / `open_link`), see §2.3 |
 | `settings` | No | Custom settings declarations, see Chapter 4 |
@@ -286,12 +286,12 @@ Declare a `settings` array in `skin.json` and the manager's "Skin Settings" tab 
 |------|------|------|
 | `key` | Yes | Unique identifier (unique within the skin; it is the persistence key) |
 | `type` | Yes | Control type, see §4.2 |
-| `label` | No | Control title; `key` is shown if omitted |
-| `label_en` | No | English control title (bilingual skins only, see §4.5) |
-| `description` | No | Help text shown below the control |
-| `description_en` | No | English help text (bilingual skins only) |
-| `group` | No | Group name; controls of the same group are collected into one card; groups are ordered by first appearance; unspecified ones go into an untitled card |
-| `group_en` | No | English group name (bilingual skins only) |
+| `label_zh` | No | Control title; `key` is shown if omitted (**the legacy field name `label` is still accepted**) |
+| `label_en` | No | English control title (preferred in the English UI; falls back to `label_zh` when missing — a single-language skin fills just one, see §4.5) |
+| `description_zh` | No | Help text shown below the control (**the legacy field name `description` is still accepted**) |
+| `description_en` | No | English help text (same selection rules as `label_en`) |
+| `group_zh` | No | Group name; controls of the same group are collected into one card; groups are ordered by first appearance; unspecified ones go into an untitled card (**the legacy field name `group` is still accepted**) |
+| `group_en` | No | English group name (same selection rules as `label_en`) |
 | `default` | No | Default value; if omitted, a per-type fallback applies (false / 0 / "" / first option) |
 | `filters` | No | `file` control only: allowed extension list (no dots, e.g. `["png","jpg"]`); omitted/empty = unfiltered; backend whitelists to lowercase alphanumerics |
 
@@ -322,7 +322,7 @@ Declare a `settings` array in `skin.json` and the manager's "Skin Settings" tab 
 | `todolist` | To-do task list | `[{ "text": "...", "done": true }]` | Task rows with checkboxes; max 500 items, 200 characters per item (silently truncated beyond) |
 | `datetasklist` | Dated task list | `[{ "time": "YYYY-MM-DD HH:MM:SS", "text": "..." }]` | Each item carries a date-time; time may be empty |
 
-`options` structure: `[{ "value": "a", "label": "Display name" }]`; `label` may be omitted (falls back to showing `value`); bilingual skins may additionally set `label_en` (see §4.5).
+`options` structure: `[{ "value": "a", "label_zh": "Display name" }]`; `label_zh` may be omitted (falls back to showing `value`; **the legacy field name `label` is still accepted**); add `label_en` for the English UI to follow (see §4.5).
 
 ### 4.3 Reading Settings in a Skin
 
@@ -382,35 +382,32 @@ Contract:
 - After a successful write: if the manager's config panel is open, the corresponding control refreshes in place; `__DESK_PP__.settings[key]` is silently synced to the new value, but `desk-setting-changed` is **not** dispatched back to you (you just wrote the value yourself — echoing the event would easily loop). Changes made on the manager side are still pushed to you via `desk-setting-changed`.
 - When the skin and the manager edit the same key at the same time, last write wins (single-value granularity); different keys don't interfere.
 
-### 4.5 Chinese/English Bilingual (bilingual)
+### 4.5 Skin Text Language (Single-Language and Bilingual)
 
-The manager UI supports switching between Chinese and English, but the strings in the settings schema (group names, control titles, descriptions, option display names) are provided by the skin author — the manager does not machine-translate them. To make the settings page follow the manager's language, declare at the top level of `skin.json`:
+The manager UI supports switching between Chinese and English, but the skin name, description, and the strings in the settings schema (group names, control titles, descriptions, option display names) are provided by the skin author — the manager does not machine-translate them. The text fields use **symmetric Chinese/English naming** (`name_zh` / `name_en`, `label_zh` / `label_en`, `group_zh` / `group_en`, `description_zh` / `description_en`), and there is exactly one rule: **the UI language's field is preferred; when it's missing (absent or empty), the other language is the fallback**.
+
+- **Single-language skin (most skins)**: fill in just one language — Chinese creators fill the `*_zh` fields, English creators fill the `*_en` fields, **no declaration needed**. The manager shows the language you provided under either UI language.
+- **Bilingual skin**: fill in both languages and the display follows the manager's UI language; **if a field is left empty, that spot falls back to the other language** — translating only part of them is fine.
+- There is **no `bilingual` switch or similar declaration**: every field combination is valid, and there is no "filled it in but it got ignored" trap.
+- The legacy unsuffixed field names (`name` / `description` / `label` / `group` / option `label`) are **still accepted** (the manager parses them as equivalent aliases — zero migration for existing skins); just don't write **both** names for the same slot (that parses as a duplicate-field error). A skin that reads `skin.json` itself via `fetch()` sees the raw file, which may use either naming — the reference implementation falls back with `v.label_zh ?? v.label` (`examples/controls-demo`).
+- Bilingual-capable fields: the top-level skin name and description (`name_zh`/`name_en`, `description_zh`/`description_en`), plus the four kinds in the settings schema (control title, control description, group name, option display name); **values** like `default` do not participate in bilingual (values are data, passed to the skin as-is).
+- Group cards are merged by the display string of the current language: if a group's `group_zh` has a `group_en`, set it for **all** controls in that group, otherwise the English UI splits them into two cards.
 
 ```json
 {
-  "bilingual": true,
-  "name": "我的皮肤",
+  "name_zh": "我的皮肤",
   "name_en": "My Skin",
   "settings": [
     { "key": "title", "type": "text",
-      "label": "标题", "label_en": "Title",
-      "group": "文本", "group_en": "Text",
-      "description": "显示在顶部的标题", "description_en": "Title shown at the top",
+      "label_zh": "标题", "label_en": "Title",
+      "group_zh": "文本", "group_en": "Text",
+      "description_zh": "显示在顶部的标题", "description_en": "Title shown at the top",
       "default": "Hello" }
   ]
 }
 ```
 
-Rules:
-
-- `bilingual` is an **author declaration** (telling the manager "this skin provides English strings"), not a user option; it defaults to `false`, in which case all `*_en` fields are ignored.
-- When the manager language is **English** and `bilingual: true`, `name_en` / `description_en` and setting items' `label_en` / `description_en` / `group_en` / options' `label_en` are preferred; **if a field is left empty, that spot falls back to the default string** — translating only part of them is fine.
-- When the manager language is Chinese, the default strings are always shown (`name` / `description` / `label` / `group` / option `label`).
-- Bilingual-capable fields: the top-level skin name and description (`name_en` / `description_en`), plus the four kinds in the settings schema (control title, control description, group name, option display name); **values** like `default` do not participate in bilingual (values are data, passed to the skin as-is).
-- Group cards are merged by the display string of the current language: if a group's `group` has a `group_en`, set it for **all** controls in that group, otherwise the English UI splits them into two cards.
-- Whether to go bilingual is up to you: if not, don't write `bilingual` or any `*_en` field, and the skin shows the default strings in every language.
-
-Note: `bilingual` and the `*_en` fields only control the strings of the **manager's config panel** — the language of the skin's **own page** is up to the skin. To make the page follow the manager's language: read `__DESK_PP__.language` initially (baked in before the page loads, no race) and listen for the `desk-language-changed` event to re-render:
+Note: the skin name/description and the `*_zh` / `*_en` fields only control the strings of the **manager's config panel** — the language of the skin's **own page** is up to the skin. To make the page follow the manager's language: read `__DESK_PP__.language` initially (baked in before the page loads, no race) and listen for the `desk-language-changed` event to re-render:
 
 ```js
 function currentLang() {
@@ -1136,7 +1133,7 @@ The preview image is the user's first impression of your skin in the manager's l
 
 **Dimension facts** (why you don't need to fuss over capture pixels):
 
-- A capture = **the skin window's current physical pixel size** (logical window width/height × the current display's DPI scale), not a fixed value. For a good capture: size and stage the window the way you want it shown, then capture.
+- A capture = **the skin window's current physical pixel size** (logical window width/height × the current display's DPI scale), not a fixed value. For a good capture: size and stage the window the way you want it shown, then capture. Before writing, the manager automatically downscales the longest side to **640 px** (the list display area is only 226×112 — a full-size bitmap just wastes memory) — no need to shrink a large capture by hand, but **still compose for the display area's aspect ratio**.
 - The manager's list displays it in a fixed area of about **226 × 112 CSS px** (aspect ratio ≈ 2:1), scaled with `contain` — any excess margin reveals the dotted canvas underneath. **Images of any size display correctly**; the closer to 2:1, the less letterboxing.
 
 **Recommended specs for a hand-designed image**:
@@ -1147,6 +1144,7 @@ The preview image is the user's first impression of your skin in the manager's l
 | Resolution | **904 × 448** (4× the display area — crisp on high-DPI screens; 452 × 224 is the floor) |
 | Format | PNG (transparency allowed) or JPG (smaller when you don't need transparency) |
 | File size | ≤ 200 KB (smooth decoding while the list scrolls; oversized files stutter) |
+| Dimension cap | Longest side ≤ **1280 px** — a hard check at both install and packaging, rejected beyond it (decoded pixels ≈ width×height×4 bytes stay resident in the manager process; a 112px-tall card never needs a giant original) |
 | Content | The skin's most representative state (the preview is shown pure in the manager — no text overlaid on it) |
 
 Design note: at 226 px wide in the manager, full-desktop-screenshot detail turns to mush. **A zoomed-in fragment, a simplified composition, one clear subject** reads as your skin far better than a pixel-faithful 4K capture.
@@ -1158,13 +1156,13 @@ Design note: at 226 px wide in the manager, full-desktop-screenshot detail turns
 Go through these one by one before packaging:
 
 - [ ] `skin.json` declares a valid `id` (lowercase letters/digits/dashes, not a reserved device name) and `version`
-- [ ] `skin.json` fields are complete (name / author / version / description); file < 1 MB
+- [ ] `skin.json` fields are complete (at least one of `name_zh` / `name_en`; author / version / description); file < 1 MB
 - [ ] All assets are inside the skin folder, referenced with **relative paths**; no external CDN dependencies (or graceful offline degradation confirmed acceptable)
 - [ ] No opaque background covering the desktop under transparency
 - [ ] Drag areas use `.drag-region`; no `-webkit-app-region: drag`
 - [ ] Verified in the manager by shrinking the window to half and doubling it: content adapts fully — no clipping, no window-level scrollbars (§3.3)
 - [ ] If `settings` is declared: `key`s all unique, types correct (one of the 22), `default`s match their types
-- [ ] If `"bilingual": true` is declared: `group_en` is set for every control in a group (avoids split groups in the English UI), and every field that needs bilingual has its `*_en` (§4.5)
+- [ ] Group text: either skip `group_en` entirely or set it for **every** control in the group (avoids two split cards in the English UI, §4.5); every field that needs bilingual has its `*_en` (§4.5)
 - [ ] Setting reads have fallbacks (`?.` + `??`), and `desk-setting-changed` is listened to for live application
 - [ ] `password`-type values are read via `skin_get_setting`, not relying on values in `__DESK_PP__.settings` (always empty strings at serve time; a manager-side save syncs them into this window at runtime — never trust the baked copy)
 - [ ] Dynamic content is rendered via `textContent` or escaped; no user-editable values spliced raw into `innerHTML` (§6.3)

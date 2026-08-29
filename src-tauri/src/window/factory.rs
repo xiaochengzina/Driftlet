@@ -918,7 +918,9 @@ pub fn create_skin_window(
     // 2. Create window via Tauri (hidden until setup is done)
     // Coordinates are logical pixels, matching the values stored in config.
     let window = WebviewWindowBuilder::new(app, &label, webview_url)
-        .title(&skin.manifest.name)
+        // 窗口标题（任务管理器/Alt+Tab 可见性有限的无框工具窗）：取当前默认
+        // 语言的解析名，单语言皮肤回退后的名字也能正确出现
+        .title(&skin.manifest.display_name(crate::i18n::DEFAULT_LANG))
         // 持久化配置的宽高同钳 [1,10000]——config.json 可手改，钳制不能只
         // 拦 manifest 默认值一侧（复审 B-F5：巨型表面吃 GPU 内存/建窗失败）
         .inner_size(

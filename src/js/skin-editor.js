@@ -364,14 +364,15 @@ export default class SkinEditor {
           </div>
 
           <!-- 皮肤专属显隐热键：配置型设置（随皮肤存 skin_settings），
-               不随未加载禁用——注册表常驻，加载与否只是按下有无效果之分 -->
+               注册表常驻、未加载时按下本就无效果——但录制钮随未加载禁用：
+               给没运行的皮肤配热键没有即配即验的反馈，易配完即忘 -->
           <div class="form-row">
             <div>
               <label>${t('editor.hotkeyLabel')}</label>
               <span class="hint">${t('editor.hotkeyHint')}</span>
             </div>
             <div class="theme-options">
-              <button class="theme-btn hotkey-btn" id="cfg-skin-hotkey">${esc(cfg.hotkey || '') || t('settings.hotkeyNone')}</button>
+              <button class="theme-btn hotkey-btn" id="cfg-skin-hotkey" ${!d.loaded ? 'disabled' : ''}>${esc(cfg.hotkey || '') || t('settings.hotkeyNone')}</button>
             </div>
           </div>
         </div>
@@ -494,15 +495,22 @@ export default class SkinEditor {
   renderCustomSettings() {
     const schema = this.detail.settings_schema || [];
     const values = this.detail.settings_values || {};
-    // 双语皮肤（skin.json 声明 "bilingual": true，作者侧声明、非用户选项）：
-    // 管理器语言为英文时优先显示 *_en 文案，字段留空回退默认文案。
+    // 文案选取（与 dom.js dispName 同规则的 schema 版，对称字段
+    // label_zh/label_en、group_zh/group_en、description_zh/description_en——
+    // 旧无后缀字段名经后端 serde alias 解析进 *_zh，下发即此形态）：
+    // 界面语言优先取对应语言字段，缺失回退另一语言——单语言皮肤（只填
+    // 一种语言）在两种界面语言下都显示创作者提供的那种语言。
     // 分组键取当前语言的显示文案，保证同语言下同组归并
-    const en = getLang() === 'en' && !!this.detail.bilingual;
+    const pick = (enText, zhText) => {
+      const en = enText || '';
+      const zh = zhText || '';
+      return getLang() === 'en' ? (en || zh) : (zh || en);
+    };
 
     const groups = [];
     const byName = new Map();
     for (const def of schema) {
-      const name = (en && def.group_en) ? def.group_en : (def.group || '');
+      const name = pick(def.group_en, def.group_zh);
       if (!byName.has(name)) {
         const g = { name, defs: [] };
         byName.set(name, g);
@@ -512,7 +520,7 @@ export default class SkinEditor {
     }
 
     return groups.map(g => {
-      const rows = g.defs.map(def => this.renderSettingRow(def, values, en)).join('');
+      const rows = g.defs.map(def => this.renderSettingRow(def, values, pick)).join('');
       const title = g.name ? `<h3>${esc(g.name)}</h3>` : '';
       return `<div class="config-section">${title}${rows}</div>`;
     }).join('');
@@ -521,13 +529,14 @@ export default class SkinEditor {
   // Render one control row from its schema entry.
   // 皮肤未加载时整页控件由 render() 外层 fieldset[disabled] 统一禁用，
   // 与「窗口」页一致——未加载时仅「操作」分区保持可交互。
-  renderSettingRow(def, values, en) {
+  // pick = renderCustomSettings 里定义的文案选取器（界面语言优先、缺失
+  // 回退另一语言——单语言皮肤无需 bilingual 声明）
+  renderSettingRow(def, values, pick) {
       const key = escAttr(def.key);
-      // 双语选取：en = 英文界面且皮肤声明 bilingual；*_en 留空回退默认文案
-      const labelText = (en && def.label_en) ? def.label_en : (def.label || def.key);
-      const descText = (en && def.description_en) ? def.description_en : def.description;
-      const optText = (o) => (en && o.label_en) ? o.label_en : (o.label || o.value);
-      const optTitle = (o) => (en && o.label_en) ? o.label_en : o.label;
+      const labelText = pick(def.label_en, def.label_zh) || def.key;
+      const descText = pick(def.description_en, def.description_zh);
+      const optText = (o) => pick(o.label_en, o.label_zh) || o.value;
+      const optTitle = (o) => pick(o.label_en, o.label_zh);
       const label = esc(labelText);
       // 描述文字：skin.json 可选 "description"，与内置配置项的 hint 同款
       const hint = descText ? `<span class="hint">${esc(descText)}</span>` : '';

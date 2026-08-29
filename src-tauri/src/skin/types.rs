@@ -13,8 +13,15 @@ pub struct SkinManifest {
     /// 决定安装文件夹名与用户数据的归属键；文件夹直装缺省时按文件夹名派生。
     #[serde(default)]
     pub id: Option<String>,
-    pub name: String,
-    /// 英文皮肤名（bilingual 皮肤专用；留空时英文界面回退 name）
+    /// 中文皮肤名：界面中文时优先显示；为空/缺省时回退 name_en。对称命名
+    /// 一改前的旧字段名 `name` 经 serde alias 继续被接受——存量皮肤零迁移
+    /// （两个名字同时写会解析报 duplicate field，创作者二选一）。
+    /// 单语言英文皮肤可不写本字段、只填 name_en（选取规则见 display_name）
+    #[serde(default, alias = "name")]
+    pub name_zh: Option<String>,
+    /// 英文皮肤名：界面英文时优先显示；界面中文且 name_zh 缺失/为空时回退
+    /// 到它——单语言皮肤（只填一种语言）在两种界面语言下都显示创作者提供
+    /// 的语言
     #[serde(default)]
     pub name_en: Option<String>,
     #[serde(default)]
@@ -26,16 +33,12 @@ pub struct SkinManifest {
     /// __DESK_PP__.hostVersion 自行探测降级。
     #[serde(default)]
     pub min_host_version: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    /// 英文简介（bilingual 皮肤专用；留空回退 description）
+    /// 中文简介（旧字段名 `description` 经 alias 继续被接受，同 name_zh）
+    #[serde(default, alias = "description")]
+    pub description_zh: Option<String>,
+    /// 英文简介（同 name_en 的选取规则）
     #[serde(default)]
     pub description_en: Option<String>,
-    /// 中英双语声明（作者侧开关，非用户选项）：true = 皮肤为「皮肤设置」页
-    /// 文案提供了英文（各 *_en 字段），管理器语言为英文时优先显示英文；
-    /// false/缺省 = 单语皮肤，所有 *_en 字段一律忽略
-    #[serde(default)]
-    pub bilingual: bool,
     #[serde(default = "default_entry")]
     pub entry: String,
     #[serde(default)]
@@ -53,13 +56,45 @@ pub struct SkinManifest {
     pub settings: Vec<SkinSettingDef>,
 }
 
-/// One option of a "select" setting.  `label` falls back to `value` in the UI.
+impl SkinManifest {
+    /// 显示名/简介选取：界面语言优先取对应语言字段，缺失（None 或空串）
+    /// 回退另一语言——单语言皮肤（只填 name_zh 或只填 name_en）在中/英
+    /// 界面下都显示创作者提供的那种语言；两个都填 = 双语皮肤随界面切换。
+    /// 任何字段组合都是合法状态，无声明开关（前端 dom.js dispName/dispDesc
+    /// 同款规则，两边勿漂移）。全缺归一为空串，调用方不用二次判空。
+    pub fn display_name(&self, lang: &str) -> String {
+        pick_skin_text(lang, self.name_zh.as_deref(), self.name_en.as_deref())
+    }
+
+    pub fn display_description(&self, lang: &str) -> Option<String> {
+        let d = pick_skin_text(lang, self.description_zh.as_deref(), self.description_en.as_deref());
+        // 简介是全空时不下发（前端按 falsy 决定渲染不渲染）
+        if d.is_empty() {
+            None
+        } else {
+            Some(d)
+        }
+    }
+}
+
+/// 皮肤文案选取器（display_name/display_description 共用的单向回退链）：
+/// 英文界面 en 优先回退 zh；中文界面 zh 优先回退 en。
+fn pick_skin_text(lang: &str, zh: Option<&str>, en: Option<&str>) -> String {
+    let zh = zh.filter(|s| !s.is_empty());
+    let en = en.filter(|s| !s.is_empty());
+    let pick = if lang == "en" { en.or(zh) } else { zh.or(en) };
+    pick.unwrap_or("").to_string()
+}
+
+/// One option of a "select" setting.  `label_zh` falls back to `value` in the UI
+/// (旧字段名 `label` 经 alias 继续被接受，同 SkinManifest::name_zh).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkinSettingOption {
     pub value: String,
-    #[serde(default)]
-    pub label: Option<String>,
-    /// 英文显示名（bilingual 皮肤专用；留空时英文界面回退 label）
+    #[serde(default, alias = "label")]
+    pub label_zh: Option<String>,
+    /// 英文显示名：界面英文时优先显示；缺失/为空时回退 label_zh（单语言
+    /// 皮肤只填一种语言即可，见 SkinManifest::display_name 的选取规则）
     #[serde(default)]
     pub label_en: Option<String>,
 }
@@ -119,21 +154,24 @@ pub struct SkinSettingDef {
     pub key: String,
     #[serde(rename = "type")]
     pub kind: SkinSettingKind,
-    #[serde(default)]
-    pub label: Option<String>,
-    /// 英文控件标题（bilingual 皮肤专用；留空时英文界面回退 label）
+    #[serde(default, alias = "label")]
+    pub label_zh: Option<String>,
+    /// 英文控件标题：界面英文时优先显示；缺失/为空时回退 label_zh（选取
+    /// 规则同 SkinManifest::display_name）
     #[serde(default)]
     pub label_en: Option<String>,
-    /// 控件下方的说明文字，展示在配置面板
-    #[serde(default)]
-    pub description: Option<String>,
-    /// 英文说明文字（留空回退 description）
+    /// 控件下方的说明文字，展示在配置面板（旧字段名 `description` 经
+    /// alias 继续被接受）
+    #[serde(default, alias = "description")]
+    pub description_zh: Option<String>,
+    /// 英文说明文字（同 label_en 的选取规则）
     #[serde(default)]
     pub description_en: Option<String>,
-    /// 分组名：同组控件在「皮肤设置」页归为一张卡片
-    #[serde(default)]
-    pub group: Option<String>,
-    /// 英文分组名（留空回退 group）
+    /// 分组名：同组控件在「皮肤设置」页归为一张卡片（旧字段名 `group`
+    /// 经 alias 继续被接受）
+    #[serde(default, alias = "group")]
+    pub group_zh: Option<String>,
+    /// 英文分组名（同 label_en 的选取规则）
     #[serde(default)]
     pub group_en: Option<String>,
     #[serde(default)]
@@ -216,16 +254,17 @@ pub struct Skin {
 #[derive(Debug, Clone, Serialize)]
 pub struct SkinInfo {
     pub id: String,
-    pub name: String,
-    /// 英文皮肤名（bilingual 皮肤专用；前端按语言选取，留空回退 name）
+    /// 中文皮肤名（manifest 的 name_zh——旧字段名 name 经 alias 解析进这里；
+    /// 前端 dom.js dispName 按界面语言选取，缺失/为空回退 name_en）
+    pub name_zh: String,
+    /// 英文皮肤名（同 name_zh 的选取规则）
     pub name_en: Option<String>,
     pub author: Option<String>,
     pub version: Option<String>,
-    pub description: Option<String>,
+    /// 中文简介（manifest 的 description_zh，旧字段名 description 经 alias）
+    pub description_zh: Option<String>,
     /// 英文简介（同 name_en 的选取规则）
     pub description_en: Option<String>,
-    /// skin.json 声明的中英双语开关：决定前端是否启用 *_en 文案
-    pub bilingual: bool,
     pub loaded: bool,
     /// 已加载但窗口当前不可见（全局快捷键/托盘/Alt+F4 隐藏）——真实窗口
     /// 状态（IsWindowVisible），不是「按没按过热键」的簿记
@@ -238,16 +277,16 @@ pub struct SkinInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct SkinDetail {
     pub id: String,
-    pub name: String,
-    /// 英文皮肤名（bilingual 皮肤专用；前端按语言选取，留空回退 name）
+    /// 同 SkinInfo.name_zh 的口径
+    pub name_zh: String,
+    /// 英文皮肤名（同 SkinInfo.name_en 的选取规则）
     pub name_en: Option<String>,
     pub author: Option<String>,
     pub version: Option<String>,
-    pub description: Option<String>,
+    /// 同 SkinInfo.description_zh 的口径
+    pub description_zh: Option<String>,
     /// 英文简介（同 name_en 的选取规则）
     pub description_en: Option<String>,
-    /// skin.json 声明的中英双语开关：决定「皮肤设置」页是否启用 *_en 文案
-    pub bilingual: bool,
     pub directory: String,
     pub loaded: bool,
     /// 同 SkinInfo.hidden：已加载但窗口当前不可见（真实窗口状态）

@@ -183,13 +183,7 @@ pub fn get_skin_detail(window: tauri::WebviewWindow, app: AppHandle, skin_id: St
     let (origin_name, origin_update) = match skin.origin.as_deref().and_then(|o| o.split_once('@')) {
         Some((origin_id, origin_ver)) => {
             let source = skins.iter().find(|s| s.id == origin_id);
-            let name = source.map(|s| {
-                if lang == "en" && s.manifest.bilingual {
-                    s.manifest.name_en.clone().unwrap_or_else(|| s.manifest.name.clone())
-                } else {
-                    s.manifest.name.clone()
-                }
-            });
+            let name = source.map(|s| s.manifest.display_name(&lang));
             let update = source
                 .and_then(|s| s.manifest.version.clone())
                 .filter(|v| v != origin_ver);
@@ -200,13 +194,12 @@ pub fn get_skin_detail(window: tauri::WebviewWindow, app: AppHandle, skin_id: St
 
     Ok(SkinDetail {
         id: skin.id.clone(),
-        name: skin.manifest.name.clone(),
+        name_zh: skin.manifest.name_zh.clone().unwrap_or_default(),
         name_en: skin.manifest.name_en.clone(),
         author: skin.manifest.author.clone(),
         version: skin.manifest.version.clone(),
-        description: skin.manifest.description.clone(),
+        description_zh: skin.manifest.description_zh.clone(),
         description_en: skin.manifest.description_en.clone(),
-        bilingual: skin.manifest.bilingual,
         directory: skin.directory.to_string_lossy().to_string(),
         loaded,
         hidden,
@@ -1706,13 +1699,12 @@ pub async fn install_skin_package(window: tauri::WebviewWindow, app: AppHandle, 
     let preview = loader::find_preview_image(&skin.directory);
     let info_out = SkinInfo {
         id: skin.id.clone(),
-        name: skin.manifest.name.clone(),
+        name_zh: skin.manifest.name_zh.clone().unwrap_or_default(),
         name_en: skin.manifest.name_en.clone(),
         author: skin.manifest.author.clone(),
         version: skin.manifest.version.clone(),
-        description: skin.manifest.description.clone(),
+        description_zh: skin.manifest.description_zh.clone(),
         description_en: skin.manifest.description_en.clone(),
-        bilingual: skin.manifest.bilingual,
         loaded: false,
         hidden: false,
         preview,
@@ -1786,7 +1778,7 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
         .find(|s| s.id == skin_id)
         .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
     let source_dir = source.directory.clone();
-    let source_name = source.manifest.name.clone();
+    let source_name = source.manifest.name_zh.clone().unwrap_or_default();
     let source_name_en = source.manifest.name_en.clone();
     let source_version = source.manifest.version.clone();
 
@@ -1821,9 +1813,17 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
             let mut json: serde_json::Value =
                 serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
             json["id"] = serde_json::Value::String(new_id.clone());
-            json["name"] = serde_json::Value::String(copy_name.clone());
+            // 迁移旧字段名 name → name_zh：两键并存会让 serde 按 duplicate
+            // field 拒载（alias 与新键同槽），改写身份时必须顺手摘掉旧键；
+            // 源中文名为空（单语言英文皮肤只填 name_en）时不写 name_zh——
+            // 写个 " 副本" 会让副本在中文界面摆脱回退链、显示残名
+            let obj = json.as_object_mut().unwrap();
+            obj.remove("name");
+            if !copy_name.is_empty() {
+                obj.insert("name_zh".into(), serde_json::Value::String(copy_name.clone()));
+            }
             if let Some(ne) = &copy_name_en {
-                json["name_en"] = serde_json::Value::String(ne.clone());
+                obj.insert("name_en".into(), serde_json::Value::String(ne.clone()));
             }
             let origin = match &source_version {
                 Some(v) => format!("{}@{}", skin_id, v),
@@ -1867,13 +1867,12 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
     let preview = loader::find_preview_image(&new_skin.directory);
     Ok(SkinInfo {
         id: new_skin.id.clone(),
-        name: new_skin.manifest.name.clone(),
+        name_zh: new_skin.manifest.name_zh.clone().unwrap_or_default(),
         name_en: new_skin.manifest.name_en.clone(),
         author: new_skin.manifest.author.clone(),
         version: new_skin.manifest.version.clone(),
-        description: new_skin.manifest.description.clone(),
+        description_zh: new_skin.manifest.description_zh.clone(),
         description_en: new_skin.manifest.description_en.clone(),
-        bilingual: new_skin.manifest.bilingual,
         loaded: false,
         hidden: false,
         preview,
@@ -1882,7 +1881,7 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
 
 /// 从源同步副本（皮肤多开的下半章）：源皮肤更新后，用源文件夹重放副本
 /// 内容——副本的 settings.json（设置值）与窗口配置（skin_settings[副本id]）
-/// 全保留；副本 manifest 只保留 id/name/name_en（副本身份），其余跟随源，
+/// 全保留；副本 manifest 只保留 id/name_zh/name_en（副本身份），其余跟随源，
 /// `x-driftlet-origin` 刷新为源当前版本。返回源当前版本号（前端展示用）。
 #[tauri::command]
 pub async fn sync_skin_copy(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<String, String> {
@@ -1939,7 +1938,7 @@ fn replay_source_into_copy(
     // 同步前取出要保留的东西：设置值原文 + 副本身份三件套
     let old_settings = crate::skin::settings::load_skin_settings(copy_dir);
     let copy_id = copy.id.clone();
-    let copy_name = copy.manifest.name.clone();
+    let copy_name = copy.manifest.name_zh.clone().unwrap_or_default();
     let copy_name_en = copy.manifest.name_en.clone();
 
     std::fs::rename(copy_dir, &aside).map_err(|e| e.to_string())?;
@@ -1956,7 +1955,13 @@ fn replay_source_into_copy(
         let mut json: serde_json::Value =
             serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
         json["id"] = serde_json::Value::String(copy_id.clone());
-        json["name"] = serde_json::Value::String(copy_name.clone());
+        // 迁移旧字段名 name → name_zh（duplicate field 拒载防护，与
+        // duplicate_skin 同理由）；空中文名不写 name_zh，保持回退链干净
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("name");
+        if !copy_name.is_empty() {
+            obj.insert("name_zh".into(), serde_json::Value::String(copy_name.clone()));
+        }
         match &copy_name_en {
             Some(ne) => {
                 json["name_en"] = serde_json::Value::String(ne.clone());
@@ -2785,11 +2790,11 @@ mod tests {
         SkinSettingDef {
             key: "k".into(),
             kind,
-            label: None,
+            label_zh: None,
             label_en: None,
-            description: None,
+            description_zh: None,
             description_en: None,
-            group: None,
+            group_zh: None,
             group_en: None,
             default: None,
             min: None,
@@ -2804,7 +2809,7 @@ mod tests {
         SkinSettingDef {
             options: values
                 .iter()
-                .map(|v| SkinSettingOption { value: v.to_string(), label: None, label_en: None })
+                .map(|v| SkinSettingOption { value: v.to_string(), label_zh: None, label_en: None })
                 .collect(),
             ..def(kind)
         }
@@ -3070,11 +3075,13 @@ mod tests {
         // 设置值保留
         let settings = crate::skin::settings::load_skin_settings(&copy_dir);
         assert_eq!(settings["city"], "tokyo");
-        // 身份保留 + origin 刷新
+        // 身份保留 + origin 刷新（副本 fixture 用的是旧字段名 name——断言
+        // 改写后迁入 name_zh 且旧键被摘除，migration 勿回归）
         let text = std::fs::read_to_string(copy_dir.join("skin.json")).unwrap();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(json["id"], "flip-clock-copy");
-        assert_eq!(json["name"], "我的时钟");
+        assert_eq!(json["name_zh"], "我的时钟");
+        assert!(json.get("name").is_none(), "旧键 name 必须被摘除（duplicate field 拒载防护）");
         assert_eq!(json["name_en"], "My Clock");
         assert_eq!(json["version"], "2.0.0");
         assert_eq!(json["x-driftlet-origin"], "flip-clock@2.0.0");

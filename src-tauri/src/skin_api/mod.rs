@@ -291,6 +291,11 @@ fn pct(part: u64, total: u64) -> f32 {
 // ─── CPU ───
 
 static CPU_SYS: Mutex<Option<sysinfo::System>> = Mutex::new(None);
+/// 进程表常驻实例的重建节拍（时刻由首次 get_processes 种下）。sysinfo
+/// 只在 refresh 时清死进程，长跑中进程对象/字符串元数据随进程增减慢慢
+/// 滞留，分配器也不主动归还——到期 take 掉整个实例重建，内存归零。
+static CPU_SYS_BORN: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+const CPU_SYS_REBUILD_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// CPU + memory only.  `System::new_all()` would also load the full process
 /// table — every process's cmd/environ strings (each read remotely from the
@@ -1155,6 +1160,18 @@ pub async fn get_processes(
     let state = app.state::<AppState>();
     require_perm(&state, &window, PERM_SYS_INFO)?;
     let mut guard = CPU_SYS.lock().unwrap_or_else(|e| e.into_inner());
+    // 到期整表重建（成本 = 一次进程表快照，与每秒轮询同量级）。锁序
+    // CPU_SYS → CPU_SYS_BORN 与这里一致，且 CPU_SYS_BORN 仅此处触碰。
+    {
+        let mut born = CPU_SYS_BORN.lock().unwrap_or_else(|e| e.into_inner());
+        if born.map(|b| b.elapsed() >= CPU_SYS_REBUILD_INTERVAL).unwrap_or(false) {
+            *guard = None;
+            *born = None;
+        }
+        if born.is_none() {
+            *born = Some(std::time::Instant::now());
+        }
+    }
     let sys = guard.get_or_insert_with(new_light_system);
     Ok(system::processes(
         sys,
@@ -2064,7 +2081,8 @@ fn is_caller(window: &tauri::WebviewWindow, target: &str) -> bool {
 #[derive(Debug, Clone, Serialize)]
 pub struct SkinListEntry {
     pub id: String,
-    pub name: String,
+    /// 中文皮肤名（manifest 的 name_zh，旧字段名 name 经 alias 解析进这里）
+    pub name_zh: String,
     pub name_en: Option<String>,
     pub version: Option<String>,
     pub author: Option<String>,
@@ -2087,7 +2105,7 @@ pub fn skin_list_skins(app: AppHandle, window: tauri::WebviewWindow) -> Result<V
                 .map(|w| !w.is_visible().unwrap_or(true))
                 .unwrap_or(false),
             id: s.id,
-            name: s.manifest.name,
+            name_zh: s.manifest.name_zh.unwrap_or_default(),
             name_en: s.manifest.name_en,
             version: s.manifest.version,
             author: s.manifest.author,

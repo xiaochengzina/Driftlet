@@ -1,6 +1,6 @@
 [package]
 name = "driftlet"
-version = "1.2.1"
+version = "1.2.2"
 edition = "2021"
 
 [lib]
@@ -39,6 +39,10 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 # 安装包下载时记 SHA-256、「立即安装」执行前复核（防可信动作执行被改写
 # 的安装包——更新目录曾可被 file_system 皮肤改写，审查 H2）
 sha2 = "0.10"
+# 皮肤预览图降采样（capture.rs）：管理器皮肤卡片显示高度仅 112px，全尺寸
+# 截图解码后 ~8MB/张驻留渲染进程内存——落盘前把最大边压到 640px。只要
+# PNG 编解码（CapturePreview 产物恒为 PNG），关掉默认特性不背其他编解码器
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"

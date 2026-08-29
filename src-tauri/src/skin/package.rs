@@ -20,20 +20,31 @@ const MAX_PACKAGE_BYTES: u64 = 256 * 1024 * 1024; // 压缩包 256 MB
 const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024; // 解压后合计 1 GB
 const MAX_FILES: usize = 10000;
 
+/// 创作者自带预览图的尺寸上限（像素）。解码内存 = 宽×高×4B 驻留管理器
+/// 渲染进程（列表里每张可见预览各一份），112px 高的卡片用不到巨型原图。
+/// 与 capture.rs 的截图降采样（640px）口径不同是刻意的：那边服务列表
+/// 缩略，这里允许创作者保留更精细的原始预览。
+/// （tools/pack-skin/src/main.rs 手工镜像了该上限——改动必须同步并重建）
+const MAX_PREVIEW_DIMENSION: u32 = 1280;
+
+/// loader.rs 认的预览文件名（三者只生效其一，查找顺序即此顺序）
+const PREVIEW_FILE_NAMES: [&str; 3] = ["preview.png", "preview.jpg", "preview.jpeg"];
+
 /// 包检查结果，发给前端用于确认弹窗
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageInfo {
     pub id: String,
-    pub name: String,
-    /// 英文皮肤名（bilingual 皮肤专用；前端按语言选取，留空回退 name）
+    /// 中文皮肤名（manifest 的 name_zh——旧字段名 name 经 alias 解析进这里；
+    /// 前端 dom.js dispName 按界面语言选取，缺失/为空回退 name_en）
+    pub name_zh: String,
+    /// 英文皮肤名（同 name_zh 的选取规则）
     pub name_en: Option<String>,
     pub author: Option<String>,
     pub version: Option<String>,
-    pub description: Option<String>,
+    /// 中文简介（manifest 的 description_zh，旧字段名 description 经 alias）
+    pub description_zh: Option<String>,
     /// 英文简介（同 name_en 的选取规则）
     pub description_en: Option<String>,
-    /// skin.json 声明的中英双语开关：决定前端是否启用 *_en 文案
-    pub bilingual: bool,
     /// skin.json 声明的敏感能力（"registry" / "shell" / "system" /
     /// "clipboard" / "mic" / "file_system" / "control"，对应 skin_api 的
     /// PERM_* 常量），
@@ -64,6 +75,7 @@ pub fn inspect_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
         let manifest = read_manifest(&base, lang)?;
         let id = require_package_id(&manifest, lang)?;
         check_entry_exists(&base, &manifest, lang)?;
+        check_preview_limits(&base, lang)?;
 
         let installed = loader::load_skin_manifest(&skins_dir.join(&id)).ok();
         let (status, installed_version) = match &installed {
@@ -86,12 +98,11 @@ pub fn inspect_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
             id,
             name_en: manifest.name_en.clone(),
             description_en: manifest.description_en.clone(),
-            bilingual: manifest.bilingual,
             permissions: manifest.permissions.clone(),
-            name: manifest.name,
+            name_zh: manifest.name_zh.clone().unwrap_or_default(),
             author: manifest.author,
             version: manifest.version,
-            description: manifest.description,
+            description_zh: manifest.description_zh,
             status: status.to_string(),
             installed_version,
             // 宿主版本不足时把要求值带给向导（提示不拦截；比较复用更新检测的
@@ -165,6 +176,7 @@ pub fn install_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
     let manifest = read_manifest(&base, lang)?;
     let id = require_package_id(&manifest, lang)?;
     check_entry_exists(&base, &manifest, lang)?;
+    check_preview_limits(&base, lang)?;
 
     // 同 id 不同文件夹名遮蔽：扫描去重按文件夹名字典序保留先者，而包装载
     // 一律落在 skins/<id>——若已有「id 相同但文件夹名 ≠ id」的皮肤（如文件夹
@@ -376,6 +388,103 @@ fn check_entry_exists(base: &Path, manifest: &SkinManifest, lang: &str) -> Resul
     }
 }
 
+/// 预览图尺寸校验（不解码，只读文件头取尺寸）：超上限拦截。头解析失败
+/// （损坏/格式不明）放行——那种图浏览器同样解不出来，没有内存风险，
+/// 「读不懂」不能当「超大」拦。
+fn check_preview_limits(base: &Path, lang: &str) -> Result<(), String> {
+    for name in PREVIEW_FILE_NAMES {
+        let path = base.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        return match image_dimensions(&path) {
+            Some((w, h)) if w.max(h) > MAX_PREVIEW_DIMENSION => Err(trf(
+                lang,
+                Key::PreviewTooLarge,
+                &[&name, &w.to_string(), &h.to_string(), &MAX_PREVIEW_DIMENSION.to_string()],
+            )),
+            Some(_) => Ok(()),
+            None => {
+                log::warn!("package: 预览图尺寸读取失败，跳过上限检查: {:?}", path);
+                Ok(())
+            }
+        };
+    }
+    Ok(())
+}
+
+/// 只读图片头取尺寸（PNG 看 IHDR，JPEG 扫 SOF 段），不解码像素。
+/// tools/pack-skin/src/main.rs 手工镜像本函数——改动必须同步并重建。
+fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
+    // 前 512KB 探测窗：PNG 的 IHDR 恒在前 24 字节；JPEG 的 SOF 在帧头
+    // 段链里，EXIF 再大 512KB 也兜得住。截断读防单文件 probing 放大
+    // （此时解压总量上限还没兜住「单个巨型预览」的情形）
+    const PROBE_BYTES: u64 = 512 * 1024;
+    let mut head = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(PROBE_BYTES)
+        .read_to_end(&mut head)
+        .ok()?;
+    png_dimensions(&head).or_else(|| jpeg_dimensions(&head))
+}
+
+fn png_dimensions(head: &[u8]) -> Option<(u32, u32)> {
+    const SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if head.len() < 24 || head[..8] != SIG {
+        return None;
+    }
+    // IHDR 恒为首个 chunk：长度(4) + 类型(4) + 宽(4) + 高(4)
+    if &head[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes(head[16..20].try_into().ok()?);
+    let h = u32::from_be_bytes(head[20..24].try_into().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+fn jpeg_dimensions(head: &[u8]) -> Option<(u32, u32)> {
+    if head.len() < 4 || head[0] != 0xff || head[1] != 0xd8 {
+        return None;
+    }
+    let mut i = 2;
+    while i + 9 < head.len() {
+        if head[i] != 0xff {
+            i += 1;
+            continue;
+        }
+        let marker = head[i + 1];
+        i += 2;
+        // 无长度段的独立标记：SOI/EOI/RSTn/TEM，跳过一个字节继续找
+        if marker == 0xd8 || marker == 0xd9 || marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
+            continue;
+        }
+        // SOS 之后才是扫描数据，SOF 必然在其前——走到这说明头被截断或损坏
+        if marker == 0xda {
+            return None;
+        }
+        if i + 2 > head.len() {
+            return None;
+        }
+        let seg_len = u16::from_be_bytes([head[i], head[i + 1]]) as usize;
+        if seg_len < 2 {
+            return None;
+        }
+        // SOF0–SOF15（C0–CF）的载荷是帧头；C4(DHT)/C8(JPG)/CC(DAC) 同名异义
+        if (0xc0..=0xcf).contains(&marker) && marker != 0xc4 && marker != 0xc8 && marker != 0xcc {
+            if i + 7 > head.len() {
+                return None;
+            }
+            // 段布局：长度(2) + 精度(1) + 高(2) + 宽(2) + 分量数(1)…
+            let h = u16::from_be_bytes([head[i + 3], head[i + 4]]) as u32;
+            let w = u16::from_be_bytes([head[i + 5], head[i + 6]]) as u32;
+            return (w > 0 && h > 0).then_some((w, h));
+        }
+        i += seg_len;
+    }
+    None
+}
+
 /// 把皮肤文件夹打成 .dskin 分发包，返回打包的文件数。
 /// 收集规则 / skip 清单 / zip 约定（Deflated + 正斜杠路径）与
 /// tools/pack-skin/src/main.rs 手工镜像——改动必须两边同步（镜像对拍脚本
@@ -387,6 +496,8 @@ pub fn create_package(skin_dir: &Path, out_path: &Path, lang: &str) -> Result<us
     use zip::write::SimpleFileOptions;
 
     loader::load_skin_manifest(skin_dir)?;
+    // 创作者自带预览图的尺寸上限与安装侧同口径：打包即拦，不等到装回
+    check_preview_limits(skin_dir, lang)?;
 
     // settings.json* 是用户的设置值数据（运行时生成），不打进分发包；
     // *.dskin 是旧打包产物防滚进新包。比较大小写不敏感（全小写常量）
@@ -884,6 +995,123 @@ mod tests {
         assert_eq!(compare_versions(Some("abc"), Some("abc")), Same);
         assert_eq!(compare_versions(Some("abc"), Some("def")), Newer);
         assert_eq!(compare_versions(None, None), Same);
+    }
+
+    /// 预览图尺寸校验：只读文件头（不解码像素），PNG 看 IHDR / JPEG 扫 SOF。
+    /// 头级构造即可——解析器根本不碰像素数据。
+    fn png_header(w: u32, h: u32) -> Vec<u8> {
+        let mut v = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        v.extend_from_slice(&13u32.to_be_bytes()); // IHDR 长度
+        v.extend_from_slice(b"IHDR");
+        v.extend_from_slice(&w.to_be_bytes());
+        v.extend_from_slice(&h.to_be_bytes());
+        v
+    }
+
+    fn jpeg_header(w: u16, h: u16) -> Vec<u8> {
+        // SOI + SOF0（段布局：长度(2) 精度(1) 高(2) 宽(2) 分量数(1)）
+        vec![
+            0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08,
+            (h >> 8) as u8, (h & 0xff) as u8,
+            (w >> 8) as u8, (w & 0xff) as u8,
+            0x03,
+        ]
+    }
+
+    #[test]
+    fn preview_dimensions_parse_from_headers() {
+        assert_eq!(png_dimensions(&png_header(4000, 3000)), Some((4000, 3000)));
+        assert_eq!(png_dimensions(&png_header(100, 60)), Some((100, 60)));
+        assert_eq!(jpeg_dimensions(&jpeg_header(1920, 1080)), Some((1920, 1080)));
+        assert_eq!(jpeg_dimensions(&jpeg_header(320, 200)), Some((320, 200)));
+        // 非图片/截断输入一律 None（放行路径，由浏览器解码兜底）
+        assert_eq!(png_dimensions(b"not an image at all"), None);
+        assert_eq!(jpeg_dimensions(b"\xff\xd8\xff"), None);
+        assert_eq!(image_dimensions(&std::env::temp_dir().join("definitely-missing.png")), None);
+    }
+
+    #[test]
+    fn rejects_oversized_preview_png() {
+        let dir = unique_dir("bigprev");
+        let pkg = write_package(&dir, r#"{"id":"my-skin","name":"My Skin"}"#, false);
+        // 往解压包里注入超大尺寸的 PNG 头
+        let file = fs::File::create(&pkg).unwrap();
+        let mut zw = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("skin.json", opts).unwrap();
+        io::Write::write_all(&mut zw, br#"{"id":"my-skin","name":"My Skin"}"#).unwrap();
+        zw.start_file("index.html", opts).unwrap();
+        io::Write::write_all(&mut zw, b"<html></html>").unwrap();
+        zw.start_file("preview.png", opts).unwrap();
+        io::Write::write_all(&mut zw, &png_header(4000, 3000)).unwrap();
+        zw.finish().unwrap();
+
+        let skins = unique_dir("skins");
+        let err = inspect_package(&pkg, &skins, "zh-CN").unwrap_err();
+        assert!(err.contains("preview.png"), "unexpected error: {}", err);
+        assert!(err.contains("4000"), "unexpected error: {}", err);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&skins);
+    }
+
+    #[test]
+    fn accepts_preview_within_limit() {
+        let dir = unique_dir("okprev");
+        let pkg = dir.join("ok.dskin");
+        let file = fs::File::create(&pkg).unwrap();
+        let mut zw = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("skin.json", opts).unwrap();
+        io::Write::write_all(&mut zw, br#"{"id":"my-skin","name":"My Skin"}"#).unwrap();
+        zw.start_file("index.html", opts).unwrap();
+        io::Write::write_all(&mut zw, b"<html></html>").unwrap();
+        zw.start_file("preview.jpg", opts).unwrap();
+        io::Write::write_all(&mut zw, &jpeg_header(1280, 720)).unwrap();
+        zw.finish().unwrap();
+
+        let skins = unique_dir("skins");
+        let info = inspect_package(&pkg, &skins, "zh-CN").unwrap();
+        assert_eq!(info.id, "my-skin");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&skins);
+    }
+
+    #[test]
+    fn unreadable_preview_header_passes_with_warning() {
+        // 头解析不出的预览不放行拦截（浏览器同样解不出，无内存风险）
+        let dir = unique_dir("badprev");
+        let pkg = dir.join("bad.dskin");
+        let file = fs::File::create(&pkg).unwrap();
+        let mut zw = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("skin.json", opts).unwrap();
+        io::Write::write_all(&mut zw, br#"{"id":"my-skin","name":"My Skin"}"#).unwrap();
+        zw.start_file("index.html", opts).unwrap();
+        io::Write::write_all(&mut zw, b"<html></html>").unwrap();
+        zw.start_file("preview.png", opts).unwrap();
+        io::Write::write_all(&mut zw, b"garbage-bytes").unwrap();
+        zw.finish().unwrap();
+
+        let skins = unique_dir("skins");
+        let info = inspect_package(&pkg, &skins, "zh-CN").unwrap();
+        assert_eq!(info.id, "my-skin");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&skins);
+    }
+
+    #[test]
+    fn create_package_rejects_oversized_preview() {
+        // 创作者直装目录打包：自带超大预览应在打包侧被拦（与安装侧同口径）
+        let skin = unique_dir("pkgskin");
+        fs::write(skin.join("skin.json"), r#"{"id":"my-skin","name":"My Skin","entry":"index.html"}"#).unwrap();
+        fs::write(skin.join("index.html"), "<html></html>").unwrap();
+        fs::write(skin.join("preview.png"), png_header(5000, 5000)).unwrap();
+        let out = unique_dir("pkgout").join("out.dskin");
+        let err = create_package(&skin, &out, "zh-CN").unwrap_err();
+        assert!(err.contains("preview.png"), "unexpected error: {}", err);
     }
 
     /// 审查高危修复的启动恢复：.<folder>.old 旧副本还原（目标缺失/半成品

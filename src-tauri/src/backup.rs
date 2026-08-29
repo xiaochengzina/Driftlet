@@ -182,10 +182,8 @@ fn add_dir(
 #[derive(serde::Serialize)]
 pub struct BackupSkinInfo {
     pub id: String,
-    pub name: String,
+    pub name_zh: String,
     pub name_en: Option<String>,
-    /// 双语皮肤标志（前端 dispName 按管理器语言选取 name/name_en 的依据）
-    pub bilingual: bool,
     pub version: Option<String>,
     pub permissions: Vec<String>,
 }
@@ -235,9 +233,8 @@ pub fn inspect_backup(package_path: &Path, lang: &str) -> Result<BackupInspectio
             };
             skins.push(BackupSkinInfo {
                 id: loader::resolve_skin_id(&manifest, &folder),
-                name: manifest.name,
+                name_zh: manifest.name_zh.unwrap_or_default(),
                 name_en: manifest.name_en,
-                bilingual: manifest.bilingual,
                 version: manifest.version,
                 permissions: manifest.permissions,
             });

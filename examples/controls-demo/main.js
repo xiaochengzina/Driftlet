@@ -58,9 +58,12 @@ function t(key, ...args) {
   return typeof entry === 'function' ? entry(...args) : (entry ?? key);
 }
 
-/** 取当前语言下的文案：英文优先 en 字段，留空回退默认（与管理器面板同规则） */
-function pickLang(zh, en) {
-  return (lang === 'en' && en) || zh || en || '';
+/** zhOf(v, 'label') 读中文字段：新键 label_zh 优先、旧无后缀键 label 兜底——
+    皮肤自读的是 skin.json 原始文件，管理器的 serde alias 解析不生效 */
+function zhOf(v, key) { return v?.[`${key}_zh`] ?? v?.[key] ?? ''; }
+
+function pickLang(zhText, en) {
+  return (lang === 'en' && en) || zhText || en || '';
 }
 
 function setLang(next) {
@@ -103,11 +106,11 @@ function applySettings() {
 
   // 标题 = title 设置值；空值回退皮肤名（按当前语言）
   document.getElementById('skin-title').textContent =
-    s.title || pickLang(schema?.name, schema?.name_en) || t('fallbackName');
+    s.title || pickLang(zhOf(schema, 'name'), schema?.name_en) || t('fallbackName');
   // schema 拉取失败（defs 空）时不得报假数字（曾经写死 20，实际 22）
   document.getElementById('subtitle').textContent =
     defs.length ? t('subtitle', defs.length) : t('subtitleFallback');
-  if (titleDef) document.getElementById('skin-title').title = pickLang(titleDef.description, titleDef.description_en);
+  if (titleDef) document.getElementById('skin-title').title = pickLang(zhOf(titleDef, 'description'), titleDef.description_en);
 
   // 主题色（palette）：校验格式后应用，防非法值进 style
   const color = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(s.theme_color || '') ? s.theme_color : '#0e75c3';
@@ -162,12 +165,12 @@ function formatValue(def, value) {
   if (type === 'boolean') return value ? t('on') : t('off');
   if (type === 'radio' || type === 'select') {
     const opt = (def.options || []).find((o) => o.value === value);
-    return opt ? pickLang(opt.label, opt.label_en) : String(value ?? t('notSet'));
+    return opt ? pickLang(zhOf(opt, 'label'), opt.label_en) : String(value ?? t('notSet'));
   }
   if (type === 'multiselect') {
     const labels = (Array.isArray(value) ? value : []).map((v) => {
       const opt = (def.options || []).find((o) => o.value === v);
-      return opt ? pickLang(opt.label, opt.label_en) : String(v);
+      return opt ? pickLang(zhOf(opt, 'label'), opt.label_en) : String(v);
     });
     return labels.length ? labels.join(', ') : t('empty');
   }
@@ -217,7 +220,7 @@ function renderPanel() {
   // 按声明顺序归组（与「皮肤设置」页同一归并规则）
   const groups = [];
   for (const def of schema?.settings || []) {
-    const name = pickLang(def.group, def.group_en);
+    const name = pickLang(zhOf(def, 'group'), def.group_en);
     let g = groups.find((g) => g.name === name);
     if (!g) { g = { name, defs: [] }; groups.push(g); }
     g.defs.push(def);
@@ -237,8 +240,8 @@ function renderPanel() {
 
       const label = document.createElement('span');
       label.className = 'row-label';
-      label.textContent = pickLang(def.label, def.label_en) || def.key;
-      const desc = pickLang(def.description, def.description_en);
+      label.textContent = pickLang(zhOf(def, 'label'), def.label_en) || def.key;
+      const desc = pickLang(zhOf(def, 'description'), def.description_en);
       if (desc) label.title = desc;
       row.appendChild(label);
 
