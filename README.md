@@ -119,11 +119,12 @@ my-skin/
 ```json
 {
   "id": "my-skin",
-  "name": "My Skin",
+  "name_zh": "我的皮肤",
   "name_en": "My Skin",
   "version": "1.0.0",
   "author": "You",
-  "description": "A simple desktop widget",
+  "description_zh": "一个简单的桌面挂件",
+  "description_en": "A simple desktop widget",
   "entry": "index.html",
   "window": {
     "width": 300,
@@ -171,22 +172,22 @@ if (window.driftlet?.invoke) {
 
 ```json
 "settings": [
-  { "key": "title",        "type": "text",        "label": "标题",     "default": "Hello" },
-  { "key": "notes",        "type": "longtext",    "label": "备注",     "default": "" },
-  { "key": "alarm_time",   "type": "time",        "label": "闹钟时间", "default": "07:30" },
-  { "key": "start_date",   "type": "date",        "label": "开始日期", "default": "2026-01-01" },
-  { "key": "show_seconds", "type": "boolean",     "label": "显示秒针", "default": true },
-  { "key": "features",     "type": "multiselect", "label": "启用功能", "default": ["a"],
-    "options": [ { "value": "a", "label": "功能 A" }, { "value": "b", "label": "功能 B" } ] },
-  { "key": "mode",         "type": "radio",       "label": "模式",     "default": "auto",
-    "options": [ { "value": "day", "label": "白天" }, { "value": "night", "label": "夜晚" }, { "value": "auto" } ] },
-  { "key": "accent_color", "type": "palette",     "label": "主题色",   "default": "#ff3333",
+  { "key": "title",        "type": "text",        "label_zh": "标题",     "default": "Hello" },
+  { "key": "notes",        "type": "longtext",    "label_zh": "备注",     "default": "" },
+  { "key": "alarm_time",   "type": "time",        "label_zh": "闹钟时间", "default": "07:30" },
+  { "key": "start_date",   "type": "date",        "label_zh": "开始日期", "default": "2026-01-01" },
+  { "key": "show_seconds", "type": "boolean",     "label_zh": "显示秒针", "default": true },
+  { "key": "features",     "type": "multiselect", "label_zh": "启用功能", "default": ["a"],
+    "options": [ { "value": "a", "label_zh": "功能 A" }, { "value": "b", "label_zh": "功能 B" } ] },
+  { "key": "mode",         "type": "radio",       "label_zh": "模式",     "default": "auto",
+    "options": [ { "value": "day", "label_zh": "白天" }, { "value": "night", "label_zh": "夜晚" }, { "value": "auto" } ] },
+  { "key": "accent_color", "type": "palette",     "label_zh": "主题色",   "default": "#ff3333",
     "options": [ { "value": "#ff3333" }, { "value": "#4da3ff" } ] },
-  { "key": "active_range", "type": "timerange",   "label": "生效时段",
+  { "key": "active_range", "type": "timerange",   "label_zh": "生效时段",
     "default": { "start": "2026-07-20 12:00:00", "end": "2026-08-20 00:00:00" } },
-  { "key": "level",        "type": "slider",      "label": "强度",     "default": 60, "min": 0, "max": 100, "step": 1 },
-  { "key": "refresh_ms",   "type": "number",      "label": "刷新间隔", "default": 1000, "min": 100, "max": 10000 },
-  { "key": "tasks",        "type": "tasklist",    "label": "任务列表", "default": ["示例任务"] }
+  { "key": "level",        "type": "slider",      "label_zh": "强度",     "default": 60, "min": 0, "max": 100, "step": 1 },
+  { "key": "refresh_ms",   "type": "number",      "label_zh": "刷新间隔", "default": 1000, "min": 100, "max": 10000 },
+  { "key": "tasks",        "type": "tasklist",    "label_zh": "任务列表", "default": ["示例任务"] }
 ]
 ```
 
@@ -216,21 +217,21 @@ if (window.driftlet?.invoke) {
 
 `password` 类型的值**不随桥的 `settings` 烘焙进页面**（skin:// 全皮肤同源，注入页面会被其他皮肤抓取）；皮肤内改用 `skin_get_setting` 命令按需读取——`await driftlet.invoke('skin_get_setting', { key: 'my_key' })`，身份取自调用窗口，只能读到自己的值。
 
-`options` 的 `label` 均可省略，回退显示 `value`。每个设置项还可用 `"description"` 加一句说明，显示在控件标签下方：
+`options` 的 `label_zh` 均可省略，回退显示 `value`；每个设置项还可用 `description_zh` 加一句说明，显示在控件标签下方（文案字段成对为 `*_zh` / `*_en`，界面语言优先、缺失回退另一种；旧字段名 `label` / `description` 仍被接受，规则见 `docs/皮肤开发指南.md` §4.5）：
 
 ```json
-{ "key": "level", "type": "slider", "label": "强度", "description": "0 到 100，影响粒子数量", "default": 60 }
+{ "key": "level", "type": "slider", "label_zh": "强度", "description_zh": "0 到 100，影响粒子数量", "default": 60 }
 ```
 
 ### 分组
 
-设置项可用 `"group"` 指定分组名，「皮肤设置」页会把同组控件归到一张卡片里（与「窗口」页的分节样式一致）。组按首次出现的顺序排列，未指定 `group` 的控件归入最前面的无标题卡片：
+设置项可用 `group_zh` 指定分组名（旧字段名 `group` 仍被接受），「皮肤设置」页会把同组控件归到一张卡片里（与「窗口」页的分节样式一致）。组按首次出现的顺序排列，未指定分组名的控件归入最前面的无标题卡片：
 
 ```json
 "settings": [
-  { "key": "title", "type": "text", "label": "标题", "group": "文本", "default": "Hello" },
-  { "key": "notes", "type": "longtext", "label": "备注", "group": "文本", "default": "" },
-  { "key": "accent_color", "type": "palette", "label": "主题色", "group": "外观", "default": "#ff3333" }
+  { "key": "title", "type": "text", "label_zh": "标题", "group_zh": "文本", "default": "Hello" },
+  { "key": "notes", "type": "longtext", "label_zh": "备注", "group_zh": "文本", "default": "" },
+  { "key": "accent_color", "type": "palette", "label_zh": "主题色", "group_zh": "外观", "default": "#ff3333" }
 ]
 ```
 

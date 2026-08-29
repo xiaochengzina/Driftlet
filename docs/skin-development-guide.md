@@ -57,11 +57,11 @@ A complete, runnable minimal skin — two files, copy and go:
 ```json
 {
   "id": "hello",
-  "name": "Hello",
+  "name_en": "Hello",
   "version": "1.0.0",
   "window": { "width": 260, "height": 120, "on_desktop": true },
   "settings": [
-    { "key": "text", "type": "text", "label": "Text", "default": "Hello, Driftlet!" }
+    { "key": "text", "type": "text", "label_en": "Text", "default": "Hello, Driftlet!" }
   ]
 }
 ```
@@ -273,9 +273,9 @@ Declare a `settings` array in `skin.json` and the manager's "Skin Settings" tab 
 
 ```json
 "settings": [
-  { "key": "title", "type": "text", "label": "Title", "group": "Text",
-    "description": "Title shown at the top", "default": "Hello" },
-  { "key": "accent_color", "type": "palette", "label": "Accent color", "group": "Appearance",
+  { "key": "title", "type": "text", "label_en": "Title", "group_en": "Text",
+    "description_en": "Title shown at the top", "default": "Hello" },
+  { "key": "accent_color", "type": "palette", "label_en": "Accent color", "group_en": "Appearance",
     "default": "#ff3333" }
 ]
 ```

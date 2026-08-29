@@ -119,11 +119,12 @@ my-skin/
 ```json
 {
   "id": "my-skin",
-  "name": "My Skin",
+  "name_zh": "我的皮肤",
   "name_en": "My Skin",
   "version": "1.0.0",
   "author": "You",
-  "description": "A simple desktop widget",
+  "description_zh": "一个简单的桌面挂件",
+  "description_en": "A simple desktop widget",
   "entry": "index.html",
   "window": {
     "width": 300,
@@ -171,22 +172,22 @@ A skin can declare config items with the `settings` array in `skin.json`; the ma
 
 ```json
 "settings": [
-  { "key": "title",        "type": "text",        "label": "Title",       "default": "Hello" },
-  { "key": "notes",        "type": "longtext",    "label": "Notes",       "default": "" },
-  { "key": "alarm_time",   "type": "time",        "label": "Alarm Time",  "default": "07:30" },
-  { "key": "start_date",   "type": "date",        "label": "Start Date",  "default": "2026-01-01" },
-  { "key": "show_seconds", "type": "boolean",     "label": "Show Seconds","default": true },
-  { "key": "features",     "type": "multiselect", "label": "Enabled Features", "default": ["a"],
-    "options": [ { "value": "a", "label": "Feature A" }, { "value": "b", "label": "Feature B" } ] },
-  { "key": "mode",         "type": "radio",       "label": "Mode",        "default": "auto",
-    "options": [ { "value": "day", "label": "Day" }, { "value": "night", "label": "Night" }, { "value": "auto" } ] },
-  { "key": "accent_color", "type": "palette",     "label": "Accent Color","default": "#ff3333",
+  { "key": "title",        "type": "text",        "label_en": "Title",       "default": "Hello" },
+  { "key": "notes",        "type": "longtext",    "label_en": "Notes",       "default": "" },
+  { "key": "alarm_time",   "type": "time",        "label_en": "Alarm Time",  "default": "07:30" },
+  { "key": "start_date",   "type": "date",        "label_en": "Start Date",  "default": "2026-01-01" },
+  { "key": "show_seconds", "type": "boolean",     "label_en": "Show Seconds","default": true },
+  { "key": "features",     "type": "multiselect", "label_en": "Enabled Features", "default": ["a"],
+    "options": [ { "value": "a", "label_en": "Feature A" }, { "value": "b", "label_en": "Feature B" } ] },
+  { "key": "mode",         "type": "radio",       "label_en": "Mode",        "default": "auto",
+    "options": [ { "value": "day", "label_en": "Day" }, { "value": "night", "label_en": "Night" }, { "value": "auto" } ] },
+  { "key": "accent_color", "type": "palette",     "label_en": "Accent Color","default": "#ff3333",
     "options": [ { "value": "#ff3333" }, { "value": "#4da3ff" } ] },
-  { "key": "active_range", "type": "timerange",   "label": "Active Range",
+  { "key": "active_range", "type": "timerange",   "label_en": "Active Range",
     "default": { "start": "2026-07-20 12:00:00", "end": "2026-08-20 00:00:00" } },
-  { "key": "level",        "type": "slider",      "label": "Intensity",   "default": 60, "min": 0, "max": 100, "step": 1 },
-  { "key": "refresh_ms",   "type": "number",      "label": "Refresh Interval", "default": 1000, "min": 100, "max": 10000 },
-  { "key": "tasks",        "type": "tasklist",    "label": "Task List",   "default": ["Sample task"] }
+  { "key": "level",        "type": "slider",      "label_en": "Intensity",   "default": 60, "min": 0, "max": 100, "step": 1 },
+  { "key": "refresh_ms",   "type": "number",      "label_en": "Refresh Interval", "default": 1000, "min": 100, "max": 10000 },
+  { "key": "tasks",        "type": "tasklist",    "label_en": "Task List",   "default": ["Sample task"] }
 ]
 ```
 
@@ -216,21 +217,21 @@ Supported `type` values and value formats:
 
 Values of type `password` are **not baked into the page with the bridge's `settings`** (all skins share the same origin under skin://, so anything injected into the page could be scraped by other skins); instead, read them on demand inside the skin with the `skin_get_setting` command — `await driftlet.invoke('skin_get_setting', { key: 'my_key' })`. Identity is taken from the calling window, so a skin can only read its own values.
 
-The `label` of each `options` entry may be omitted, falling back to displaying the `value`. Each setting can also carry a `"description"` note, shown below the control's label:
+The `label_zh` / `label_en` of each `options` entry may be omitted, falling back to displaying the `value`; each setting can also carry a `description_zh` / `description_en` note shown below the control's label (text fields come in `*_zh` / `*_en` pairs — the UI language's field wins, missing falls back to the other; the legacy unsuffixed names `label` / `description` are still accepted, see §4.5 of `docs/skin-development-guide.md`):
 
 ```json
-{ "key": "level", "type": "slider", "label": "Intensity", "description": "0 to 100; affects the particle count", "default": 60 }
+{ "key": "level", "type": "slider", "label_en": "Intensity", "description_en": "0 to 100; affects the particle count", "default": 60 }
 ```
 
 ### Groups
 
-Settings can specify a group name with `"group"`; the "Skin Settings" tab places controls of the same group into one card (consistent with the section style of the "Window" tab). Groups are ordered by first appearance; controls without a `group` go into the untitled card at the top:
+Settings can specify a group name with `group_zh` / `group_en` (the legacy unsuffixed `group` is still accepted); the "Skin Settings" tab places controls of the same group into one card (consistent with the section style of the "Window" tab). Groups are ordered by first appearance; controls without a group name go into the untitled card at the top:
 
 ```json
 "settings": [
-  { "key": "title", "type": "text", "label": "Title", "group": "Text", "default": "Hello" },
-  { "key": "notes", "type": "longtext", "label": "Notes", "group": "Text", "default": "" },
-  { "key": "accent_color", "type": "palette", "label": "Accent Color", "group": "Appearance", "default": "#ff3333" }
+  { "key": "title", "type": "text", "label_en": "Title", "group_en": "Text", "default": "Hello" },
+  { "key": "notes", "type": "longtext", "label_en": "Notes", "group_en": "Text", "default": "" },
+  { "key": "accent_color", "type": "palette", "label_en": "Accent Color", "group_en": "Appearance", "default": "#ff3333" }
 ]
 ```
 
