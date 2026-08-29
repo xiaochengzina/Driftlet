@@ -66,8 +66,11 @@ pub fn scan_skins_directory(skins_dir: &Path) -> Vec<Skin> {
         }
     }
 
-    // Sort by name for consistent ordering
-    skins.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
+    // Sort by display name for consistent ordering（按当前默认语言的解析名排，
+    // 单语言皮肤回退后的名字也参与排序，不会沉底/乱序）
+    skins.sort_by(|a, b| {
+        a.manifest.display_name(crate::i18n::DEFAULT_LANG).cmp(&b.manifest.display_name(crate::i18n::DEFAULT_LANG))
+    });
     skins
 }
 
@@ -324,13 +327,12 @@ pub fn build_skin_info_list(skins: &[Skin], loaded_ids: &[String], hidden_ids: &
 
         SkinInfo {
             id: skin.id.clone(),
-            name: skin.manifest.name.clone(),
+            name_zh: skin.manifest.name_zh.clone().unwrap_or_default(),
             name_en: skin.manifest.name_en.clone(),
             author: skin.manifest.author.clone(),
             version: skin.manifest.version.clone(),
-            description: skin.manifest.description.clone(),
+            description_zh: skin.manifest.description_zh.clone(),
             description_en: skin.manifest.description_en.clone(),
-            bilingual: skin.manifest.bilingual,
             loaded,
             hidden,
             preview,
@@ -369,9 +371,97 @@ mod tests {
         fs::write(dir.join("skin.json"), "\u{feff}{\"name\": \"BOM Skin\"}").unwrap();
 
         let manifest = load_skin_manifest(&dir).expect("BOM'd skin.json must parse");
-        assert_eq!(manifest.name, "BOM Skin");
+        assert_eq!(manifest.name_zh.as_deref(), Some("BOM Skin"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 两个测试用单语言皮肤（临时夹具，测完即删；等价实机清单「单语言皮肤
+    /// 文案回退」条目）：纯英文皮肤 name_zh 字段整体省略、只填 name_en/description_en；
+    /// 纯中文皮肤只填 name_zh/description_zh。铁律三条：
+    /// ① 都能经 load_skin_manifest 正常装载（name_zh/name_en 均非必填）；
+    /// ② display_name/display_description 在两种界面语言下都显示创作者
+    ///    提供的那种语言（单语言回退规则，勿回归）；
+    /// ③ 旧字段名 name/description/label/group 经 serde alias 继续被接受
+    ///    （存量皮肤零迁移——解析后落入新字段）。
+    #[test]
+    fn single_language_skins_load_and_display_without_bilingual() {
+        let base = std::env::temp_dir().join(format!(
+            "driftlet-singlelang-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let en_dir = base.join("test-en-only");
+        let zh_dir = base.join("test-zh-only");
+        fs::create_dir_all(&en_dir).unwrap();
+        fs::create_dir_all(&zh_dir).unwrap();
+        fs::write(en_dir.join("index.html"), "<html></html>").unwrap();
+        fs::write(zh_dir.join("index.html"), "<html></html>").unwrap();
+        // 英文单语：没有 name_zh 字段（字段整体缺席才考 serde default）
+        fs::write(
+            en_dir.join("skin.json"),
+            r#"{"id":"test-en-only","name_en":"EN Only Skin","description_en":"English-only test skin","version":"1.0.0","entry":"index.html"}"#,
+        )
+        .unwrap();
+        fs::write(
+            zh_dir.join("skin.json"),
+            r#"{"id":"test-zh-only","name_zh":"中文单语测试","description_zh":"只填中文的单语测试皮肤","version":"1.0.0","entry":"index.html"}"#,
+        )
+        .unwrap();
+
+        let en = load_skin_manifest(&en_dir).expect("name-less English-only skin.json must parse");
+        assert_eq!(en.name_zh, None, "name_zh 缺省必须归一 None");
+        let zh = load_skin_manifest(&zh_dir).expect("Chinese-only skin.json must parse");
+
+        // 显示回退矩阵：单语言皮肤在中/英界面都显示创作者提供的那种语言
+        assert_eq!(en.display_name("en"), "EN Only Skin");
+        assert_eq!(en.display_name("zh-CN"), "EN Only Skin");
+        assert_eq!(en.display_description("en").as_deref(), Some("English-only test skin"));
+        assert_eq!(en.display_description("zh-CN").as_deref(), Some("English-only test skin"));
+        assert_eq!(zh.display_name("en"), "中文单语测试");
+        assert_eq!(zh.display_name("zh-CN"), "中文单语测试");
+        assert_eq!(zh.display_description("en").as_deref(), Some("只填中文的单语测试皮肤"));
+
+        // 旧字段名 alias：存量皮肤（name/description/label/group 无后缀写法）
+        // 必须零迁移解析进新字段
+        let legacy: SkinManifest = serde_json::from_str(
+            r#"{"name":"旧字段名皮肤","description":"旧简介","settings":[{"key":"k","type":"select","label":"旧标签","group":"旧组","description":"旧说明","options":[{"value":"a","label":"旧选项"}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.name_zh.as_deref(), Some("旧字段名皮肤"));
+        assert_eq!(legacy.description_zh.as_deref(), Some("旧简介"));
+        let def = &legacy.settings[0];
+        assert_eq!(def.label_zh.as_deref(), Some("旧标签"));
+        assert_eq!(def.group_zh.as_deref(), Some("旧组"));
+        assert_eq!(def.description_zh.as_deref(), Some("旧说明"));
+        assert_eq!(def.options[0].label_zh.as_deref(), Some("旧选项"));
+
+        // 双语对照：两语言都提供时随界面切换
+        let both: SkinManifest = serde_json::from_str(
+            r#"{"name_zh":"双语皮肤","name_en":"Bilingual Skin","description_zh":"中文简介","description_en":"EN desc"}"#,
+        )
+        .unwrap();
+        assert_eq!(both.display_name("en"), "Bilingual Skin");
+        assert_eq!(both.display_name("zh-CN"), "双语皮肤");
+        assert_eq!(both.display_description("en").as_deref(), Some("EN desc"));
+        assert_eq!(both.display_description("zh-CN").as_deref(), Some("中文简介"));
+
+        // 半翻译：字段留空回退另一种语言
+        let half: SkinManifest = serde_json::from_str(
+            r#"{"name_zh":"双语皮肤","name_en":""}"#,
+        )
+        .unwrap();
+        assert_eq!(half.display_name("en"), "双语皮肤", "空串 name_en 必须回退 name_zh");
+        let half_zh: SkinManifest = serde_json::from_str(
+            r#"{"name_zh":"","name_en":"EN Only"}"#,
+        )
+        .unwrap();
+        assert_eq!(half_zh.display_name("zh-CN"), "EN Only", "空串 name_zh 必须回退 name_en");
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -10,7 +10,7 @@
 
 use serde::Deserialize;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
@@ -20,6 +20,76 @@ const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024; // 解压后合计 1 GB
 const MAX_FILES: usize = 10000;
 /// 对齐安装端 loader.rs：skin.json 体积上限，超限即视为异常
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024; // 1 MB
+/// 对齐安装端 package.rs：创作者自带预览图的尺寸上限（像素）。解码内存 =
+/// 宽×高×4B 驻留管理器渲染进程，112px 高的卡片用不到巨型原图
+const MAX_PREVIEW_DIMENSION: u32 = 1280;
+
+/// loader.rs 认的预览文件名（与安装端 package.rs 同顺序）
+const PREVIEW_FILE_NAMES: [&str; 3] = ["preview.png", "preview.jpg", "preview.jpeg"];
+
+/// 只读图片头取尺寸（PNG 看 IHDR，JPEG 扫 SOF 段），不解码像素——
+/// 与安装端 package.rs 的 image_dimensions 手工镜像，改动必须同步
+fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
+    const PROBE_BYTES: u64 = 512 * 1024;
+    let mut head = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(PROBE_BYTES)
+        .read_to_end(&mut head)
+        .ok()?;
+    png_dimensions(&head).or_else(|| jpeg_dimensions(&head))
+}
+
+fn png_dimensions(head: &[u8]) -> Option<(u32, u32)> {
+    const SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if head.len() < 24 || head[..8] != SIG {
+        return None;
+    }
+    if &head[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes(head[16..20].try_into().ok()?);
+    let h = u32::from_be_bytes(head[20..24].try_into().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+fn jpeg_dimensions(head: &[u8]) -> Option<(u32, u32)> {
+    if head.len() < 4 || head[0] != 0xff || head[1] != 0xd8 {
+        return None;
+    }
+    let mut i = 2;
+    while i + 9 < head.len() {
+        if head[i] != 0xff {
+            i += 1;
+            continue;
+        }
+        let marker = head[i + 1];
+        i += 2;
+        if marker == 0xd8 || marker == 0xd9 || marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
+            continue;
+        }
+        if marker == 0xda {
+            return None;
+        }
+        if i + 2 > head.len() {
+            return None;
+        }
+        let seg_len = u16::from_be_bytes([head[i], head[i + 1]]) as usize;
+        if seg_len < 2 {
+            return None;
+        }
+        if (0xc0..=0xcf).contains(&marker) && marker != 0xc4 && marker != 0xc8 && marker != 0xcc {
+            if i + 7 > head.len() {
+                return None;
+            }
+            let h = u16::from_be_bytes([head[i + 3], head[i + 4]]) as u32;
+            let w = u16::from_be_bytes([head[i + 5], head[i + 6]]) as u32;
+            return (w > 0 && h > 0).then_some((w, h));
+        }
+        i += seg_len;
+    }
+    None
+}
 
 // ---------------------------------------------------------------
 // 以下 serde 结构复制精简自安装端 src-tauri/src/skin/types.rs，
@@ -27,26 +97,30 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024; // 1 MB
 // 安装端结构改动时这里要同步。
 // ---------------------------------------------------------------
 
-/// Skin manifest（对应安装端 SkinManifest，只保留校验所需字段）
+/// Skin manifest（对应安装端 SkinManifest，只保留校验所需字段；
+/// 对称字段名 name_zh/name_en——旧无后缀名 name 经 serde alias 继续被接受，
+/// 与安装端口径一致）
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct SkinManifest {
     #[serde(default)]
     id: Option<String>,
-    name: String,
-    /// 英文皮肤名（bilingual 皮肤专用；留空时英文界面回退 name）
+    /// 中文皮肤名（旧字段名 name 经 alias 接受；单语言英文皮肤可省略本
+    /// 字段只填 name_en）
+    #[serde(default, alias = "name")]
+    name_zh: Option<String>,
+    /// 英文皮肤名（界面英文时优先显示；界面中文且 name_zh 为空时回退——
+    /// 单语言皮肤只填一种语言即可，同安装端 SkinManifest 注释）
     #[serde(default)]
     name_en: Option<String>,
     #[serde(default)]
     author: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    /// 英文简介（bilingual 皮肤专用；留空回退 description）
+    /// 中文简介（旧字段名 description 经 alias 接受）
+    #[serde(default, alias = "description")]
+    description_zh: Option<String>,
+    /// 英文简介（同 name_en 的选取规则）
     #[serde(default)]
     description_en: Option<String>,
-    /// 中英双语声明（作者侧开关）：false/缺省 = 单语皮肤，所有 *_en 字段一律忽略
-    #[serde(default)]
-    bilingual: bool,
     #[serde(default = "default_entry")]
     entry: String,
     #[serde(default)]
@@ -67,8 +141,9 @@ struct SkinManifest {
 #[derive(Debug, Deserialize)]
 struct SkinSettingOption {
     value: String,
-    #[serde(default)]
-    label: Option<String>,
+    /// 旧字段名 label 经 alias 接受
+    #[serde(default, alias = "label")]
+    label_zh: Option<String>,
     #[serde(default)]
     label_en: Option<String>,
 }
@@ -108,16 +183,17 @@ struct SkinSettingDef {
     key: String,
     #[serde(rename = "type")]
     kind: SkinSettingKind,
-    #[serde(default)]
-    label: Option<String>,
+    /// 旧字段名 label/description/group 经 alias 接受
+    #[serde(default, alias = "label")]
+    label_zh: Option<String>,
     #[serde(default)]
     label_en: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
+    #[serde(default, alias = "description")]
+    description_zh: Option<String>,
     #[serde(default)]
     description_en: Option<String>,
-    #[serde(default)]
-    group: Option<String>,
+    #[serde(default, alias = "group")]
+    group_zh: Option<String>,
     #[serde(default)]
     group_en: Option<String>,
     #[serde(default)]
@@ -321,7 +397,13 @@ fn main() {
         .unwrap_or_else(|e| fail(&format!("无法读取 skin.json：{}", e)));
     let manifest: SkinManifest = serde_json::from_str(raw.trim_start_matches('\u{feff}'))
         .unwrap_or_else(|e| fail(&format!("skin.json 校验失败：{}", e)));
-    let name = &manifest.name;
+    // CLI 展示名：中文缺失回退英文（与管理器显示同规则）
+    let name = manifest
+        .name_zh
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| manifest.name_en.clone().filter(|s| !s.is_empty()))
+        .unwrap_or_default();
     let id = manifest
         .id
         .as_deref()
@@ -339,6 +421,25 @@ fn main() {
     }
     if !is_web && !skin_dir.join(&manifest.entry).exists() {
         fail(&format!("入口文件 '{}' 不存在", manifest.entry));
+    }
+    // 预览图尺寸上限（与安装端 package.rs 同口径）：头解析不出尺寸
+    // （损坏/格式不明）只警告——那种图浏览器同样解不出，无内存风险
+    for name in PREVIEW_FILE_NAMES {
+        let path = skin_dir.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        match image_dimensions(&path) {
+            Some((w, h)) if w.max(h) > MAX_PREVIEW_DIMENSION => {
+                fail(&format!(
+                    "预览图 '{}' 尺寸 {}×{} 超过上限（最大边长 {} 像素）——管理器列表按 112px 高显示，超大预览只会白占内存",
+                    name, w, h, MAX_PREVIEW_DIMENSION
+                ));
+            }
+            Some(_) => {}
+            None => eprintln!("警告：无法读取预览图 '{}' 的尺寸，跳过上限检查", name),
+        }
+        break;
     }
     let version = manifest.version.as_deref();
     match version {

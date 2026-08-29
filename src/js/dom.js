@@ -2,8 +2,8 @@
  * dom.js — 共享 DOM 小工具
  *
  * esc / escAttr：innerHTML 拼接前的转义（管理器界面大量字符串拼 DOM）。
- * dispName / dispDesc：双语皮肤文案选取，skin-list / skin-editor /
- * install-wizard 同一规则，唯一定义在此。
+ * dispName / dispDesc：皮肤文案选取（单语言皮肤回退到其提供的语言），
+ * skin-list / skin-editor / install-wizard / settings 同一规则，唯一定义在此。
  * confirmDialog：确认弹窗工厂（删除/重置/导入备份共用）；bindEsc /
  * closeOnMaskClick 是其拆出的小工具，结构特殊的弹窗（如更新提示）
  * 可只复用小工具而不套用工厂。
@@ -22,14 +22,21 @@ export function escAttr(str) {
   return esc(str).replace(/"/g, '&quot;');
 }
 
-// 双语皮肤（skin.json 声明 bilingual）：英文界面优先显示 *_en 文案，
-// 字段留空回退默认文案
+// 皮肤文案选取（对称字段：name_zh/name_en、description_zh/description_en——
+// 旧无后缀字段名经后端 serde alias 解析进 *_zh，下发即此形态）：
+// 界面语言优先取对应语言字段，缺失（undefined 或空串）回退另一语言——
+// 单语言皮肤（只填一种语言）在中/英界面下都显示创作者提供的那种语言；
+// 两个都填 = 双语皮肤随界面切换。任何字段组合都合法，无声明开关。
 export function dispName(info) {
-  return (getLang() === 'en' && info?.bilingual && info?.name_en) || info?.name;
+  const zh = info?.name_zh || '';
+  const en = info?.name_en || '';
+  return getLang() === 'en' ? (en || zh) : (zh || en);
 }
 
 export function dispDesc(info) {
-  return (getLang() === 'en' && info?.bilingual && info?.description_en) || info?.description;
+  const zh = info?.description_zh || '';
+  const en = info?.description_en || '';
+  return getLang() === 'en' ? (en || zh) : (zh || en);
 }
 
 /** Esc 关闭：window 级 capture keydown；返回解绑函数，关闭后必须调用摘除 */

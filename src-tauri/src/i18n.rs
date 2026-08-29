@@ -116,6 +116,7 @@ pub enum Key {
     SkinJsonParseFailed,
     PackageMissingId,
     EntryFileMissing,
+    PreviewTooLarge,
     // backup.rs
     BackupFilterName,
     BackupNotZip,
@@ -277,6 +278,7 @@ fn zh(key: Key) -> &'static str {
         Key::SkinJsonParseFailed => "skin.json 解析失败: {}",
         Key::PackageMissingId => "不是有效的皮肤包：skin.json 缺少 id 字段",
         Key::EntryFileMissing => "不是有效的皮肤包：入口文件 '{}' 不存在",
+        Key::PreviewTooLarge => "预览图 '{}' 尺寸 {}×{} 超过上限（最大边长 {} 像素）",
         Key::BackupFilterName => "Driftlet 备份",
         Key::BackupNotZip => "不是有效的备份文件（无法作为 zip 打开）",
         Key::BackupTooLarge => "备份文件过大（超过 64 MB）",
@@ -405,6 +407,7 @@ fn en(key: Key) -> &'static str {
         Key::SkinJsonParseFailed => "Failed to parse skin.json: {}",
         Key::PackageMissingId => "Not a valid skin package: skin.json is missing the id field",
         Key::EntryFileMissing => "Not a valid skin package: entry file '{}' does not exist",
+        Key::PreviewTooLarge => "Preview image '{}' is {}x{}, over the limit (max side {} px)",
         Key::BackupFilterName => "Driftlet Backup",
         Key::BackupNotZip => "Not a valid backup (cannot be opened as a zip)",
         Key::BackupTooLarge => "Backup file is too large (over 64 MB)",

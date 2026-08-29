@@ -3,6 +3,13 @@
 ///
 /// 取代旧的 GDI PrintWindow 路径：直接取 webview 渲染结果，alpha 正确，
 /// 不受窗口遮挡 / 贴桌面 / 最小化影响。
+///
+/// 落盘前降采样到 PREVIEW_MAX_DIMENSION：管理器皮肤卡片的显示高度只有
+/// 112px（style.css .skin-preview），而 CapturePreview 按窗口原始分辨率
+/// 出图——大屏皮肤可达 1920×1080+，解码后 ~8MB RGBA 整张驻留管理器渲染
+/// 进程（列表里每张预览都如此）。压到 640px（显示尺寸的数倍，含高分屏
+/// 余量）后单张解码内存 ~0.6MB。降采样失败不阻断截图：原图落盘，大不了
+/// 偏大，不能没有。
 
 #[cfg(target_os = "windows")]
 pub fn capture_webview_to_png(
@@ -22,6 +29,47 @@ pub fn capture_webview_to_png(
         Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
     };
     use crate::i18n::{tr, trf, Key};
+
+    /// 预览图降采样上限（像素）。管理器卡片显示高度 112px，640 已含
+    /// 高分屏与宽预览余量；创作者自带的 preview.png 上限见 package.rs
+    /// 的安装校验（1280），两边口径不同是刻意的：截图服务的是列表缩略，
+    /// 创作者预览允许更精细的原图。
+    const PREVIEW_MAX_DIMENSION: u32 = 640;
+
+    /// PNG 解码 → 等比压边 → 重编码。任何一步失败都回退原字节：
+    /// 预览图「偏大」只是内存取舍，「缺失」会直接打断加载流程的
+    /// 「装完即见预览」体验，所以这里永不以报错收场。
+    fn downscale_preview_png(buf: Vec<u8>) -> Vec<u8> {
+        let Ok(img) = image::load_from_memory_with_format(&buf, image::ImageFormat::Png) else {
+            return buf;
+        };
+        let (w, h) = (img.width(), img.height());
+        let longest = w.max(h);
+        if longest <= PREVIEW_MAX_DIMENSION {
+            return buf;
+        }
+        let scale = PREVIEW_MAX_DIMENSION as f32 / longest as f32;
+        let nw = ((w as f32 * scale).round() as u32).max(1);
+        let nh = ((h as f32 * scale).round() as u32).max(1);
+        let resized = image::imageops::resize(
+            &img.to_rgba8(),
+            nw,
+            nh,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let mut out = std::io::Cursor::new(Vec::new());
+        match image::write_buffer_with_format(
+            &mut out,
+            resized.as_raw(),
+            nw,
+            nh,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        ) {
+            Ok(()) => out.into_inner(),
+            Err(_) => buf,
+        }
+    }
 
     /// 读出 IStream 全部内容并写进文件（在截图完成回调里调用）。
     fn drain_stream_to_file(stream: &IStream, path: &std::path::Path, lang: &str) -> Result<(), String> {
@@ -58,6 +106,8 @@ pub fn capture_webview_to_png(
             if filled == 0 {
                 return Err(format!("capture produced 0 bytes (source: {} bytes declared)", size));
             }
+            // 降采样后再落盘：列表缩略用不到全尺寸位图（见文件头注释）
+            let buf = downscale_preview_png(buf);
             std::fs::write(path, &buf).map_err(|e| trf(lang, Key::WritePreviewFailed, &[&e.to_string()]))?;
         }
         Ok(())
