@@ -19,10 +19,15 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Capture preview images for skins
 - Tray icon management; closing the main window hides it to the tray
 - Autostart, dark/light theme switching
-- Right-click a skin window to open the skin menu (open config / refresh / unload)
+- Right-click a skin window to open the skin menu (open config / refresh / hide / unload)
 - A global hotkey hides/shows all loaded skins with one keystroke (default Ctrl+Shift+Alt+D, changeable or disabled in Settings), with a synced checked item in the tray menu; Alt+F4 on a skin window only hides it — call it back via the hotkey or the tray
+- Tray "Skin Visibility" submenu: one checkable row per loaded skin, click to toggle that skin's visibility, with the check state synced in real time with the editor, the right-click menu, and the global hotkey
+- Per-skin visibility shortcut: each skin can record a combo in the editor to toggle just that skin's visibility (saving is refused when it duplicates the global hotkey / another skin's combo or is taken by another program)
 - Browser refresh/navigation shortcuts like F5 are blocked in both the manager and skin windows — pages cannot be refreshed by keystroke; the window lifecycle belongs entirely to the manager
-- Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing; the import review shows the permission declarations of the skins inside, same conventions as the install wizard)
+- Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing; the import review shows the permission declarations of the skins inside, same conventions as the install wizard; selective import supported — checking skins in the review list switches to merge mode, replacing only the checked skins and merging their config and layouts, everything else untouched)
+- Layout presets: save the current desktop state (load set + each skin's position/size/visibility) as a named preset and apply it with one click; the tray menu lists presets too
+- Skin groups: custom grouping with fold/unfold, rename and checkbox-based member editing; batch load/unload/hide/show for all members of a group
+- Skin duplication: create an independent copy of a skin (separate settings/preview/permissions), and pull the source's latest content into the copy with one click after the source is updated
 - Startup update check (on by default, can be turned off in Settings): downloads the installer in the background once a new GitHub release is found (fixed name `update/Driftlet-update-setup.exe`, overwritten on the next download — no piles of installers), and only then shows an "Install now" prompt; on download failure it falls back to the "Go to download page" flow
 
 ---
