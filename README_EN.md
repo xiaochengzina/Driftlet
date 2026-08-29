@@ -273,7 +273,7 @@ A third-party skin is **networked local code** (a full Chromium web page + backe
 - **File sandbox**: a skin's file reads/writes are confined to its own folder (absolute paths and `..` escapes rejected); `skin.json` / `settings.json` are write- and delete-protected. Even a skin holding `file_system` cannot mutate the app data roots (skins/config), the update directory, or the program directory — blocking silent self-escalation via skin.json edits and tampering with files the host later executes (installer / exe / dll).
 - **Update-channel integrity**: the auto-downloaded installer's SHA-256 is recorded at download time (inside the version marker), and "Install now" re-verifies marker completeness + a version newer than the running one + a matching file hash before executing — the trusted "install the official update" action can never execute an installer rewritten by a third party.
 - **Cross-skin isolation of settings values**: `settings.json` is intercepted by the skin:// protocol (including 8.3 short-name, ADS, and other bypass tricks), so skin A cannot read skin B's settings; `password` values never land on the page and are dispensed by `skin_get_setting` based on window identity.
-- **`.dskin` install hardening**: extraction guards against zip-slip and zip bombs (metered by actual decompressed bytes); size/file-count limits 64MB / 256MB / 5000; staged, rollback-style installation that leaves the old version intact on failure.
+- **`.dskin` install hardening**: extraction guards against zip-slip and zip bombs (metered by actual decompressed bytes); size/file-count limits 256MB / 1GB / 10000; staged, rollback-style installation that leaves the old version intact on failure.
 
 ---
 

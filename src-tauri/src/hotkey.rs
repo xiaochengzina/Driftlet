@@ -17,10 +17,20 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use crate::i18n::{tr, trf, Key};
 use crate::AppState;
 
-/// 当前「实际注册成功」的组合键。配置里的 hotkey_toggle_skins 可能因注册
-/// 失败（组合被别的程序占用）与真实注册状态脱节——「输入的组合 == 配置值」
-/// 推不出「已注册」，apply_hotkey 的短路必须看这个。
+/// 当前「实际注册成功」的组合键——**一律存 Shortcut Display 规范化串**
+///（crate 的 Display 产出小写修饰词 + keyboard-types Code 名，如
+/// `shift+control+alt+KeyD`，与配置里的 `Ctrl+Shift+Alt+D` 原串不等）。
+/// 事故依据（审查发现，发布阻断级）：dispatch_hotkey 拿事件 shortcut 的
+/// Display 与簿记比对，簿记存配置原串 → 永不命中 → 全局热键静默全死。
+/// 凡写 REGISTERED_COMBO 必须写 Display 串，凡比较必须先规范化。
 static REGISTERED_COMBO: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 皮肤专属显隐热键注册表：规范化组合串（Shortcut Display）→ 皮肤 id。
+/// 常驻——皮肤未加载时按下静默无效果（无窗可切），故无需加载/卸载钩子；
+/// 启动与备份导入后由 sync_skin_hotkeys_from_config 按 config 全量重建。
+static SKIN_HOTKEYS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, String>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 fn registered_combo() -> Option<String> {
     REGISTERED_COMBO
@@ -74,8 +84,38 @@ pub fn toggle_all_skins(app: &AppHandle) {
 /// 勾选项、皮肤窗 Alt+F4 降级隐藏都经这里同步托盘），故同时向管理器
 /// 发 skins-visibility-changed——列表/配置面板的「已隐藏」徽标按
 /// 真实窗口状态刷新，不靠热键簿记。
+/// 「皮肤显隐」子菜单的维护分两层：加载集（皮肤数）变了才重建整个
+/// 托盘菜单（tray.rs 按当前清单重新生成子菜单项）；只显隐翻转时仅
+/// 按真实可见性 set_checked——热键连发不抖菜单。
 pub fn sync_tray_toggle_item(app: &AppHandle) {
     let state = app.state::<AppState>();
+
+    // ① 加载集 vs 子菜单项集合：不一致才重建（rebuild_tray_menu 会顺带
+    //    重新 stash toggle_item 与 skin_vis_items）
+    let loaded: std::collections::HashSet<String> =
+        state.registry.loaded_ids().into_iter().collect();
+    let menu_ids: std::collections::HashSet<String> = {
+        let items = state.skin_vis_items.lock().unwrap_or_else(|e| e.into_inner());
+        items.keys().cloned().collect()
+    };
+    if loaded != menu_ids {
+        crate::tray::rebuild_tray_menu(app, &state.lang());
+    }
+
+    // ② 勾选态同步（重建后句柄是最新的；克隆出锁再回调 tauri）
+    let items: Vec<(String, tauri::menu::CheckMenuItem<tauri::Wry>)> = {
+        let items = state.skin_vis_items.lock().unwrap_or_else(|e| e.into_inner());
+        items.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    };
+    for (id, item) in items {
+        let visible = state
+            .registry
+            .get(&id)
+            .map(|w| w.is_visible().unwrap_or(true))
+            .unwrap_or(false);
+        let _ = item.set_checked(visible);
+    }
+
     let item = state.toggle_item.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(item) = item {
         let _ = item.set_checked(all_skins_hidden(app));
@@ -107,7 +147,8 @@ pub fn register_from_config(app: &AppHandle) {
                 set_registered_combo(None);
                 *app.state::<AppState>().hotkey_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(combo);
             } else {
-                set_registered_combo(Some(combo));
+                // 簿记存 Display 规范化串（见 REGISTERED_COMBO 注释）
+                set_registered_combo(Some(shortcut.to_string()));
             }
         }
         Err(e) => log::warn!("Invalid hotkey in config '{}': {}", combo, e),
@@ -148,17 +189,18 @@ pub fn apply_hotkey(app: &AppHandle, combo: &str) -> Result<(), String> {
             .clone()
     };
     let combo = combo.trim();
-    // 短路前提 = 组合没变【且】它真的注册成功了——启动时组合被占用会注册
-    // 失败，配置值与注册状态脱节，此时重新输入同一组合必须真正再走注册。
-    if combo == old_combo && registered_combo().as_deref() == Some(combo) {
-        return Ok(());
-    }
-    // Validate the NEW combo before touching the old registration.
+    // 先解析新组合（Display 规范化串用于全部簿记比对——见 REGISTERED_COMBO
+    // 注释）；短路前提 = 组合没变【且】它真的注册成功了——启动时组合被
+    // 占用会注册失败，配置值与注册状态脱节，此时重输同一组合必须真走注册。
     let new = if combo.is_empty() {
         None
     } else {
         Some(parse_validated(combo, &lang)?)
     };
+    let new_key = new.as_ref().map(|s| s.to_string());
+    if combo == old_combo && registered_combo().as_deref() == new_key.as_deref() {
+        return Ok(());
+    }
     let old = if old_combo.is_empty() {
         None
     } else {
@@ -190,7 +232,12 @@ pub fn apply_hotkey(app: &AppHandle, combo: &str) -> Result<(), String> {
                     .unwrap_or(false)
             };
             set_registered_combo(if restored {
-                Some(old_combo.trim().to_string())
+                // 回滚簿记同样存 Display 规范化串
+                old_combo
+                    .trim()
+                    .parse::<Shortcut>()
+                    .ok()
+                    .map(|s| s.to_string())
             } else {
                 None
             });
@@ -198,11 +245,7 @@ pub fn apply_hotkey(app: &AppHandle, combo: &str) -> Result<(), String> {
             return Err(trf(&lang, Key::HotkeyRegisterFailed, &[&msg]));
         }
     }
-    set_registered_combo(if combo.is_empty() {
-        None
-    } else {
-        Some(combo.to_string())
-    });
+    set_registered_combo(if combo.is_empty() { None } else { new_key });
     Ok(())
 }
 
@@ -217,4 +260,169 @@ fn parse_validated(combo: &str, lang: &str) -> Result<Shortcut, String> {
         return Err(tr(lang, Key::HotkeyInvalid).to_string());
     }
     Ok(shortcut)
+}
+
+// ─── 皮肤专属显隐热键 ───
+
+/// 全局热键事件分发（lib.rs 的 handler 唯一入口）：皮肤专属热键优先
+///（专属比全局更具体），未命中再按全局热键处理。
+pub fn dispatch_hotkey(app: &AppHandle, shortcut: &Shortcut) {
+    let key = shortcut.to_string();
+    let skin_id = SKIN_HOTKEYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned();
+    if let Some(skin_id) = skin_id {
+        log::info!("Skin hotkey triggered: {} → {}", key, skin_id);
+        toggle_one_skin(app, &skin_id);
+        return;
+    }
+    if registered_combo().as_deref() == Some(key.as_str()) {
+        log::info!("Global hotkey triggered");
+        toggle_all_skins(app);
+    }
+}
+
+/// 切换单个皮肤的显隐（热键触发）：按真实窗口可见性取反；皮肤未加载
+///（无窗）静默 no-op。同步走 sync_tray_toggle_item 漏斗。
+/// pub(crate)：托盘「皮肤显隐」勾选项点击走同一路径。
+pub(crate) fn toggle_one_skin(app: &AppHandle, skin_id: &str) {
+    let state = app.state::<AppState>();
+    let Some(win) = state.registry.get(skin_id) else {
+        return;
+    };
+    let visible = win.is_visible().unwrap_or(true);
+    let result = if visible { win.hide() } else { win.show() };
+    if let Err(e) = result {
+        log::warn!("skin hotkey toggle failed for '{}': {}", skin_id, e);
+    }
+    sync_tray_toggle_item(app);
+}
+
+/// 设置/更新某皮肤的专属热键（"" = 清除）。先注册后落盘（命令层保证
+/// 失败不写配置）：冲突（全局热键或其他皮肤已占用）直接拒绝；OS 注册
+/// 失败回滚旧组合。注册表常驻——皮肤加载状态不影响本函数行为。
+pub fn set_skin_hotkey(app: &AppHandle, skin_id: &str, combo: &str) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let combo = combo.trim();
+    let new_shortcut = if combo.is_empty() {
+        None
+    } else {
+        Some(parse_validated(combo, &lang)?)
+    };
+    let new_key = new_shortcut.as_ref().map(|s| s.to_string());
+
+    // 冲突检查：全局热键或其他皮肤已占用（自己复用原组合 = 合法重设）
+    if let Some(k) = &new_key {
+        if registered_combo().as_deref() == Some(k.as_str()) {
+            return Err(trf(&lang, Key::HotkeyConflict, &[k]));
+        }
+        let taken_by_other = {
+            let map = SKIN_HOTKEYS.lock().unwrap_or_else(|e| e.into_inner());
+            map.get(k).filter(|other| other.as_str() != skin_id).is_some()
+        };
+        if taken_by_other {
+            return Err(trf(&lang, Key::HotkeyConflict, &[k]));
+        }
+    }
+
+    let mut map = SKIN_HOTKEYS.lock().unwrap_or_else(|e| e.into_inner());
+    // 摘除该皮肤的旧组合（注销失败仅告警留痕——旧注册若真泄漏，后续
+    // register 会以 OS 占用报错自然暴露）
+    let old_key = map.iter().find(|(_, v)| v.as_str() == skin_id).map(|(k, _)| k.clone());
+    let mut old_alive = false;
+    if let Some(old) = &old_key {
+        if let Ok(sc) = old.parse::<Shortcut>() {
+            if let Err(e) = app.global_shortcut().unregister(sc) {
+                log::warn!("failed to unregister skin hotkey '{}': {}", old, e);
+                old_alive = true;
+            }
+        }
+        map.remove(old);
+    }
+
+    if let (Some(sc), Some(k)) = (new_shortcut, &new_key) {
+        if let Err(e) = app.global_shortcut().register(sc) {
+            // 回滚旧组合（注销已失败 = 旧注册仍存活，不必重注）
+            let restored = if old_alive {
+                true
+            } else {
+                old_key
+                    .as_ref()
+                    .and_then(|old| old.parse::<Shortcut>().ok())
+                    .map(|old_sc| app.global_shortcut().register(old_sc).is_ok())
+                    .unwrap_or(false)
+            };
+            if restored {
+                if let Some(old) = old_key {
+                    map.insert(old, skin_id.to_string());
+                }
+            }
+            let msg = e.to_string();
+            return Err(trf(&lang, Key::HotkeyRegisterFailed, &[&msg]));
+        }
+        map.insert(k.clone(), skin_id.to_string());
+    }
+    Ok(())
+}
+
+/// 启动与备份导入后：按 config 全量重建皮肤热键注册表（先清后注；
+/// 单个失败仅记日志不阻断——与 register_from_config 的容忍同款）。
+/// 在 backup.rs 的 rebuild_runtime 与 lib.rs 启动 setup 中调用。
+pub fn sync_skin_hotkeys_from_config(app: &AppHandle) {
+    {
+        // 先清：注销全部现注册（配置无法告诉你谁还在册——注册表才是）
+        let mut map = SKIN_HOTKEYS.lock().unwrap_or_else(|e| e.into_inner());
+        for combo in map.keys() {
+            if let Ok(sc) = combo.parse::<Shortcut>() {
+                let _ = app.global_shortcut().unregister(sc);
+            }
+        }
+        map.clear();
+    }
+    let combos: Vec<(String, String)> = {
+        let state = app.state::<AppState>();
+        let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        cfg.skin_settings
+            .iter()
+            .filter(|(_, c)| !c.hotkey.trim().is_empty())
+            .map(|(id, c)| (id.clone(), c.hotkey.trim().to_string()))
+            .collect()
+    };
+    for (skin_id, combo) in combos {
+        if let Err(e) = set_skin_hotkey(app, &skin_id, &combo) {
+            log::warn!("skin hotkey '{}' for '{}' not registered: {}", combo, skin_id, e);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 审查高危（发布阻断级）的口径钉：REGISTERED_COMBO 簿记一律存
+    /// Shortcut Display 规范化串——parse↔Display 往返必须统一（大小写/
+    /// 修饰词顺序变体归一），且 Display 串绝不等于常见配置原串形态
+    ///（正是「配置原串 vs Display 串」的比较把全局热键静默打死）
+    #[test]
+    fn shortcut_display_normalizes_user_spellings() {
+        let a: Shortcut = "Ctrl+Alt+D".parse().unwrap();
+        let b: Shortcut = "ctrl+alt+d".parse().unwrap();
+        let c: Shortcut = "Alt+Ctrl+D".parse().unwrap();
+        assert_eq!(a.to_string(), b.to_string(), "大小写变体必须归一");
+        assert_eq!(a.to_string(), c.to_string(), "修饰词顺序变体必须归一");
+        // 簿记与 dispatch 事件 shortcut.to_string() 同口径才可比
+        assert_eq!(a.to_string(), a.to_string());
+        // 反证：Display 串不等于配置原串（误用原串比较即死——勿回归）
+        assert_ne!(a.to_string(), "Ctrl+Alt+D");
+    }
+
+    /// parse_validated 拒绝裸键（全局劫持打字防护）与接受带修饰组合
+    #[test]
+    fn parse_validated_requires_modifier() {
+        assert!(parse_validated("D", "zh-CN").is_err());
+        assert!(parse_validated("Ctrl+Alt+D", "zh-CN").is_ok());
+    }
 }

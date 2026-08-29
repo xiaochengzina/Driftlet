@@ -5,7 +5,7 @@
 import API from './api.js';
 import showToast from './toast.js';
 import { t, getLang, applyLang } from './i18n.js';
-import { esc, confirmDialog } from './dom.js';
+import { esc, escAttr, confirmDialog, dispName, bindHotkeyCapture } from './dom.js';
 import { renderPermChipsHTML } from './perms.js';
 
 // 当前打开的设置面板实例（供语言切换后原地重绘；关闭时清空）
@@ -94,7 +94,9 @@ export default class Settings {
               <label>${t('settings.hotkey')}</label>
               <div class="hint">${t('settings.hotkeyHint')}</div>
             </div>
-            <button class="theme-btn" id="cfg-hotkey">${esc(this.hotkey) || t('settings.hotkeyNone')}</button>
+            <div class="theme-options">
+              <button class="theme-btn hotkey-btn" id="cfg-hotkey">${esc(this.hotkey) || t('settings.hotkeyNone')}</button>
+            </div>
           </div>
         </div>
 
@@ -229,9 +231,9 @@ export default class Settings {
       };
     });
 
-    // Hotkey capture：点击进入录制态，Esc 取消，Backspace/Delete 禁用，
-    // 合法组合（≥1 修饰键 + 普通键）保存。注意录制期间按下当前热键仍会
-    // 触发一次全局显隐切换（全局热键无法局部屏蔽，已知小怪癖）。
+    // Hotkey capture：录制交互收编为 dom.js 共享件（编辑器皮肤专属热键
+    // 同件，单一事实源）。注意录制期间按下当前热键仍会触发一次全局显隐
+    // 切换（全局热键无法局部屏蔽，已知小怪癖）。
     const hotkeyBtn = overlay.querySelector('#cfg-hotkey');
 
     // 打开日志窗口（已开着则后端把它提到前台）；成功后设置页自动关闭
@@ -256,42 +258,13 @@ export default class Settings {
       }
       renderHotkey();
     };
-    hotkeyBtn.onclick = () => {
-      if (this._hotkeyListener) return; // 已在录制中
-      hotkeyBtn.textContent = `${t('settings.hotkeyRecording')} ${t('settings.hotkeySubHint')}`;
-      hotkeyBtn.classList.add('active');
-
-      const finish = () => {
-        window.removeEventListener('keydown', onKey, true);
-        this._hotkeyListener = null;
-        hotkeyBtn.classList.remove('active');
-        renderHotkey();
-      };
-      const onKey = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.key === 'Escape') { finish(); return; }
-        if (e.key === 'Backspace' || e.key === 'Delete') {
-          finish();
-          saveHotkey('');
-          return;
-        }
-        // 单独的修饰键按下不构成组合，继续等
-        if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
-        const mods = [];
-        if (e.ctrlKey) mods.push('Ctrl');
-        if (e.altKey) mods.push('Alt');
-        if (e.shiftKey) mods.push('Shift');
-        if (e.metaKey) mods.push('Super');
-        if (mods.length === 0) return; // 必须带修饰键（裸键会全局劫持打字）
-        let key = e.key === ' ' ? 'Space' : e.key;
-        if (key.length === 1) key = key.toUpperCase();
-        finish();
-        saveHotkey([...mods, key].join('+'));
-      };
-      this._hotkeyListener = onKey;
-      window.addEventListener('keydown', onKey, true);
-    };
+    // 防叠开/重绘：本面板每次 render 都换新按钮，旧按钮的监听随元素
+    // 销毁，但录制中的 window 级监听必须显式摘除（共享件的 unbind）
+    this._unbindHotkey();
+    this._hotkeyListener = bindHotkeyCapture(hotkeyBtn, {
+      recordingText: t('settings.hotkeyRecording'),
+      onSave: saveHotkey,
+    });
 
     // 开发模式开关（热重载仅 debug 构建的 watcher 读取该标志；DevTools 解锁
     // 由 open_skin_devtools 实时读同一标志，全构建生效）
@@ -349,18 +322,35 @@ export default class Settings {
       const highWarn = hasHigh
         ? `<p class="backup-review-highwarn">${t('settings.backupReviewHighWarn')}</p>`
         : '';
+      // 行内信息收敛为三件：名称（双语随管理器语言）+ 版本号 + 权限胶囊；
+      // 文件夹 id 属实现细节，不进审查视图。每行带勾选（默认全选 = 全量导入；
+      // 取消任意勾选转选择性合并导入——只换勾选皮肤，其余与全局不动）
       const skinRows = info.skins.length === 0
         ? `<p class="backup-review-empty">${t('settings.backupReviewEmpty')}</p>`
         : info.skins.map(s => `<div class="backup-skin-row">
-            <span class="backup-skin-name">${esc(s.name)}<span class="backup-skin-id">${esc(s.id)}${s.version ? ' v' + esc(s.version) : ''}</span></span>
-            ${renderPermChipsHTML(s.permissions)}
+            <label class="backup-skin-row-label">
+              <span class="backup-skin-main">
+                <span class="backup-skin-name">${esc(dispName(s))}${s.version ? `<span class="backup-skin-ver">v${esc(s.version)}</span>` : ''}</span>
+                ${renderPermChipsHTML(s.permissions)}
+              </span>
+              <input type="checkbox" class="backup-skin-check" data-skin-id="${escAttr(s.id)}" checked>
+            </label>
           </div>`).join('');
+      // 选中态在弹窗外的可变对象上跟踪：confirmDialog 确认即销毁 overlay，
+      // onConfirm 时 DOM 已不可查
+      const sel = { total: info.skins.length, ids: info.skins.map(s => s.id) };
       confirmDialog({
         title: t('settings.backupImportTitle'),
         bodyHtml: `${t('settings.backupImportBody')}
           ${highWarn}
-          <div class="backup-review-list">${skinRows}</div>`,
-        hint: t('settings.backupImportHint'),
+          <div class="backup-review-list">${skinRows}</div>
+          ${info.skins.length ? `<div class="backup-select-bar">
+            <span class="backup-select-hint" id="backup-import-hint">${t('settings.backupImportHint')}</span>
+            <span class="backup-select-actions">
+              <button class="backup-select-toggle" data-act="all">${t('settings.backupSelectAll')}</button>
+              <button class="backup-select-toggle" data-act="none">${t('settings.backupSelectNone')}</button>
+            </span>
+          </div>` : ''}`,
         confirmText: t('settings.backupImport'),
         // 内容型确认（皮肤清单 + 权限胶囊）用宽档；图标/按钮语义色跟内容走
         //（含高危权限才 danger 红，否则 accent 蓝——与删除确认页语义一致）
@@ -368,16 +358,23 @@ export default class Settings {
         danger: hasHigh,
         onCancel: () => { importBtn.disabled = false; },
         onConfirm: async () => {
+          const selective = sel.ids.length < sel.total;
           // 确认后导入流程进行中，按钮保持禁用直至结束
           let keepDisabled = false;
           try {
-            const done = await API.importConfig(info.path);
-            if (done) {
+            const res = await API.importConfig(info.path, selective ? sel.ids : null);
+            if (!selective) {
+              // 全量替换：语言/主题/皮肤/配置全变，整页重载重建一切
               showToast(t('settings.backupImported'), 'success');
               keepDisabled = true; // 成功即 reload：800ms 窗口内不得二次提交导入
               setTimeout(() => location.reload(), 800);
             } else {
-              showToast(t('common.canceled'), 'info');
+              // 选择性合并：全局项未动，刷新皮肤列表即可
+              showToast(t('settings.backupImportedSelective', { count: res.imported.length }), 'success');
+              if (res.skipped.length) {
+                showToast(t('settings.backupImportSkipped', { ids: res.skipped.join(', ') }), 'info');
+              }
+              await window.__app?.skinList?.refresh();
             }
           } catch (err) {
             showToast(t('common.setFailed') + String(err), 'error');
@@ -386,6 +383,27 @@ export default class Settings {
           }
         },
       });
+      // 弹窗创建后接线勾选交互：提示语随全选/子选切换、零选中禁用确认键
+      const cOverlay = document.querySelector('.confirm-overlay');
+      const hintEl = cOverlay?.querySelector('#backup-import-hint');
+      const confirmBtn = cOverlay?.querySelector('.confirm-btn:not(.cancel)');
+      const syncSel = () => {
+        const boxes = [...cOverlay.querySelectorAll('.backup-skin-check')];
+        sel.ids = boxes.filter(b => b.checked).map(b => b.dataset.skinId);
+        if (hintEl) {
+          hintEl.textContent = sel.ids.length === boxes.length
+            ? t('settings.backupImportHint')
+            : t('settings.backupSelectiveHint');
+        }
+        if (confirmBtn) confirmBtn.disabled = boxes.length > 0 && sel.ids.length === 0;
+      };
+      cOverlay?.querySelectorAll('.backup-skin-check').forEach(b => b.addEventListener('change', syncSel));
+      cOverlay?.querySelectorAll('.backup-select-toggle').forEach(btn => btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const on = btn.dataset.act === 'all';
+        cOverlay.querySelectorAll('.backup-skin-check').forEach(b => { b.checked = on; });
+        syncSel();
+      }));
     };
 
     const close = () => {
@@ -406,10 +424,10 @@ export default class Settings {
   // 摘除热键录制的全局键监听。任何绕过 close() 的销毁/重绘路径
   // （refreshOpenSettings、防叠开移除）都必须先调它
   _unbindHotkey() {
-    if (this._hotkeyListener) {
-      window.removeEventListener('keydown', this._hotkeyListener, true);
-      this._hotkeyListener = null;
-    }
+    // 句柄是 dom.js 共享录制器（bindHotkeyCapture 返回的 { unbind }），
+    // 历史上是裸 listener 函数——?./?. 双保险兼容两种形态
+    this._hotkeyListener?.unbind?.();
+    this._hotkeyListener = null;
   }
 }
 

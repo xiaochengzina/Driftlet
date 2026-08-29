@@ -158,9 +158,51 @@ const API = {
     return invoke('set_language', { language });
   },
 
+  // 管理器显隐单个皮肤（编辑器「隐藏/显示皮肤」与组批量操作共用）：
+  // visible=false 隐藏窗口，true 显示（后端只显示不抢焦点）
+  setSkinVisibility(skinId, visible) {
+    return invoke('set_skin_visibility', { skinId, visible });
+  },
+
+  // 皮肤分组整体写：前端持有完整状态，组操作后整体回写
+  //（groups = [{id,name,collapsed}] 有序数组；map = {皮肤id: 组id}）
+  setSkinGroups(groups, map) {
+    return invoke('set_skin_groups', { groups, map });
+  },
+
+  // 布局方案：捕获当前桌面为命名方案（overwriteId 给定时覆盖既有方案）
+  captureLayout(name, overwriteId) {
+    return invoke('capture_layout', { name, overwriteId: overwriteId ?? null });
+  },
+
+  // 应用布局方案，返回 {applied: number, skipped: string[]}
+  applyLayout(layoutId) {
+    return invoke('apply_layout', { layoutId });
+  },
+
+  // 布局方案整体写（重命名/删除/排序统一入口）
+  setLayouts(layouts) {
+    return invoke('set_layouts', { layouts });
+  },
+
+  // 皮肤多开：克隆为新 id + 新名称的独立皮肤，返回新皮肤 SkinInfo
+  duplicateSkin(skinId) {
+    return invoke('duplicate_skin', { skinId });
+  },
+
+  // 从源同步副本：用源文件夹重放副本（设置值与窗口配置保留），返回源当前版本号
+  syncSkinCopy(skinId) {
+    return invoke('sync_skin_copy', { skinId });
+  },
+
   // 全局快捷键（空串 = 禁用）
   setHotkey(hotkey) {
     return invoke('set_hotkey', { hotkey });
+  },
+
+  // 皮肤专属显隐热键（空串 = 清除）：切换该皮肤窗口显隐
+  setSkinHotkey(skinId, hotkey) {
+    return invoke('set_skin_hotkey', { skinId, hotkey });
   },
 
   // 启动时快捷键注册失败的组合（消费型，只取到一次）
@@ -179,8 +221,10 @@ const API = {
     return invoke('inspect_backup');
   },
 
-  importConfig(path) {
-    return invoke('import_config', { path });
+  // skinIds 为空数组/null = 全量替换式导入；非空 = 选择性合并导入
+  //（只导入勾选的 skin id）。返回 {imported: string[], skipped: string[]}
+  importConfig(path, skinIds) {
+    return invoke('import_config', { path, skinIds: skinIds && skinIds.length ? skinIds : null });
   },
 
   // 皮肤热重载开关（仅开发构建生效）

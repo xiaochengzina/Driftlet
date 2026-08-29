@@ -86,6 +86,10 @@ pub struct AppState {
     /// can sync its checked state. Replaced whenever the tray menu is
     /// rebuilt (language switch).
     pub toggle_item: Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>,
+    /// 托盘「皮肤显隐」子菜单的每皮肤勾选项（skin_id → CheckMenuItem）：
+    /// 加载集（键集合）与 registry.loaded_ids 不一致时重建整个托盘菜单
+    ///（顺便更新本表），一致时仅按真实可见性 set_checked。
+    pub skin_vis_items: Mutex<std::collections::HashMap<String, tauri::menu::CheckMenuItem<tauri::Wry>>>,
     /// Startup hotkey registration failure (the configured combo, e.g.
     /// "Ctrl+Alt+D"). Pulled once by the frontend on init so the user sees
     /// a toast instead of a silent log — mirrors pending_package.
@@ -144,12 +148,11 @@ pub fn run() {
         // acts — the handler fires on release too, which would double-toggle.
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        // 只记「用了快捷键」本身：托盘菜单 toggle 走 toggle_all_skins
-                        // 同函数但不该被记成快捷键，所以挂点放 handler 里。
-                        log::info!("Global hotkey triggered");
-                        hotkey::toggle_all_skins(app);
+                        // 皮肤专属热键与全局热键统一在 dispatch 里分发
+                        //（专属优先；日志按真实命中的目标记）
+                        hotkey::dispatch_hotkey(app, shortcut);
                     }
                 })
                 .build(),
@@ -196,11 +199,15 @@ pub fn run() {
                     &exe_dir.join("config"),
                     &exe_dir.join("skins"),
                 );
+                // 逐文件夹暂存残留恢复（.<folder>.old / .staging-*）——
+                // 选择性导入/从源同步/包安装的崩溃现场，同 A-H1 语义
+                crate::skin::package::recover_interrupted_folder_ops(&exe_dir.join("skins"));
             }
             crate::backup::rollback_interrupted_import(
                 &app_data_dir.join("config"),
                 &app_data_dir.join("skins"),
             );
+            crate::skin::package::recover_interrupted_folder_ops(&app_data_dir.join("skins"));
 
             let skins_dir = resolve_portable_dir(&app_data_dir, "skins");
             let config_dir = resolve_portable_dir(&app_data_dir, "config");
@@ -272,6 +279,7 @@ pub fn run() {
                 settings_lock: Mutex::new(()),
                 language: Mutex::new(language),
                 toggle_item: Mutex::new(None),
+                skin_vis_items: Mutex::new(std::collections::HashMap::new()),
                 hotkey_error: Mutex::new(None),
                 hot_reload_enabled: AtomicBool::new(hot_reload),
             });
@@ -393,6 +401,8 @@ pub fn run() {
 
             // Register the configured global hotkey (failures only log).
             hotkey::register_from_config(app.handle());
+            // 皮肤专属热键注册表按 config 全量重建（单个失败仅记日志）
+            hotkey::sync_skin_hotkeys_from_config(app.handle());
 
             // 启动序列走完（状态、自载皮肤、管理器窗、托盘、热键全就绪）。
             log::info!("Manager started");
@@ -490,12 +500,20 @@ pub fn run() {
             commands::inspect_skin_package,
             commands::install_skin_package,
             commands::remove_skin,
+            commands::duplicate_skin,
+            commands::sync_skin_copy,
             commands::get_app_config,
             commands::set_autostart,
             commands::get_autostart,
             commands::set_theme,
             commands::set_language,
+            commands::set_skin_visibility,
+            commands::set_skin_groups,
+            commands::capture_layout,
+            commands::apply_layout,
+            commands::set_layouts,
             commands::set_hotkey,
+            commands::set_skin_hotkey,
             commands::set_hot_reload,
             commands::check_update,
             commands::set_update_check,

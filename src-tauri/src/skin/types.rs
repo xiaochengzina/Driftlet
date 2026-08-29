@@ -206,6 +206,10 @@ pub struct Skin {
     pub id: String,
     pub manifest: SkinManifest,
     pub directory: PathBuf,
+    /// 副本来源标记（skin.json 的 `x-driftlet-origin`，形如 "<源id>@<创建时源版本>"）。
+    /// loader 单独从 manifest 文本提取——不放进 SkinManifest（它在
+    /// pack-skin 有手工镜像，不为副本元数据动镜像）。非副本皮肤为 None。
+    pub origin: Option<String>,
 }
 
 /// Lightweight info sent to frontend for listing
@@ -256,6 +260,13 @@ pub struct SkinDetail {
     /// Effective custom setting values (schema defaults merged with persisted
     /// overrides), keyed by setting key
     pub settings_values: serde_json::Map<String, serde_json::Value>,
+    /// 副本来源标记原串（"<源id>@<创建时源版本>"；非副本为 None）
+    pub origin: Option<String>,
+    /// 源皮肤显示名（供「副本 · 源自 X」展示；源已删除为 None）
+    pub origin_name: Option<String>,
+    /// 源当前版本号——仅当与 origin 记录版本不同时为 Some（= 可同步）；
+    /// 源不存在或与记录一致时为 None
+    pub origin_update: Option<String>,
 }
 
 /// Per-skin runtime configuration (persisted)
@@ -300,6 +311,11 @@ pub struct SkinRuntimeConfig {
     /// 吸附间距（逻辑像素）：吸附后与屏幕边缘/其他窗口之间保留的空隙。
     #[serde(default)]
     pub snap_gap: u32,
+    /// 皮肤专属显隐热键（"" = 未设置）：按下切换该皮肤窗口显隐——
+    /// 注册表常驻（hotkey.rs 的 SKIN_HOTKEYS），皮肤未加载时按下静默
+    /// 无效果（无窗可切），不需加载/卸载钩子。
+    #[serde(default)]
+    pub hotkey: String,
     // 「皮肤设置」页的用户值存在皮肤文件夹的 settings.json 里，不在此结构
     // （旧配置的 custom 键由 v1→v2 迁移处理，serde 读入时自动忽略）。
 }
@@ -324,6 +340,7 @@ impl SkinRuntimeConfig {
             click_through: false,
             edge_snap: false,
             snap_gap: 0,
+            hotkey: String::new(),
         }
     }
 }
@@ -348,6 +365,7 @@ impl Default for SkinRuntimeConfig {
             click_through: false,
             edge_snap: false,
             snap_gap: 0,
+            hotkey: String::new(),
         }
     }
 }
@@ -367,6 +385,18 @@ pub struct AppConfig {
     /// UI language: "zh-CN" or "en"
     #[serde(default = "default_language")]
     pub language: String,
+    /// 皮肤分组（有序数组 = 显示顺序）。未在 skin_group_map 中出现的
+    /// 皮肤归属内置虚拟组「未分组」（不落盘、恒在末尾）。
+    #[serde(default)]
+    pub skin_groups: Vec<SkinGroup>,
+    /// 皮肤 id → 组 id 的归属表；指向已删除组的条目在保存时归一剔除
+    #[serde(default)]
+    pub skin_group_map: HashMap<String, String>,
+    /// 布局方案（有序数组 = 显示顺序）：命名的「桌面布置」快照——
+    /// 加载集 + 各皮肤几何（位置/尺寸）+ 显隐。皮肤行为配置
+    ///（透明度/缩放/层级等）不属于布局，仍归 skin_settings 各皮肤自管。
+    #[serde(default)]
+    pub layouts: Vec<LayoutPreset>,
     /// Global hotkey that hides/shows all skin windows ("Ctrl+Alt+D"
     /// style; empty string = disabled).
     #[serde(default = "default_hotkey_toggle_skins")]
@@ -405,6 +435,46 @@ fn default_theme() -> String {
     "auto".to_string()
 }
 
+/// 皮肤分组。`collapsed` 持久化折叠态；组顺序 = AppConfig.skin_groups 数组序
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkinGroup {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+/// 布局方案（命名的桌面布置快照）：加载集 + 几何 + 显隐。
+/// 数组序 = 面板/托盘菜单的显示顺序。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutPreset {
+    pub id: String,
+    pub name: String,
+    /// 皮肤 id → 布置快照
+    #[serde(default)]
+    pub skins: HashMap<String, LayoutSkin>,
+}
+
+/// 布局里单个皮肤的布置快照：位置（None = 未记录位置，应用时居中/默认）、
+/// 基础尺寸（100% 基准；应用时按当前有效 zoom 折算实际尺寸）与显隐。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutSkin {
+    #[serde(default)]
+    pub x: Option<i32>,
+    #[serde(default)]
+    pub y: Option<i32>,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default = "default_layout_visible")]
+    pub visible: bool,
+}
+
+fn default_layout_visible() -> bool {
+    true
+}
+
 /// 首次启动的默认语言（随 OS UI 语言）。pub(crate)：elevation.rs 的
 /// 提权降权失败提示框在 AppState 建立之前也要它兜底语言。
 pub(crate) fn default_language() -> String {
@@ -437,6 +507,9 @@ impl Default for AppConfig {
             autostart: false,
             theme: "auto".to_string(),
             language: default_language(),
+            skin_groups: Vec::new(),
+            skin_group_map: HashMap::new(),
+            layouts: Vec::new(),
             hotkey_toggle_skins: default_hotkey_toggle_skins(),
             hot_reload: default_hot_reload(),
             update_check: default_update_check(),

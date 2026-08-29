@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
 /// 与安装端（src-tauri/src/skin/package.rs）一致的安全上限：防恶意/损坏包耗尽磁盘
-const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024; // 压缩包 64 MB
-const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024; // 解压后合计 256 MB
-const MAX_FILES: usize = 5000;
+const MAX_PACKAGE_BYTES: u64 = 256 * 1024 * 1024; // 压缩包 256 MB
+const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024; // 解压后合计 1 GB
+const MAX_FILES: usize = 10000;
 /// 对齐安装端 loader.rs：skin.json 体积上限，超限即视为异常
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024; // 1 MB
 

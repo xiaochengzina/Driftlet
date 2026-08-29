@@ -127,12 +127,20 @@ pub const COMMAND_POLICIES: &[(&str, Gate)] = &[
     ("inspect_skin_package", Gate::ManagerOnly),
     ("install_skin_package", Gate::ManagerOnly),
     ("remove_skin", Gate::ManagerOnly),
+    ("duplicate_skin", Gate::ManagerOnly),
+    ("sync_skin_copy", Gate::ManagerOnly),
     ("get_app_config", Gate::ManagerOnly),
     ("set_autostart", Gate::ManagerOnly),
     ("get_autostart", Gate::ManagerOnly),
     ("set_theme", Gate::ManagerOnly),
     ("set_language", Gate::ManagerOnly),
+    ("set_skin_visibility", Gate::ManagerOnly),
+    ("set_skin_groups", Gate::ManagerOnly),
+    ("capture_layout", Gate::ManagerOnly),
+    ("apply_layout", Gate::ManagerOnly),
+    ("set_layouts", Gate::ManagerOnly),
     ("set_hotkey", Gate::ManagerOnly),
+    ("set_skin_hotkey", Gate::ManagerOnly),
     ("set_hot_reload", Gate::ManagerOnly),
     ("check_update", Gate::ManagerOnly),
     ("set_update_check", Gate::ManagerOnly),
@@ -342,7 +350,7 @@ mod tests {
     #[test]
     fn gate_distribution_snapshot() {
         let count = |pred: fn(&Gate) -> bool| COMMAND_POLICIES.iter().filter(|(_, g)| pred(g)).count();
-        assert_eq!(count(|g| matches!(g, Gate::ManagerOnly)), 46);
+        assert_eq!(count(|g| matches!(g, Gate::ManagerOnly)), 54);
         assert_eq!(count(|g| matches!(g, Gate::LogWindow)), 2);
         assert_eq!(count(|g| matches!(g, Gate::Ungated)), 2);
         assert_eq!(count(|g| matches!(g, Gate::SkinLabel)), 3);
@@ -350,6 +358,6 @@ mod tests {
         assert_eq!(count(|g| matches!(g, Gate::ControlTarget)), 7);
         assert_eq!(count(|g| matches!(g, Gate::AnyPerm)), 1);
         assert_eq!(count(|g| matches!(g, Gate::Perm(_))), 38);
-        assert_eq!(COMMAND_POLICIES.len(), 107);
+        assert_eq!(COMMAND_POLICIES.len(), 115);
     }
 }

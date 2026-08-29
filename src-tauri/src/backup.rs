@@ -184,6 +184,8 @@ pub struct BackupSkinInfo {
     pub id: String,
     pub name: String,
     pub name_en: Option<String>,
+    /// 双语皮肤标志（前端 dispName 按管理器语言选取 name/name_en 的依据）
+    pub bilingual: bool,
     pub version: Option<String>,
     pub permissions: Vec<String>,
 }
@@ -235,6 +237,7 @@ pub fn inspect_backup(package_path: &Path, lang: &str) -> Result<BackupInspectio
                 id: loader::resolve_skin_id(&manifest, &folder),
                 name: manifest.name,
                 name_en: manifest.name_en,
+                bilingual: manifest.bilingual,
                 version: manifest.version,
                 permissions: manifest.permissions,
             });
@@ -250,7 +253,6 @@ pub fn inspect_backup(package_path: &Path, lang: &str) -> Result<BackupInspectio
 
 pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), String> {
     let lang = app.state::<AppState>().lang();
-
     // Phase 1: extract to a temp dir under the package extractor's guards,
     // then validate — the live data dirs are untouched until everything
     // about the payload checks out.（重 IO 挪 spawn_blocking，不占 async worker）
@@ -308,6 +310,276 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
     // steps only log — the data itself is already safely in place.
     rebuild_runtime(&app).await;
     Ok(())
+}
+
+/// 选择性导入（合并模式，import_config 的 skin_ids 分支）：只导入指定
+/// 皮肤，其余皮肤与全局布局（语言/主题/自启/热键/分组）一律不动。
+/// 与全量替换式 import_backup 的语义边界：
+/// - 目录：不整体换 skins/，按皮肤 id 逐个替换（同 id 不同文件夹名时
+///   替换本地既有文件夹，否则用备份文件夹名）；每个替换自带 .import-old
+///   让位备份，中途失败把已换的逐个还原——config 在目录全部就位前不动。
+/// - 配置：只并入选中皮肤的 skin_settings 条目与 loaded_skins 成员 +
+///   布局方案（按 id 并集、备份版胜——维护者实机定案：备份 = 用户全量
+///   数据，方案不随选择性导入丢失；引用未导入皮肤的条目保留，应用时
+///   skipped 提示）；分组归属不导入（本地组保留，选中皮肤落「未分组」）。
+/// 返回（成功导入的 id 列表，选中但备份中不存在的 id 列表）。
+pub async fn import_backup_selective(
+    app: AppHandle,
+    package_path: &Path,
+    skin_ids: Vec<String>,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let lang = app.state::<AppState>().lang();
+
+    // Phase 1: extract + validate（与全量同一防线）
+    let pkg = package_path.to_path_buf();
+    let lang1 = lang.clone();
+    let extracted = tauri::async_runtime::spawn_blocking(move || {
+        let extracted = extract_backup(&pkg, &lang1)?;
+        validate_backup(extracted.path(), &lang1)?;
+        Ok::<_, String>(extracted)
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))??;
+
+    // 选中集合 ∩ 备份内皮肤（备份文件夹名 → 皮肤 id 解析；选中但不在
+    // 备份的记为 skipped 返回给前端提示）
+    let backup_skins_root = extracted.path().join("skins");
+    let mut to_import: Vec<(String, std::path::PathBuf)> = Vec::new(); // (id, 备份内文件夹)
+    let mut skipped: Vec<String> = Vec::new();
+    'outer: for id in &skin_ids {
+        if backup_skins_root.is_dir() {
+            for entry in fs::read_dir(&backup_skins_root).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let dir = entry.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                let folder = entry.file_name().to_string_lossy().to_string();
+                if folder.starts_with('.') {
+                    continue;
+                }
+                let text = match fs::read_to_string(dir.join("skin.json")) {
+                    Ok(t) if t.len() <= loader::MAX_MANIFEST_BYTES as usize => t,
+                    _ => continue,
+                };
+                let Ok(manifest) = serde_json::from_str::<crate::skin::types::SkinManifest>(
+                    text.trim_start_matches('\u{feff}'),
+                ) else {
+                    continue;
+                };
+                if &loader::resolve_skin_id(&manifest, &folder) == id {
+                    to_import.push((id.clone(), dir));
+                    continue 'outer;
+                }
+            }
+        }
+        skipped.push(id.clone());
+    }
+    if to_import.is_empty() {
+        return Err(tr(&lang, Key::InvalidBackup).to_string());
+    }
+
+    // Phase 2: 只卸载「选中且已加载」的皮肤（文件夹被 WebView2 占用，
+    // 替换会失败）；其余已加载皮肤不动
+    let state = app.state::<AppState>();
+    let _install_guard = state.install_lock.lock().await;
+    let selected: std::collections::HashSet<&str> =
+        to_import.iter().map(|(id, _)| id.as_str()).collect();
+    let mut unloaded: Vec<String> = Vec::new();
+    for id in state.registry.loaded_ids() {
+        if !selected.contains(id.as_str()) {
+            continue;
+        }
+        if let Err(e) = crate::commands::unload_skin_impl(app.clone(), id.clone()).await {
+            if unloaded.is_empty() {
+                return Err(e);
+            }
+            let ids = unloaded.join(", ");
+            return Err(format!("{} {}", e, trf(&lang, Key::ImportPartialUnloaded, &[&ids])));
+        }
+        unloaded.push(id);
+    }
+
+    // Phase 3: 按 id 逐个替换（持 settings_lock 与设置写入互斥；重 IO 挪
+    // spawn_blocking）。每个替换 = 既有文件夹挪为 <name>.import-old →
+    // 备份文件夹拷入；任何一步失败：已换的逐个还原（config 尚未触碰）
+    let app2 = app.clone();
+    let to_import2 = to_import.clone();
+    let lang2 = lang.clone();
+    let phase3 = tauri::async_runtime::spawn_blocking(move || {
+        let state2 = app2.state::<AppState>();
+        let _settings_guard = state2.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+        swap_selected_skins(&state2.skins_dir, &to_import2, &lang2)
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?;
+    if let Err(e) = phase3 {
+        if unloaded.is_empty() {
+            return Err(e);
+        }
+        let ids = unloaded.join(", ");
+        return Err(format!("{} {}", e, trf(&lang, Key::ImportPartialUnloaded, &[&ids])));
+    }
+
+    // Phase 4: config 只并入选中项（skin_settings 覆盖、loaded_skins 并集），
+    // 然后只加载「备份里处于加载态」的选中皮肤；全局项与分组不动。
+    // 布局方案例外按维护者实机定案并入（备份语义 = 用户全量数据）：按 id
+    // 并集、备份版胜——方案引用未导入皮肤的条目保留，应用时 skipped 机制
+    // 单列提示，不在这里剃掉。
+    let loaded_now: Vec<String> = {
+        let backup_cfg_text = fs::read_to_string(extracted.path().join("config").join("config.json"))
+            .map_err(|e| trf(&lang, Key::ImportBackupFailed, &[&e.to_string()]))?;
+        let mut backup_cfg: crate::skin::types::AppConfig =
+            serde_json::from_str(backup_cfg_text.trim_start_matches('\u{feff}'))
+                .map_err(|e| trf(&lang, Key::ImportBackupFailed, &[&e.to_string()]))?;
+        let backup_loaded: std::collections::HashSet<String> =
+            backup_cfg.loaded_skins.iter().cloned().collect();
+        let mut cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        for (id, _) in &to_import {
+            if let Some(rc) = backup_cfg.skin_settings.remove(id) {
+                cfg.skin_settings.insert(id.clone(), rc);
+            }
+            if backup_loaded.contains(id) && !cfg.loaded_skins.contains(id) {
+                cfg.loaded_skins.push(id.clone());
+            }
+        }
+        merge_backup_layouts(&mut cfg, backup_cfg.layouts);
+        // 选中皮肤的文件夹已在位， prune 只清真正的孤儿（防手改/半同步残留）
+        let disk_skins = loader::scan_skins_directory(&state.skins_dir);
+        config::prune_stale_entries(&mut cfg, &disk_skins);
+        if let Err(e) = config::save_config(&state.config_dir, &cfg) {
+            log::warn!("selective import: failed to save merged config: {}", e);
+        }
+        // 块尾表达式 = 备份里处于加载态的选中皮肤（下面逐个加载）
+        cfg.loaded_skins
+            .iter()
+            .filter(|id| selected.contains(id.as_str()))
+            .cloned()
+            .collect()
+    };
+    // 布局方案并入后托盘「布局方案」子菜单同步重建——必须在 config 守卫
+    // 落地后调用（rebuild 链路要取同一把锁，持锁 = 同线程死锁，同
+    // capture_layout 教训）
+    crate::tray::rebuild_tray_menu(&app, &lang);
+    // 并入的皮肤热键同步注册（注册表常驻——与全量导入/启动同一路径，
+    // 否则合并进来的热键要等重启才生效）
+    crate::hotkey::sync_skin_hotkeys_from_config(&app);
+    for id in loaded_now {
+        if let Err(e) = crate::commands::load_skin_impl(app.clone(), id.clone()).await {
+            log::warn!("selective import: failed to load skin '{}': {}", id, e);
+        }
+    }
+
+    let imported: Vec<String> = to_import.into_iter().map(|(id, _)| id).collect();
+    Ok((imported, skipped))
+}
+
+/// 选择性导入的布局并入：按 id 并集、备份版胜（与 loaded_skins 并集同款
+/// 哲学）。方案引用未导入皮肤的条目保留——应用时 skipped 机制单列提示，
+/// 不在导入侧剃掉（备份 = 用户全量数据，维护者实机定案）。
+fn merge_backup_layouts(
+    cfg: &mut crate::skin::types::AppConfig,
+    backup: Vec<crate::skin::types::LayoutPreset>,
+) {
+    for l in backup {
+        if let Some(slot) = cfg.layouts.iter_mut().find(|x| x.id == l.id) {
+            *slot = l;
+        } else {
+            cfg.layouts.push(l);
+        }
+    }
+}
+
+/// 按 (id, 备份内文件夹) 列表逐个替换皮肤文件夹：目标 = 本地同 id 文件夹
+/// （保用户既有命名），否则 skins_dir 下同备份名文件夹。让位备份用
+/// `.<folder>.old`（点前缀——皮肤扫描器跳过点开头目录，与安装暂存同约定，
+/// 不用 import-old 后缀：那会进 skins/ 被扫描成重复 id）。任一步失败把
+/// 已换的逐个还原并清理半成品；成功时清理全部让位备份。
+fn swap_selected_skins(
+    skins_dir: &Path,
+    to_import: &[(String, std::path::PathBuf)],
+    lang: &str,
+) -> Result<(), String> {
+    let fail = |e: io::Error| trf(lang, Key::ImportBackupFailed, &[&e.to_string()]);
+    let local = loader::scan_skins_directory(skins_dir);
+
+    // 预检（审查高危）：回退落位（本地无此 id → 用备份文件夹名）撞上既有
+    // 文件夹时直接报错——本地扫描没找到本 id，占用者必承载别的 id，让位
+    // 拷换会在成功路径把它的文件夹连 config 一起抹掉（未选中皮肤静默销毁）。
+    // 在任何改名/拷贝前整体拒绝，用户处理冲突后重导
+    for (id, backup_dir) in to_import {
+        if local.iter().any(|s| &s.id == id) {
+            continue; // 按 id 落位，无撞名问题
+        }
+        let fallback = skins_dir.join(
+            backup_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        if fallback.exists() {
+            let name = fallback
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            return Err(trf(lang, Key::ImportFolderConflict, &[&name]));
+        }
+    }
+
+    let mut swapped: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new(); // (target, aside)
+
+    for (id, backup_dir) in to_import {
+        let target = local
+            .iter()
+            .find(|s| &s.id == id)
+            .map(|s| s.directory.clone())
+            .unwrap_or_else(|| {
+                skins_dir.join(
+                    backup_dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                )
+            });
+        let folder_name = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let aside = target.with_file_name(format!(".{}.old", folder_name));
+        if aside.exists() {
+            let _ = fs::remove_dir_all(&aside);
+        }
+        if target.exists() {
+            if let Err(e) = fs::rename(&target, &aside) {
+                rollback_swapped(&swapped);
+                return Err(fail(e));
+            }
+        }
+        if let Err(e) = package::copy_dir_recursive(backup_dir, &target) {
+            let _ = fs::remove_dir_all(&target);
+            if aside.exists() {
+                let _ = fs::rename(&aside, &target);
+            }
+            rollback_swapped(&swapped);
+            return Err(fail(e));
+        }
+        swapped.push((target, aside));
+    }
+
+    for (_, aside) in &swapped {
+        let _ = fs::remove_dir_all(aside);
+    }
+    Ok(())
+}
+
+/// swap_selected_skins 的中途回滚：已就位的目标目录删除半成品并还原让位备份
+fn rollback_swapped(swapped: &[(std::path::PathBuf, std::path::PathBuf)]) {
+    for (target, aside) in swapped.iter().rev() {
+        let _ = fs::remove_dir_all(target);
+        if aside.exists() {
+            let _ = fs::rename(aside, target);
+        }
+    }
 }
 
 /// Extract to a temp dir with size/entry/zip-slip guards (mirrors
@@ -515,6 +787,8 @@ async fn rebuild_runtime(app: &AppHandle) {
     }
 
     crate::hotkey::reregister_from_config(app);
+    // 皮肤专属热键注册表随备份 config 一并重建（与全局热键同节奏）
+    crate::hotkey::sync_skin_hotkeys_from_config(app);
 
     for id in to_load {
         if let Err(e) = crate::commands::load_skin_impl(app.clone(), id.clone()).await {
@@ -790,5 +1064,163 @@ mod tests {
         assert!(!skins_dir.join("clock").exists());
         assert!(!import_old_sibling(&config_dir).exists());
         assert!(!import_old_sibling(&skins_dir).exists());
+    }
+
+    /// 实机报告核对：布局方案必须随全量备份导出/导入往返存活——备份语义是
+    /// 「用户全量数据」。覆盖 export → extract → validate → replace →
+    /// load_config 文件层全链路（rebuild_runtime 的内存换装一行直赋值，
+    /// 不另测）。回归锚点：布局面板数据 = config.json 的 layouts 字段，
+    /// 任一环节丢字段此测试即红。
+    #[test]
+    fn export_import_roundtrip_preserves_layouts() {
+        let root = TestDir::new("layouts-roundtrip");
+        let (config_dir, skins_dir) = make_data_dirs(&root.0);
+        // 与运行时落盘同路径：AppConfig 真实序列化一份带布局方案的 config
+        let mut cfg = crate::skin::types::AppConfig::default();
+        cfg.layouts.push(crate::skin::types::LayoutPreset {
+            id: "l-1".to_string(),
+            name: "工作桌".to_string(),
+            skins: std::collections::HashMap::from([(
+                "clock".to_string(),
+                crate::skin::types::LayoutSkin {
+                    x: Some(10),
+                    y: Some(20),
+                    width: 300,
+                    height: 200,
+                    visible: false,
+                },
+            )]),
+        });
+        config::save_config(&config_dir, &cfg).unwrap();
+
+        // 备份机导出
+        let dest = root.0.join("backup.zip");
+        export_backup(&config_dir, &skins_dir, &dest, "zh-CN").unwrap();
+
+        // 新机导入：解包校验 + 目录替换 + 重载 config
+        let live = TestDir::new("layouts-live");
+        let live_cfg = live.0.join("config");
+        let live_skins = live.0.join("skins");
+        fs::create_dir_all(&live_cfg).unwrap();
+        fs::create_dir_all(&live_skins).unwrap();
+        fs::write(live_cfg.join("config.json"), r#"{"version":2}"#).unwrap();
+
+        let extracted = extract_backup(&dest, "zh-CN").unwrap();
+        validate_backup(extracted.path(), "zh-CN").unwrap();
+        replace_data_dirs(&live_cfg, &live_skins, extracted.path(), "zh-CN").unwrap();
+
+        let restored = config::load_config(&live_cfg);
+        assert_eq!(restored.layouts.len(), 1, "布局方案必须随全量导入恢复");
+        assert_eq!(restored.layouts[0].name, "工作桌");
+        assert_eq!(
+            restored.layouts[0].skins.get("clock").map(|s| s.visible),
+            Some(false),
+            "方案内皮肤快照（含显隐）必须原样存活"
+        );
+    }
+
+    /// 选择性导入的布局并入语义：按 id 并集、备份版胜；本地独有方案保留；
+    /// 引用未导入皮肤的方案原样保留（应用侧 skipped 兜底，不在导入侧剃掉）。
+    #[test]
+    fn merge_backup_layouts_unions_by_id_and_backup_wins() {
+        let preset = |id: &str, name: &str| crate::skin::types::LayoutPreset {
+            id: id.to_string(),
+            name: name.to_string(),
+            skins: std::collections::HashMap::new(),
+        };
+        let mut cfg = crate::skin::types::AppConfig::default();
+        cfg.layouts.push(preset("l-1", "本地方案"));
+        cfg.layouts.push(preset("l-2", "将被覆盖"));
+        let backup = vec![preset("l-2", "备份版"), preset("l-3", "备份独有")];
+
+        merge_backup_layouts(&mut cfg, backup);
+
+        assert_eq!(cfg.layouts.len(), 3);
+        let name = |id: &str| cfg.layouts.iter().find(|l| l.id == id).map(|l| l.name.as_str());
+        assert_eq!(name("l-1"), Some("本地方案"), "本地独有方案保留");
+        assert_eq!(name("l-2"), Some("备份版"), "同 id 备份版胜");
+        assert_eq!(name("l-3"), Some("备份独有"), "备份独有方案并入");
+    }
+
+    /// 选择性合并导入的目录替换：同 id 时替换本地既有文件夹（保命名），
+    /// 新皮肤用备份文件夹名；让位备份（.<folder>.old，扫描器安全）成功即清
+    #[test]
+    fn swap_selected_skins_replaces_by_id_and_adds_new() {
+        let root = TestDir::new("sel-swap");
+        let skins_dir = root.0.join("skins");
+        // 本地：文件夹名与 id 不同名的既有皮肤（替换时必须保这个命名）
+        let local_dir = skins_dir.join("clock-old");
+        fs::create_dir_all(&local_dir).unwrap();
+        fs::write(local_dir.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(local_dir.join("index.html"), "<html>local</html>").unwrap();
+        fs::write(local_dir.join("local.txt"), "keep-out").unwrap();
+        // 备份内容：同 id（clock）+ 一个新皮肤（dock）
+        let pkg = root.0.join("pkg");
+        let pkg_clock = pkg.join("clock-pkg");
+        fs::create_dir_all(&pkg_clock).unwrap();
+        fs::write(pkg_clock.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(pkg_clock.join("index.html"), "<html>pkg</html>").unwrap();
+        let pkg_dock = pkg.join("dock");
+        fs::create_dir_all(&pkg_dock).unwrap();
+        fs::write(pkg_dock.join("skin.json"), r#"{"id":"dock","name":"Dock"}"#).unwrap();
+        fs::write(pkg_dock.join("index.html"), "<html></html>").unwrap();
+
+        swap_selected_skins(
+            &skins_dir,
+            &[("clock".to_string(), pkg_clock), ("dock".to_string(), pkg_dock)],
+            "zh-CN",
+        )
+        .unwrap();
+
+        // clock：本地文件夹名保留、内容换为备份版、本地旧文件被替掉、暂存清空
+        assert_eq!(fs::read_to_string(local_dir.join("index.html")).unwrap(), "<html>pkg</html>");
+        assert!(!local_dir.join("local.txt").exists());
+        assert!(!skins_dir.join(".clock-old.old").exists());
+        // dock：备份文件夹名落位
+        assert!(skins_dir.join("dock").join("skin.json").is_file());
+        assert!(!skins_dir.join(".dock.old").exists());
+    }
+
+    /// 拷贝失败时：已换的逐个还原、半成品清理（备份来源不存在即触发）
+    #[test]
+    fn swap_selected_skins_rolls_back_on_copy_failure() {
+        let root = TestDir::new("sel-swap-fail");
+        let skins_dir = root.0.join("skins");
+        let local_dir = skins_dir.join("clock");
+        fs::create_dir_all(&local_dir).unwrap();
+        fs::write(local_dir.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(local_dir.join("index.html"), "<html>local</html>").unwrap();
+        let missing = root.0.join("no-such-dir");
+
+        assert!(swap_selected_skins(&skins_dir, &[("clock".to_string(), missing)], "zh-CN").is_err());
+        // 原皮肤原样恢复，暂存无残留
+        assert_eq!(fs::read_to_string(local_dir.join("index.html")).unwrap(), "<html>local</html>");
+        assert!(!skins_dir.join(".clock.old").exists());
+    }
+
+    /// 审查高危：回退落位撞上承载不同 id 的既有文件夹——预检整体拒绝，
+    /// 且被占文件夹分毫不动（让位拷换会把无关皮肤静默销毁）
+    #[test]
+    fn swap_selected_skins_rejects_folder_occupied_by_other_id() {
+        let root = TestDir::new("sel-swap-conflict");
+        let skins_dir = root.0.join("skins");
+        // 本地：文件夹 clock 承载 id=my-clock（文件夹名 ≠ id 的直装皮肤）
+        let local_dir = skins_dir.join("clock");
+        fs::create_dir_all(&local_dir).unwrap();
+        fs::write(local_dir.join("skin.json"), r#"{"id":"my-clock","name":"My Clock"}"#).unwrap();
+        fs::write(local_dir.join("index.html"), "<html>mine</html>").unwrap();
+        // 备份：id=clock、文件夹 clock（本地无 id=clock → 走回退落位 skins/clock）
+        let pkg_clock = root.0.join("pkg").join("clock");
+        fs::create_dir_all(&pkg_clock).unwrap();
+        fs::write(pkg_clock.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(pkg_clock.join("index.html"), "<html>pkg</html>").unwrap();
+
+        let result = swap_selected_skins(&skins_dir, &[("clock".to_string(), pkg_clock)], "zh-CN");
+        assert!(result.is_err(), "撞名必须报错");
+        // 被占文件夹原样保留（内容、结构均未动）
+        assert_eq!(fs::read_to_string(local_dir.join("index.html")).unwrap(), "<html>mine</html>");
+        let manifest = fs::read_to_string(local_dir.join("skin.json")).unwrap();
+        assert!(manifest.contains("my-clock"), "占用者 manifest 不得被改写");
+        assert!(!skins_dir.join(".clock.old").exists(), "不得产生让位残留");
     }
 }

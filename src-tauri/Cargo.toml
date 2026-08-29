@@ -1,11 +1,15 @@
 [package]
 name = "driftlet"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 
 [lib]
 name = "driftlet_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
+# 纯 Windows 桌面应用：模板自带的 staticlib/cdylib 是给 iOS/Android 用的，
+# 本项目不做移动端。只留 lib（rlib——main.rs 与测试用）：cdylib 每次构建
+# 都会让 MSVC 链接器打印「正在创建库 .dll.lib/.exp」，新版 rustc 的
+# linker_messages lint 把它报成 warning（噪音，且多一步无用链接）。
+crate-type = ["lib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

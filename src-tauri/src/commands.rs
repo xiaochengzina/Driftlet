@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::AppState;
 use crate::backup;
 use crate::i18n::{tr, trf, Key};
-use crate::skin::types::{SkinInfo, SkinDetail, SkinRuntimeConfig, AppConfig};
+use crate::skin::types::{SkinInfo, SkinDetail, SkinRuntimeConfig, SkinGroup, LayoutPreset, LayoutSkin, AppConfig};
 use crate::skin::loader;
 use crate::skin::config;
 use crate::skin::package;
@@ -179,6 +179,25 @@ pub fn get_skin_detail(window: tauri::WebviewWindow, app: AppHandle, skin_id: St
     let overrides = settings::load_skin_settings(&skin.directory);
     let settings_values = loader::effective_settings(&skin.manifest, Some(&overrides));
 
+    // 副本来源三元：原串 + 源显示名 + 源新版本（≠ 记录版本才给 = 可同步）
+    let (origin_name, origin_update) = match skin.origin.as_deref().and_then(|o| o.split_once('@')) {
+        Some((origin_id, origin_ver)) => {
+            let source = skins.iter().find(|s| s.id == origin_id);
+            let name = source.map(|s| {
+                if lang == "en" && s.manifest.bilingual {
+                    s.manifest.name_en.clone().unwrap_or_else(|| s.manifest.name.clone())
+                } else {
+                    s.manifest.name.clone()
+                }
+            });
+            let update = source
+                .and_then(|s| s.manifest.version.clone())
+                .filter(|v| v != origin_ver);
+            (name, update)
+        }
+        None => (None, None),
+    };
+
     Ok(SkinDetail {
         id: skin.id.clone(),
         name: skin.manifest.name.clone(),
@@ -195,6 +214,9 @@ pub fn get_skin_detail(window: tauri::WebviewWindow, app: AppHandle, skin_id: St
         config,
         settings_schema: skin.manifest.settings.clone(),
         settings_values,
+        origin: skin.origin.clone(),
+        origin_name,
+        origin_update,
     })
 }
 
@@ -1084,10 +1106,13 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
         }
         let app2 = app.clone();
         let lang2 = lang.clone();
+        // 菜单闭包 move 会吃掉捕获的窗口句柄——克隆一个给它，
+        // 原句柄留给 SKIN_MENU_HIDE 臂隐藏当前窗口
+        let menu_window = window.clone();
         let wait = tauri::async_runtime::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             app2.run_on_main_thread(move || {
-                let _ = tx.send(factory::track_skin_popup_menu(&window, &lang2));
+                let _ = tx.send(factory::track_skin_popup_menu(&menu_window, &lang2));
             })
             .map_err(|e| e.to_string())?;
             rx.recv().map_err(|e| e.to_string())
@@ -1120,6 +1145,15 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
                     log::error!("skin menu reload failed: {}", e);
                 }
             });
+        }
+        factory::SKIN_MENU_HIDE => {
+            // 隐藏当前皮肤窗口：与 set_skin_visibility(visible=false) 同一
+            // 窗口动作 + 同一同步漏斗（托盘勾选与管理器徽标按真实窗口
+            // 状态刷新）。不取生命周期锁——不动窗口存亡，只改可见性
+            if let Err(e) = window.hide() {
+                log::warn!("skin menu hide failed: {}", e);
+            }
+            crate::hotkey::sync_tray_toggle_item(&app);
         }
         factory::SKIN_MENU_UNLOAD => {
             // Fire-and-forget — same reason as SKIN_MENU_RELOAD.
@@ -1576,14 +1610,37 @@ pub async fn inspect_backup(window: tauri::WebviewWindow, app: AppHandle) -> Res
 }
 
 /// 导入布局备份第二步：执行导入（路径来自 inspect_backup 的审查结果——
-/// 前端审查确认框已展示包内皮肤与权限声明）。校验（体积/条目/zip-slip/
-/// 必须含 config/config.json）→ 卸载全部皮肤 → 暂存替换 config/ 与
-/// skins/（失败整体回滚）→ 重建运行时状态并按备份加载皮肤。
+/// 前端审查确认框已展示包内皮肤与权限声明）。skin_ids 为空 = 全量替换
+/// （校验 → 卸载全部 → 暂存替换 config/ 与 skins/（失败整体回滚）→ 重建
+/// 运行时）；skin_ids 非空 = 选择性合并导入（只替换选中皮肤 + config 只并
+/// 入选中项与布局方案，其余皮肤与全局设置/分组不动——见
+/// backup::import_backup_selective）。
 #[tauri::command]
-pub async fn import_config(window: tauri::WebviewWindow, app: AppHandle, path: String) -> Result<bool, String> {
+pub async fn import_config(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    path: String,
+    skin_ids: Option<Vec<String>>,
+) -> Result<ImportOutcome, String> {
     require_manager(&window)?;
-    backup::import_backup(app, std::path::Path::new(&path)).await?;
-    Ok(true)
+    match skin_ids {
+        Some(ids) if !ids.is_empty() => {
+            let (imported, skipped) = backup::import_backup_selective(app, std::path::Path::new(&path), ids).await?;
+            Ok(ImportOutcome { imported, skipped })
+        }
+        _ => {
+            backup::import_backup(app, std::path::Path::new(&path)).await?;
+            Ok(ImportOutcome { imported: Vec::new(), skipped: Vec::new() })
+        }
+    }
+}
+
+/// import_config 的返回：选择性导入的实际结果（全量导入时两字段为空——
+/// 全量语义是整体替换，无需逐皮反馈）
+#[derive(serde::Serialize)]
+pub struct ImportOutcome {
+    pub imported: Vec<String>,
+    pub skipped: Vec<String>,
 }
 
 /// 检查皮肤包：不是合法皮肤包时返回错误提示；
@@ -1702,6 +1759,231 @@ pub async fn remove_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: 
         app_config.skin_settings.remove(&skin_id);
         config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
+    Ok(())
+}
+
+/// 皮肤多开（方案 A：完整副本）：克隆皮肤文件夹为新 id + 新名称的独立
+/// 皮肤——之后它与「又装了一个皮肤」无法区分，设置/窗口配置/预览各自
+/// 独立。副本 skin.json 写入 x-driftlet-origin 记录来源（供未来「从源
+/// 同步副本」；SkinManifest 不拒绝未知字段，旧宿主读到安全）。
+#[tauri::command]
+pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<SkinInfo, String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    // 与安装/删除同一把锁：目录复制期间并发安装/删除会互踩目录
+    let _install_guard = state.install_lock.lock().await;
+    // 复制运行中的文件夹会撞预览图/缓存写入竞态——与删除同口径，先卸载
+    if state.registry.is_loaded(&skin_id) {
+        return Err(tr(&lang, Key::UnloadBeforeDuplicate).to_string());
+    }
+    // 复制期间持 settings_lock：与 settings.json 写入互斥（同 remove_skin）
+    let _settings_guard = state.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+
+    let skins = loader::scan_skins_directory(&state.skins_dir);
+    let source = skins
+        .iter()
+        .find(|s| s.id == skin_id)
+        .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
+    let source_dir = source.directory.clone();
+    let source_name = source.manifest.name.clone();
+    let source_name_en = source.manifest.name_en.clone();
+    let source_version = source.manifest.version.clone();
+
+    // 新 id：<id>-copy，占用则 -copy-2 / -copy-3…；基名截断保 id ≤ 64
+    //（validate_skin_id 上限；id 是 ASCII，按字节截断安全）
+    let mut n = 1u32;
+    let new_id = loop {
+        let suffix = if n == 1 { "-copy".to_string() } else { format!("-copy-{}", n) };
+        let keep = 64usize.saturating_sub(suffix.len()).min(skin_id.len());
+        let candidate = format!("{}{}", &skin_id[..keep], suffix);
+        if !skins.iter().any(|s| s.id == candidate) {
+            break candidate;
+        }
+        n += 1;
+    };
+    // 名称与 id 序号同序；名称本就可重复，不强制唯一
+    let copy_name = if n == 1 { format!("{} 副本", source_name) } else { format!("{} 副本 {}", source_name, n) };
+    let copy_name_en = source_name_en.map(|ne| if n == 1 { format!("{} Copy", ne) } else { format!("{} Copy {}", ne, n) });
+
+    let new_dir = state.skins_dir.join(&new_id);
+    // 拷贝失败清半成品（rewrite 失败路径有清理，copy 失败同样要有——审查 B 面发现）
+    package::copy_dir_recursive(&source_dir, &new_dir).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&new_dir);
+        trf(&lang, Key::DuplicateSkinFailed, &[&e.to_string()])
+    })?;
+
+    // 改写副本 skin.json：id / name(_en) / x-driftlet-origin，其余逐字保留
+    {
+        let rewrite = || -> Result<(), String> {
+            let manifest_path = new_dir.join("skin.json");
+            let raw = std::fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
+            let mut json: serde_json::Value =
+                serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+            json["id"] = serde_json::Value::String(new_id.clone());
+            json["name"] = serde_json::Value::String(copy_name.clone());
+            if let Some(ne) = &copy_name_en {
+                json["name_en"] = serde_json::Value::String(ne.clone());
+            }
+            let origin = match &source_version {
+                Some(v) => format!("{}@{}", skin_id, v),
+                None => skin_id.clone(),
+            };
+            json["x-driftlet-origin"] = serde_json::Value::String(origin);
+            let text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+            std::fs::write(&manifest_path, text).map_err(|e| e.to_string())?;
+            Ok(())
+        };
+        // 改写失败不留半成品目录（皮肤列表里出现一个坏皮肤比没有更糟）
+        if let Err(e) = rewrite() {
+            let _ = std::fs::remove_dir_all(&new_dir);
+            return Err(trf(&lang, Key::DuplicateSkinFailed, &[&e]));
+        }
+    }
+
+    // 窗口配置深拷贝给副本（继承当前调整），位置偏移 +32——两窗完全重叠
+    // 时用户会以为「没开出来」。自启清单不带入：副本默认不加载；专属热键
+    // 不带入：同一组合只能注册一处，克隆会让源/副本在重启后按 HashMap
+    // 迭代序不确定归属（审查发现）——副本热键清空，需要时用户自配
+    {
+        let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(dup) = app_config.skin_settings.get(&skin_id).cloned().map(|mut c| {
+            c.x = c.x.map(|x| x + 32);
+            c.y = c.y.map(|y| y + 32);
+            c.hotkey = String::new();
+            c
+        }) {
+            app_config.skin_settings.insert(new_id.clone(), dup);
+        }
+        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+    }
+
+    // 重扫取 SkinInfo 返回（前端选中副本/提示用）
+    let skins2 = loader::scan_skins_directory(&state.skins_dir);
+    let new_skin = skins2
+        .iter()
+        .find(|s| s.id == new_id)
+        .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[new_id.as_str()]))?;
+    let preview = loader::find_preview_image(&new_skin.directory);
+    Ok(SkinInfo {
+        id: new_skin.id.clone(),
+        name: new_skin.manifest.name.clone(),
+        name_en: new_skin.manifest.name_en.clone(),
+        author: new_skin.manifest.author.clone(),
+        version: new_skin.manifest.version.clone(),
+        description: new_skin.manifest.description.clone(),
+        description_en: new_skin.manifest.description_en.clone(),
+        bilingual: new_skin.manifest.bilingual,
+        loaded: false,
+        hidden: false,
+        preview,
+    })
+}
+
+/// 从源同步副本（皮肤多开的下半章）：源皮肤更新后，用源文件夹重放副本
+/// 内容——副本的 settings.json（设置值）与窗口配置（skin_settings[副本id]）
+/// 全保留；副本 manifest 只保留 id/name/name_en（副本身份），其余跟随源，
+/// `x-driftlet-origin` 刷新为源当前版本。返回源当前版本号（前端展示用）。
+#[tauri::command]
+pub async fn sync_skin_copy(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<String, String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    // 与安装/删除/创建副本同一把锁：目录替换期间并发安装会互踩
+    let _install_guard = state.install_lock.lock().await;
+    // 运行中拒绝：替换运行中文件夹会撞预览图/缓存写入（与删除/副本同口径）
+    if state.registry.is_loaded(&skin_id) {
+        return Err(tr(&lang, Key::UnloadBeforeDuplicate).to_string());
+    }
+    let _settings_guard = state.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+
+    let skins = loader::scan_skins_directory(&state.skins_dir);
+    let copy = skins
+        .iter()
+        .find(|s| s.id == skin_id)
+        .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
+    let origin = copy
+        .origin
+        .clone()
+        .ok_or_else(|| trf(&lang, Key::SyncCopyFailed, &["不是副本皮肤（无 x-driftlet-origin 标记）"]))?;
+    let (origin_id, _) = origin.split_once('@').unwrap_or((origin.as_str(), ""));
+    let source = skins
+        .iter()
+        .find(|s| s.id == origin_id)
+        .ok_or_else(|| tr(&lang, Key::SourceSkinMissing).to_string())?;
+    let new_version = source.manifest.version.clone().unwrap_or_default();
+
+    replay_source_into_copy(copy, source)
+        .map_err(|e| trf(&lang, Key::SyncCopyFailed, &[&e]))?;
+    Ok(new_version)
+}
+
+/// 三段式重放（复用安装同款让位备份语义）：副本文件夹挪为 `.<folder>.old`
+/// → 源文件夹拷入 → 恢复 settings.json → 重写副本 manifest（保留副本
+/// 身份 id/name/name_en + 刷新 origin 版本）→ 清理让位备份；任一步失败
+/// 还原为同步前状态。错误文本经调用方包 Key::SyncCopyFailed 本地化。
+fn replay_source_into_copy(
+    copy: &crate::skin::types::Skin,
+    source: &crate::skin::types::Skin,
+) -> Result<(), String> {
+    let copy_dir = &copy.directory;
+    let folder_name = copy_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let aside = copy_dir.with_file_name(format!(".{}.old", folder_name));
+    if aside.exists() {
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+
+    // 同步前取出要保留的东西：设置值原文 + 副本身份三件套
+    let old_settings = crate::skin::settings::load_skin_settings(copy_dir);
+    let copy_id = copy.id.clone();
+    let copy_name = copy.manifest.name.clone();
+    let copy_name_en = copy.manifest.name_en.clone();
+
+    std::fs::rename(copy_dir, &aside).map_err(|e| e.to_string())?;
+    let result = (|| -> Result<(), String> {
+        package::copy_dir_recursive(&source.directory, copy_dir).map_err(|e| e.to_string())?;
+        // 设置值回写（源的 schema 可能已变：新增项用默认、删除项失效——
+        // 与安装更新的保留语义同款，effective_settings 合并时兜住）
+        if !old_settings.is_empty() {
+            crate::skin::settings::save_skin_settings(copy_dir, &old_settings).map_err(|e| e.to_string())?;
+        }
+        // manifest 重写：以源的新文件为基础，只换回副本身份与来源标记
+        let manifest_path = copy_dir.join("skin.json");
+        let raw = std::fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
+        let mut json: serde_json::Value =
+            serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+        json["id"] = serde_json::Value::String(copy_id.clone());
+        json["name"] = serde_json::Value::String(copy_name.clone());
+        match &copy_name_en {
+            Some(ne) => {
+                json["name_en"] = serde_json::Value::String(ne.clone());
+            }
+            None => {
+                // 副本创建时无英文名：跟随源（源若新增 name_en 自然继承）
+                if json.get("name_en").is_some() && source.manifest.name_en.is_none() {
+                    json.as_object_mut().unwrap().remove("name_en");
+                }
+            }
+        }
+        let origin_marker = match &source.manifest.version {
+            Some(v) => format!("{}@{}", source.id, v),
+            None => source.id.clone(),
+        };
+        json["x-driftlet-origin"] = serde_json::Value::String(origin_marker);
+        let text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+        std::fs::write(&manifest_path, text).map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(copy_dir);
+        let _ = std::fs::rename(&aside, copy_dir);
+        return Err(e);
+    }
+    let _ = std::fs::remove_dir_all(&aside);
     Ok(())
 }
 
@@ -1835,7 +2117,12 @@ pub fn set_hot_reload(window: tauri::WebviewWindow, app: AppHandle, on: bool) ->
     state.hot_reload_enabled.store(on, std::sync::atomic::Ordering::Relaxed);
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.hot_reload = on;
-    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+    // 落盘失败回滚运行时标志（与 set_skin_zoom 的回滚同纪律——否则内存
+    // =on/磁盘=off 分叉到会话结束，审查发现）
+    config::save_config(&state.config_dir, &config).map_err(|e| {
+        state.hot_reload_enabled.store(!on, std::sync::atomic::Ordering::Relaxed);
+        trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()])
+    })
 }
 
 // ─── Update Check ───
@@ -1949,6 +2236,300 @@ pub fn set_hotkey(window: tauri::WebviewWindow, app: AppHandle, hotkey: String) 
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.hotkey_toggle_skins = hotkey.trim().to_string();
     config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+}
+
+/// 设置某皮肤的专属显隐热键（"" = 清除）。先注册后落盘（与 set_hotkey
+/// 同款纪律：校验/冲突/OS 注册失败一律不写配置）；注册表常驻——皮肤
+/// 未加载时按下静默无效果。
+#[tauri::command]
+pub fn set_skin_hotkey(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, hotkey: String) -> Result<(), String> {
+    require_manager(&window)?;
+    crate::hotkey::set_skin_hotkey(&app, &skin_id, hotkey.trim())?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    let cfg = config
+        .skin_settings
+        .entry(skin_id)
+        .or_insert_with(SkinRuntimeConfig::default);
+    cfg.hotkey = hotkey.trim().to_string();
+    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+}
+
+/// 管理器显隐单个皮肤（编辑器「隐藏/显示皮肤」按钮与皮肤组批量操作
+/// 共用）。与皮肤侧 skin_hide/skin_show 同一窗口动作、同一同步漏斗
+///（hotkey::sync_tray_toggle_item：托盘勾选与管理器列表/编辑器的
+/// 「已隐藏」徽标按真实窗口状态刷新）；只显示不抢焦点。
+#[tauri::command]
+pub fn set_skin_visibility(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, visible: bool) -> Result<(), String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let win = state
+        .registry
+        .get(&skin_id)
+        .ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
+    if visible {
+        win.show().map_err(|e| e.to_string())?;
+    } else {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    crate::hotkey::sync_tray_toggle_item(&app);
+    Ok(())
+}
+
+/// 皮肤分组整体写（侧栏分组管理）：前端持有完整状态，任何组操作后就地
+/// 整体回写。白名单归一（config.json 也可手改）：组名 trim 后 1–64 字符、
+/// 组数 ≤64、组 id 去重（保首个）；归属表剔除空键与指向不存在组的条目
+///（皮肤回落「未分组」语义）。
+#[tauri::command]
+pub fn set_skin_groups(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    groups: Vec<SkinGroup>,
+    map: std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+
+    let mut clean_groups: Vec<SkinGroup> = Vec::new();
+    for mut g in groups {
+        g.name = g.name.trim().to_string();
+        if g.id.is_empty() || g.id.len() > 64 || g.name.is_empty() || g.name.chars().count() > 64 {
+            continue;
+        }
+        if clean_groups.iter().any(|x| x.id == g.id) {
+            continue;
+        }
+        clean_groups.push(g);
+        if clean_groups.len() >= 64 {
+            break;
+        }
+    }
+    let clean_map: std::collections::HashMap<String, String> = map
+        .into_iter()
+        .filter(|(sid, gid)| {
+            !sid.is_empty() && sid.len() <= 64 && clean_groups.iter().any(|g| &g.id == gid)
+        })
+        .collect();
+
+    let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    config.skin_groups = clean_groups;
+    config.skin_group_map = clean_map;
+    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+}
+
+/// 布局方案：把当前桌面状态（已加载集 + 各皮肤几何/显隐）捕获为命名方案。
+/// overwrite_id 给定时覆盖既有方案（保 id 与数组位序——面板「覆盖」操作），
+/// 否则新增（id = l-<毫秒时间戳>）。空加载集合法（「清空桌面」方案）。
+/// 返回捕获到的方案本体（面板展示/回写用）。
+#[tauri::command]
+pub fn capture_layout(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    name: String,
+    overwrite_id: Option<String>,
+) -> Result<LayoutPreset, String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let name = name.trim().to_string();
+    if name.is_empty() || name.chars().count() > 64 {
+        return Err(tr(&lang, Key::LayoutNameInvalid).to_string());
+    }
+
+    let preset = {
+        let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut skins = std::collections::HashMap::new();
+        for id in state.registry.loaded_ids() {
+            let visible = state
+                .registry
+                .get(&id)
+                .map(|w| w.is_visible().unwrap_or(true))
+                .unwrap_or(true);
+            let rc = cfg.skin_settings.get(&id).cloned().unwrap_or_default();
+            skins.insert(
+                id,
+                LayoutSkin {
+                    x: rc.x,
+                    y: rc.y,
+                    width: rc.width,
+                    height: rc.height,
+                    visible,
+                },
+            );
+        }
+        let id = overwrite_id
+            .clone()
+            .unwrap_or_else(|| format!("l-{}", now_millis()));
+        LayoutPreset { id, name, skins }
+    };
+
+    {
+        let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        match &overwrite_id {
+            Some(oid) => {
+                let Some(slot) = config.layouts.iter_mut().find(|l| &l.id == oid) else {
+                    return Err(trf(&lang, Key::LayoutNotFound, &[oid]));
+                };
+                *slot = preset.clone();
+            }
+            None => config.layouts.push(preset.clone()),
+        }
+        config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+    }
+    // 布局清单变了：托盘「布局方案」子菜单同步重建。守卫必须先放——
+    // rebuild 链路 build_layouts_submenu 要再取 config 锁，std::Mutex
+    // 不可重入，持锁调用 = 同线程死锁（卡死整个后端 IPC——本轮事故）
+    crate::tray::rebuild_tray_menu(&app, &lang);
+    Ok(preset)
+}
+
+/// 应用布局方案：卸载不在方案中的已加载皮肤；方案内皮肤写回几何后
+/// 未加载的按配置建窗、已加载的原地更新位置与尺寸（按有效 zoom 折算），
+/// 最后按快照显隐（hide/show）。返回 LayoutApplyOutcome（应用数 + 方案里
+/// 但磁盘已不存在的皮肤 id）。
+#[tauri::command]
+pub async fn apply_layout(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    layout_id: String,
+) -> Result<LayoutApplyOutcome, String> {
+    require_manager(&window)?;
+    apply_layout_impl(&app, &layout_id).await
+}
+
+/// apply_layout 的进程内实现（托盘「布局方案」子菜单无管理器窗口，
+/// 与命令同一实现）
+pub(crate) async fn apply_layout_impl(app: &AppHandle, layout_id: &str) -> Result<LayoutApplyOutcome, String> {
+    let layout = {
+        let state = app.state::<AppState>();
+        let lang = state.lang();
+        let found = {
+            let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+            cfg.layouts.iter().find(|l| l.id == layout_id).cloned()
+        };
+        found.ok_or_else(|| trf(&lang, Key::LayoutNotFound, &[layout_id]))?
+    };
+
+    // 批量 load/unload：与皮肤侧/管理器其他生命周期操作同锁串行
+    let state = app.state::<AppState>();
+    let _guards = lifecycle_guards(&state).await;
+
+    let target: std::collections::HashSet<&str> =
+        layout.skins.keys().map(|s| s.as_str()).collect();
+    for id in state.registry.loaded_ids() {
+        if !target.contains(id.as_str()) {
+            // 卸载失败不中止整体应用（该皮肤留在桌面，记日志继续）
+            if let Err(e) = unload_skin_impl(app.clone(), id.clone()).await {
+                log::warn!("apply_layout: failed to unload '{}': {}", id, e);
+            }
+        }
+    }
+
+    let disk_skins = loader::scan_skins_directory(&state.skins_dir);
+    let mut applied = 0u32;
+    let mut skipped: Vec<String> = Vec::new();
+    for (id, snap) in &layout.skins {
+        let Some(disk) = disk_skins.iter().find(|s| &s.id == id) else {
+            skipped.push(id.clone());
+            continue;
+        };
+        // 写回几何（布局定义即 config 几何）
+        let zoom = {
+            let mut cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = runtime_entry_or_manifest(&state, &mut cfg, id);
+            entry.x = snap.x;
+            entry.y = snap.y;
+            entry.width = snap.width;
+            entry.height = snap.height;
+            clamp_zoom(entry.zoom.unwrap_or(disk.manifest.window.zoom))
+        };
+
+        let was_loaded = state.registry.is_loaded(id);
+        if !was_loaded {
+            // 未加载：load 按写回的 config 建窗（位置/尺寸自然生效）
+            load_skin_impl(app.clone(), id.clone()).await?;
+        } else {
+            // 已加载：原地应用位置与尺寸（尺寸按有效 zoom 折算实际值——
+            // set_size_impl 的入参是「当前实际尺寸」，会反算回基础尺寸）
+            set_skin_position_impl(&app, id, snap.x.unwrap_or(100), snap.y.unwrap_or(100))?;
+            set_skin_size_impl(
+                &app,
+                id,
+                ((snap.width as f64) * zoom).round() as u32,
+                ((snap.height as f64) * zoom).round() as u32,
+            )?;
+        }
+        // 显隐按快照（load 默认 show；已存在的隐藏窗按快照恢复）
+        if let Some(win) = state.registry.get(id) {
+            let visible = win.is_visible().unwrap_or(true);
+            if snap.visible && !visible {
+                let _ = win.show();
+            }
+            if !snap.visible && visible {
+                let _ = win.hide();
+            }
+        }
+        applied += 1;
+    }
+
+    {
+        let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        config::save_config(&state.config_dir, &cfg).map_err(|e| trf(&state.lang(), Key::ConfigSaveFailed, &[&e.to_string()]))?;
+    }
+    // 托盘勾选/子菜单与管理器徽标按真实窗口状态刷新（显隐变化的统一漏斗）
+    crate::hotkey::sync_tray_toggle_item(&app);
+    Ok(LayoutApplyOutcome { applied, skipped })
+}
+
+/// 布局方案整体写（面板的重命名/删除/排序统一入口——与 set_skin_groups
+/// 同款「前端持有完整状态、操作后整体回写」哲学）。白名单归一：
+/// 名称 trim 后 1–64 字符、id 去重（保首个）、总数 ≤64。
+#[tauri::command]
+pub fn set_layouts(window: tauri::WebviewWindow, app: AppHandle, layouts: Vec<LayoutPreset>) -> Result<(), String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let mut clean: Vec<LayoutPreset> = Vec::new();
+    for mut l in layouts {
+        l.name = l.name.trim().to_string();
+        if l.id.is_empty() || l.id.len() > 64 || l.name.is_empty() || l.name.chars().count() > 64 {
+            continue;
+        }
+        if clean.iter().any(|x| x.id == l.id) {
+            continue;
+        }
+        clean.push(l);
+        if clean.len() >= 64 {
+            break;
+        }
+    }
+    {
+        let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        config.layouts = clean;
+        config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+    }
+    // 同 capture_layout：守卫先放再重建托盘菜单（std::Mutex 不可重入）
+    crate::tray::rebuild_tray_menu(&app, &lang);
+    Ok(())
+}
+
+/// apply_layout 的返回：applied = 成功应用的皮肤数；skipped = 方案里但
+/// 磁盘已不存在的皮肤 id（前端提示「这些皮肤已被删除」）
+#[derive(serde::Serialize)]
+pub struct LayoutApplyOutcome {
+    pub applied: u32,
+    pub skipped: Vec<String>,
+}
+
+/// 毫秒时间戳（布局 id 生成用；与 Date.now() 同语义，避免引入 chrono）
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Startup hotkey-registration failure, if any (the configured combo).
@@ -2428,5 +3009,78 @@ mod tests {
         assert_eq!(v[0].as_str().unwrap().chars().count(), 200);
         // non-string item → error
         assert!(validate_custom_setting_zh(&d, &serde_json::json!([1])).is_err());
+    }
+
+    /// 从源同步副本的三段式重放：内容换源、身份与设置值保留、origin 刷新、
+    /// 让位备份清零
+    #[test]
+    fn replay_source_into_copy_replays_and_preserves() {
+        let root = std::env::temp_dir().join(format!(
+            "driftlet-replay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let skins_dir = root.join("skins");
+        let copy_dir = skins_dir.join("flip-clock-copy");
+        let source_dir = skins_dir.join("flip-clock");
+        std::fs::create_dir_all(&copy_dir).unwrap();
+        std::fs::create_dir_all(&source_dir).unwrap();
+
+        // 副本：自定义名 + 设置值 + 旧 origin 标记
+        std::fs::write(
+            copy_dir.join("skin.json"),
+            r#"{"id":"flip-clock-copy","name":"我的时钟","name_en":"My Clock","version":"1.0.0","x-driftlet-origin":"flip-clock@1.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(copy_dir.join("index.html"), "<html>copy-old</html>").unwrap();
+        std::fs::write(copy_dir.join("settings.json"), r#"{"city":"tokyo"}"#).unwrap();
+        // 源：新版内容 + 新文件 + 新版本号
+        std::fs::write(
+            source_dir.join("skin.json"),
+            r#"{"id":"flip-clock","name":"翻页时钟","version":"2.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(source_dir.join("index.html"), "<html>source-new</html>").unwrap();
+        std::fs::write(source_dir.join("new.js"), "// new").unwrap();
+
+        let mk_skin = |dir: &std::path::Path, id: &str| {
+            let manifest = loader::load_skin_manifest(dir).unwrap();
+            crate::skin::types::Skin {
+                id: id.to_string(),
+                origin: if id == "flip-clock-copy" {
+                    Some("flip-clock@1.0.0".to_string())
+                } else {
+                    None
+                },
+                manifest,
+                directory: dir.to_path_buf(),
+            }
+        };
+        let copy = mk_skin(&copy_dir, "flip-clock-copy");
+        let source = mk_skin(&source_dir, "flip-clock");
+
+        replay_source_into_copy(&copy, &source).unwrap();
+
+        // 内容换源：新文件进来、旧内容被替换
+        assert_eq!(std::fs::read_to_string(copy_dir.join("index.html")).unwrap(), "<html>source-new</html>");
+        assert!(copy_dir.join("new.js").is_file());
+        // 设置值保留
+        let settings = crate::skin::settings::load_skin_settings(&copy_dir);
+        assert_eq!(settings["city"], "tokyo");
+        // 身份保留 + origin 刷新
+        let text = std::fs::read_to_string(copy_dir.join("skin.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["id"], "flip-clock-copy");
+        assert_eq!(json["name"], "我的时钟");
+        assert_eq!(json["name_en"], "My Clock");
+        assert_eq!(json["version"], "2.0.0");
+        assert_eq!(json["x-driftlet-origin"], "flip-clock@2.0.0");
+        // 让位备份清零（点开头目录）
+        assert!(!skins_dir.join(".flip-clock-copy.old").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

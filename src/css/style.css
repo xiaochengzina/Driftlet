@@ -286,11 +286,24 @@ img {
   font-size: 10.5px;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  /* 实机反馈：间距略紧，放宽一档 */
+  letter-spacing: 0.3px;
 }
 
 .brand-version:empty,
 .sidebar-count:empty {
   display: none;
+}
+
+/* 「已加载/总数」徽标：已加载数 accent 强调（0 时回落弱色） */
+.sidebar-count .count-loaded {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar-count .count-loaded.zero {
+  color: var(--text-faint);
+  font-weight: 400;
 }
 
 /* 版本号取自 tauri.conf.json；标题栏内不被压缩，版本字符串可复制 */
@@ -504,9 +517,29 @@ body.hover-ok .search-clear:hover {
   mask-image: linear-gradient(to bottom, transparent, #000 26px);
 }
 
+/* ── 竖排图标栏（VS Code Activity Bar 式）：全局工具从上到下，设置钉底。
+   窗口总宽不变——44px 由主面板区吸收（config-panel 居中 640px 上限，
+   两侧的 auto 边距天然吃下） */
+.icon-rail {
+  width: 44px;
+  min-width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  background: var(--bg-app);
+  border-right: 1px solid var(--border);
+}
+
+/* 钉底项（设置）：与顶部工具组拉开——margin-top:auto 把它压到栏底 */
+.icon-rail .rail-bottom {
+  margin-top: auto;
+}
+
+/* footer 只放主按钮（图标工具已迁竖排图标栏） */
 .sidebar-footer {
   display: flex;
-  align-items: center;
   gap: 6px;
   padding: 10px;
   border-top: 1px solid var(--border);
@@ -534,11 +567,6 @@ body.hover-ok .search-clear:hover {
 body.hover-ok .btn-add:not(:disabled):hover {
   filter: brightness(1.07);
   box-shadow: 0 6px 18px var(--accent-glow);
-}
-
-.footer-actions {
-  display: flex;
-  gap: 4px;
 }
 
 .icon-btn {
@@ -588,7 +616,7 @@ body.hover-ok .icon-btn:hover {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px;
+  padding: 10px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -619,12 +647,24 @@ body.hover-ok .skin-card:hover {
     0 0 0 1px var(--accent-select-ring);
 }
 
-/* 预览框：内渐变画布 + 细点阵纹理（海图稿纸感） */
+/* 选中卡 hover：上浮与 pop 投影照常，但色条与外环不被 shadow-pop 整体
+   覆盖——三层叠加（hover 反馈不得抹掉选中标识）。特异性与 hover 规则
+   相同，靠书写顺序（后写）生效 */
+body.hover-ok .skin-card.selected:hover {
+  box-shadow:
+    inset 2px 0 0 var(--accent-select),
+    0 0 0 1px var(--accent-select-ring),
+    var(--shadow-pop);
+}
+
+/* 预览框：内渐变画布 + 细点阵纹理（海图稿纸感）。
+   圆角 6px = 同心规则（卡片 16px − 留白 10px）——内件圆角与外卡
+   弧线平行，角部不「鼓」 */
 .skin-preview {
   position: relative;
   width: 100%;
-  height: 100px;
-  border-radius: 10px;
+  height: 112px;
+  border-radius: 6px;
   overflow: hidden;
   flex-shrink: 0;
   background: var(--bg-input);
@@ -646,7 +686,8 @@ body.hover-ok .skin-card:hover {
   display: block;
 }
 
-/* 占位图标：略放大 + 着 accent 色（空预览也有品牌存在感） */
+/* 占位图标：着 accent 色 45% 不透明度（规格见设计系统文档），图标本体
+   24px——112px 高画布上 20px 读感过小（无头截图复核上调） */
 .skin-preview-placeholder {
   position: absolute;
   inset: 0;
@@ -661,40 +702,64 @@ body.hover-ok .skin-card:hover {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 0 2px 2px;
+  padding: 0 4px 4px;
 }
 
-.skin-card-header {
+/* 标题行：名称全宽双行夹（完整名称大概率装下，再长 title 悬停兜底） +
+   版本芯片随行右侧。名称不压预览图——压在图上的任何处理都被图片内容
+   绑架（纯白底/透明捕获的预览上深条是一块补丁），文字回卡片内容区 */
+.skin-card-title {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
   gap: 6px;
 }
 
 .skin-card-name {
   font-size: 13px;
   font-weight: 600;
-  white-space: nowrap;
+  color: var(--text-primary);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  /* 无空格长串（英文 id 式名称）也能断行进第二行 */
+  overflow-wrap: anywhere;
   min-width: 0;
+  /* 标题行内吃满剩余宽度，版本芯片靠右 */
+  flex: 1;
 }
 
-.skin-card-meta {
-  font-size: 10.5px;
+/* 版本号芯片：等宽小号灰底（与侧栏数量徽标同族但更安静）。
+   margin-top 2px = 行盒中心对齐：名称第一行行盒 17.55px、芯片盒
+   ~14px，(17.55−14)/2≈2px。选行盒不选墨色：字体度量是布局期值，
+   不随系统 DPI 缩放变——实测四档缩放（100/125/150/200%）芯片与
+   名称中心偏差 ≤0.44px（栅格化 hinting 的残余微差，方向混合）；
+   若按 DSF=1 的墨色采样烘焙常量，125% 档会漂到 1px+ */
+.skin-card-ver {
+  flex-shrink: 0;
+  font-size: 10px;
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   color: var(--text-faint);
+  background: var(--bg-input);
+  border-radius: 6px;
+  padding: 1px 6px;
+  margin-top: 2px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
 }
 
+/* footer 单行两端：状态徽标 ←→ 加载钮（作者不进卡片——编辑器页眉
+   「作者：」是其正式席位；版本号上移进标题条） */
 .skin-card-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+}
+
+.skin-card-footer .load-btn {
+  flex-shrink: 0;
 }
 
 /* 状态：信号灯式徽标（hairline 描边 + 光点） */
@@ -770,7 +835,7 @@ body.hover-ok .skin-card:hover .skin-delete-btn,
   opacity: 1;
 }
 
-.skin-delete-btn:hover {
+body.hover-ok .skin-delete-btn:hover {
   background: var(--danger-btn);
   color: var(--danger-ink);
 }
@@ -782,7 +847,7 @@ body.hover-ok .skin-card:hover .skin-delete-btn,
   cursor: not-allowed;
 }
 
-.skin-delete-btn.disabled:hover {
+body.hover-ok .skin-delete-btn.disabled:hover {
   background: rgba(5, 12, 22, 0.6);
   color: #fff;
 }
@@ -815,6 +880,587 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   background-image: none;
   border-color: var(--danger-btn);
   color: var(--danger-ink);
+}
+
+/* 行首信号灯（分组编辑对话框皮肤行用）：三档色点，title 带状态文字 */
+.compact-status {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.compact-status .status-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.compact-status.loaded {
+  color: var(--success);
+}
+
+.compact-status.loaded .status-dot {
+  box-shadow: 0 0 6px currentColor;
+}
+
+.compact-status.hidden {
+  color: var(--warning);
+}
+
+.compact-status.hidden .status-dot {
+  box-shadow: 0 0 6px currentColor;
+}
+
+.compact-status.unloaded {
+  color: var(--text-faint);
+  opacity: 0.6;
+}
+
+/* ── 皮肤分组（侧栏分组管理）：组头行 + 组体；「未分组」是内置虚拟组 ── */
+.skin-group {
+  margin-bottom: 4px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+body.hover-ok .group-header:hover {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.group-chevron {
+  flex-shrink: 0;
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  transition: transform 0.15s var(--ease);
+}
+
+.skin-group.collapsed .group-chevron {
+  transform: rotate(-90deg);
+}
+
+/* 不可折叠的行（未分组）：chevron 占位保持名称对齐 */
+.group-chevron-spacer {
+  flex-shrink: 0;
+  width: 14px;
+  height: 1px;
+}
+
+.group-name {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+/* 「未分组」组头弱化（虚拟组：不可删、无 ⋯ 菜单） */
+.skin-group.ungrouped .group-name {
+  color: var(--text-faint);
+  font-weight: 600;
+}
+
+/* 组计数：徽章语言（与 .sidebar-count 同族细描边 + mono）但弱色。
+   透明底——常规组 hover 亮白底时计数外观不变，各组计数任何状态都对齐 */
+.group-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+/* 「未分组」无 ⋯ 菜单：等宽占位让计数与常规组垂直同轴 */
+.group-more-spacer {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+/* 「未分组」是只读标签行（不可折叠、无菜单）：摘除交互暗示——
+   hover 亮底与手型光标会让用户误以为它是可操作的分组 */
+.skin-group.ungrouped .group-header {
+  cursor: default;
+}
+
+body.hover-ok .skin-group.ungrouped .group-header:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.group-more {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), opacity 0.15s var(--ease), transform 0.12s var(--ease-out);
+}
+
+body.hover-ok .group-header:hover .group-more,
+.group-more.open,
+.group-more:focus-visible {
+  opacity: 1;
+}
+
+body.hover-ok .group-more:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.group-body {
+  padding: 4px 0 4px;
+}
+
+.skin-group.collapsed .group-body {
+  display: none;
+}
+
+/* 新建分组入口：列表末尾的虚线文字钮（发现路径，平时安静） */
+.group-new {
+  width: 100%;
+  margin-top: 2px;
+  padding: 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-family: inherit;
+  transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background-color 0.15s var(--ease), transform 0.12s var(--ease-out);
+}
+
+body.hover-ok .group-new:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 组 ⋯ 菜单：body 级小浮层（管理器禁右键，组操作走左键菜单） */
+.group-menu {
+  position: fixed;
+  z-index: 250;
+  min-width: 132px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  padding: 4px;
+  transform-origin: top right;
+  animation: menuIn 0.15s var(--ease-out);
+}
+
+@keyframes menuIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+.group-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  padding: 6px 9px;
+  border-radius: 7px;
+  transition: background-color 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+body.hover-ok .group-menu button:hover {
+  background: var(--bg-surface-hover);
+}
+
+.group-menu button.danger {
+  color: var(--danger);
+}
+
+body.hover-ok .group-menu button.danger:hover {
+  background: var(--danger-soft);
+}
+
+/* 菜单分段：上段组编辑操作 / 下段组内皮肤批量控制 */
+.group-menu .menu-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
+/* ── 分组编辑对话框（新建/编辑同一表单）：改名 + 勾选皮肤入组 ──
+   骨架复用 .confirm-overlay/.confirm-dialog.wide（弹入动画与遮罩同源），
+   内容是左对齐表单（confirm-dialog 基类是居中确认语排版且定义在本文档
+   后段——双类叠加提特异性，不依赖书写顺序） */
+.confirm-dialog.group-edit-dialog {
+  text-align: left;
+}
+
+.group-edit-field {
+  margin-top: 14px;
+}
+
+.group-edit-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+/* 名称输入：灰面无边框 + 聚焦内嵌 1px 环（布局方案面板输入框惯例——
+    分组编辑/布局保存/布局重命名三处同族，单一事实源在本基类；布局保存
+    行的 flex 占位与重命名行的白面反白由各自子选择器补） */
+.group-edit-name {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-input);
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  transition: box-shadow 0.15s var(--ease);
+}
+
+.group-edit-name:focus {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* 摘掉全局 input:focus-visible 的 1.5px 外描边（0-1-1 高于基类的 0-1-0，
+   不补这条 = 聚焦时外描边与内嵌环并存的「双重描边」——实机反馈回归）。
+   键盘可达性由编辑行的 ✓/✕ 按钮与 Enter/Esc 键位承担（同布局面板惯例） */
+.group-edit-name:focus-visible {
+  outline: none;
+}
+
+.group-edit-error {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.group-edit-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.6;
+  margin-bottom: 6px;
+}
+
+/* 皮肤勾选清单：滚动区（皮肤多时弹窗不撑高），hover-ok 门控悬停底 */
+.group-edit-skins {
+  max-height: 216px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  padding: 4px;
+}
+
+.group-edit-skin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 0.12s var(--ease);
+}
+
+body.hover-ok .group-edit-skin:hover {
+  background: var(--bg-surface-hover);
+}
+
+.group-edit-skin input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.group-edit-skin-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 现属组名（在别的组时提示「勾选会把它移过来」的落点）：
+   弱信息用弱形式——纯 mono faint 文字，不加底色描边（白 chip 在
+   灰清单底上对比过强、抢主信息的戏） */
+.group-edit-skin-group {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+
+.group-edit-empty {
+  padding: 14px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* ── 布局方案面板（复用 confirm-dialog.wide 骨架，左对齐表单同分组对话框） ── */
+.confirm-dialog.layout-panel {
+  text-align: left;
+  /* 体量大内容面板与设置页同待遇（settings-panel 也不吃 popIn）：只随遮罩
+     淡入，不做位移——共享 popIn 的 8px 上移在 360px 小确认框上无感，放
+     大到整面板后被衬成约 1 秒的向上漂移（实机反馈，幅度明显；规则见
+     docs/交互动画.md §四「位移入场按体量分配」） */
+  animation: none;
+}
+
+/* 页眉：贴近设置页语言——display 字体 h2 眉题（数值同 .settings-panel h2），
+   撤图标徽章（设置页无此元素，评审定案两族合一）；副题一句话布局语义
+   保留为弱说明行。关闭沿用底部全宽钮/点遮罩/Esc */
+.confirm-dialog.layout-panel h2 {
+  margin-bottom: 4px;
+  font-size: 16px;
+  font-weight: 650;
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+}
+
+/* 副题：布局语义一句话（精简版，实机反馈原文太长）；下缘留白拉开
+   页眉与中间保存区的间距 */
+.layout-sub {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+/* 保存区：名称输入 + 存档主钮（分区标签评审撤销——按钮自带图标与文字，
+   说明多余）。上缘 18px 接页眉。输入框恢复 bg-input 灰面（实机评审），
+   边框彻底移除（border:none——透明边框占位与内嵌环之间仍夹一圈线，成
+   双重描边）；聚焦只显内嵌 1px 环一条线（1.5px 太显明——实机反馈），
+   环贴齐灰面边缘 */
+.layout-save {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* 保存行只补布局占位；灰面/无边框/内嵌聚焦环已上移至 .group-edit-name 基类 */
+.layout-save .group-edit-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.layout-save .confirm-btn {
+  flex-shrink: 0;
+  padding: 7px 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 方案清单：滚动区（多方案不撑高弹窗）。块级浅底（bg-input——实机评审
+   加的列表背景，给行项一个共同的面）+ 加大的行距承担分组；无描边无细线。
+   输入框焦点环的内嵌处理见 .layout-save 注释，互不制造外边线 */
+.layout-list {
+  margin-top: 14px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-input);
+  border-radius: var(--radius-md);
+}
+
+.layout-list:empty {
+  display: none;
+}
+
+.layout-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.12s var(--ease);
+}
+
+body.hover-ok .layout-row:hover {
+  /* 列表是 bg-input 灰面：hover 用白面 bg-surface 才有反差
+     （bg-surface-hover 与灰底近色，悬停不可见——实机反馈） */
+  background: var(--bg-surface);
+}
+
+.layout-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 皮肤数弱签：纯 mono faint 文字不加盒（弱信息用弱形式，同分组皮肤
+   现属组名的评审决策——灰清单底上的 chip 对比过强、抢主信息的戏） */
+.layout-row-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.layout-row-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+/* 行内「应用」主钮：比操作分区的 action-btn 小一档（清单密度），
+   与右侧图标钮群之间留 6px 呼吸（gap 归图标群内部）。
+   双类叠加提特异性（0,2,0）——.action-btn 基类在本文档后段，
+   单靠后写压不住 */
+.action-btn.layout-act {
+  padding: 3px 12px;
+  font-size: 11px;
+  margin-right: 6px;
+}
+
+/* 行内幽灵图标钮（覆盖/重命名/删除）：平时安静 faint，hover-ok 门控
+   悬停转语义蓝；.danger 悬停转红（与组菜单 danger 同源——删除的语义
+   色只在悬停承诺时出现） */
+.layout-icon-btn {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  padding: 0;
+  transition: background-color 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+body.hover-ok .layout-icon-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+body.hover-ok .layout-icon-btn.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* 空态：网格图标氛围签（与页眉徽章同形、弱一档）+ 引导文案 */
+.layout-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 12px 22px;
+  text-align: center;
+}
+
+.layout-empty-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.layout-empty-text {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-faint);
+  max-width: 300px;
+}
+
+/* 重命名态行：输入框 + ✓/✕ 显式操作钮（裸输入框没有可见提交路径）。
+   编辑行在灰清单底上反白为白面输入（与保存行灰面输入同族互反——
+   正在编辑的行即焦点），聚焦内嵌 1px 环（复用 .layout-save 惯例） */
+.layout-row.renaming {
+  gap: 6px;
+}
+
+.layout-row.renaming .layout-rename-input {
+  background: var(--bg-surface);
+  border: none;
+  /* 同 .layout-save 输入框：摘全局外描边，只留自绘内嵌环 */
+  outline: none;
+}
+
+.layout-row.renaming .layout-rename-input:focus {
+  border: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* 重命名态行是编辑态，不再承担悬停反馈——鼠标停在清单上时白底会与
+   白面输入糊成一片（实机反馈）；悬停白底只归静态行 */
+body.hover-ok .layout-row.renaming:hover {
+  background: transparent;
+}
+
+/* 页脚：左列元信息（方案计数 + 托盘菜单发现路径提示，窄窗省略号），
+   全宽 settings-close（设置页同款，零新增按钮样式）；上缘 18px 拉开
+   与中间清单块的间距 */
+.layout-foot-hint {
+  margin-top: 18px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 页眉卡内的权限名称胶囊：只列名称、颜色分级（高危红/中危黄/未知灰），
@@ -879,20 +1525,22 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   flex-direction: column;
   gap: 12px;
   text-align: left;
+  /* 右侧留白：勾选框（行右端）与滚动条拉开距离（实机反馈贴条） */
+  padding-right: 10px;
 }
 
 .backup-skin-row .perm-chips {
   margin-top: 4px;
 }
 
-/* 行间分隔 = 居中的 60% 宽短线（伪元素实现——border-top 只能通栏）。
+/* 行间分隔 = 95% 宽的短线（伪元素实现——border-top 只能通栏）。
    用 --border（深色 9% 透明度）而非 --border-strong（20%）：维护者实机
    对比后定——更强的分隔在确认框里偏抢，quiet 的 9% 更贴合对话框语言。
    列表项分隔 ≠ 材质分层（设计系统禁的是发丝描边给面板分层） */
 .backup-skin-row + .backup-skin-row::before {
   content: '';
   display: block;
-  width: 60%;
+  width: 95%;
   margin: 0 auto 12px;
   border-top: 1px solid var(--border);
 }
@@ -902,11 +1550,72 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
   font-weight: 600;
 }
 
-.backup-skin-id {
+/* 行内版本号（弱 mono；文件夹 id 不进审查视图——实现细节非审查信息） */
+.backup-skin-ver {
   margin-left: 8px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-faint);
+}
+
+/* 勾选行：divider 留在 .backup-skin-row 块级外壳上，内层 label 才是
+    flex（::before 若成 flex item 会从行上跑到行内）；勾选框居行右侧、
+    垂直居中于所在列表项（实机反馈——原来居左且钉顶部，行高两行时失衡） */
+.backup-skin-row-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.backup-skin-check {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.backup-skin-main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 勾选工具行：选择性导入提示（左）+ 全选/全不选（右） */
+.backup-select-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.backup-select-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
+.backup-select-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.backup-select-toggle {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.12s var(--ease);
+}
+
+body.hover-ok .backup-select-toggle:hover {
+  background: var(--accent-soft);
 }
 
 .backup-review-empty {
@@ -1059,6 +1768,22 @@ body.hover-ok .load-btn.unload:not(:disabled):hover {
 
 .config-panel .subtitle:empty {
   display: none;
+}
+
+/* 页眉副本来源行：弱化小字（副标题之下、权限胶囊之上） */
+.copy-origin {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 「源已更新到 vX」段：accent 提示（可同步的信号） */
+.copy-origin-update {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .cfg-header .status-badge {
@@ -1239,7 +1964,9 @@ html[lang="en"] .config-section h3 .sec-en {
   height: 4px;
   -webkit-appearance: none;
   appearance: none;
-  background: var(--bg-input);
+  /* accent 淡染轨道：原 bg-input 轨道在白/深浮卡上都近于隐形——
+     淡染让轨道可辨且与菱形手柄同属一套品牌色语言 */
+  background: var(--accent-soft);
   border-radius: 2px;
   outline: none;
 }
@@ -1259,7 +1986,7 @@ html[lang="en"] .config-section h3 .sec-en {
   transition: transform 0.12s var(--ease), box-shadow 0.12s var(--ease);
 }
 
-.range-slider::-webkit-slider-thumb:hover {
+body.hover-ok .range-slider::-webkit-slider-thumb:hover {
   transform: rotate(45deg) scale(1.2);
   box-shadow: 0 0 14px var(--accent-glow), 0 1px 4px rgba(0, 0, 0, 0.35);
 }
@@ -1820,6 +2547,12 @@ body.hover-ok .task-del:not(:disabled):hover {
   gap: 8px;
 }
 
+/* 「从源同步」禁用态的原因提示挂点：disabled 按钮自身不触发 tooltip
+   （Chromium 对禁用元素不发指针事件），包一层 span 挂 title */
+.sync-btn-wrap {
+  display: inline-flex;
+}
+
 /* 动作按钮：默认白面 chip（浮在冷纸页上），主按钮渐变 + 蓝光晕 */
 .action-btn {
   padding: 7px 16px;
@@ -1985,6 +2718,13 @@ body.hover-ok .action-btn.danger:not(:disabled):hover {
   animation-duration: 0.25s;
 }
 
+/* 面板内重绘（layouts.js rerender）换 DOM 但不重放入场——遮罩淡入不重演，
+   否则任何行操作都闪一次「窗口重新打开」（实机反馈：输入/覆盖/编辑/删除/
+   重命名等每次操作都闪）。首开不走此类，动画照常 */
+.confirm-overlay.no-anim {
+  animation: none;
+}
+
 .confirm-dialog,
 .settings-panel {
   background: var(--bg-surface);
@@ -2131,6 +2871,15 @@ body.hover-ok .confirm-btn.primary:not(:disabled):hover {
   max-width: 88vw;
 }
 
+/* 直接坐在面板上的独立 action-btn（检查更新等）：面板与按钮同为
+   bg-surface，暗色下描边近隐形、按钮整个融进面板（无头截图实锤）——
+   底沉一档 bg-input + 强描边，任何主题可辨；hover 仍走全局 action-btn
+   悬停（抬升到 bg-surface-hover） */
+.settings-panel .action-btn {
+  background: var(--bg-input);
+  border-color: var(--border-strong);
+}
+
 .settings-panel h2 {
   margin-bottom: 16px;
   font-size: 16px;
@@ -2192,6 +2941,20 @@ body.hover-ok .theme-btn:not(:disabled):hover {
   color: var(--text-primary);
 }
 
+/* 快捷键钮（设置页全局热键 + 编辑器皮肤热键两处共用）：包在 .theme-options
+   容器里与「打开日志窗口」同款 chip 语言（实机反馈：白面/图标款都不对，
+   锚定日志钮）——容器给描边底，本规则只留组合值的功能性样式（mono +
+   不换行 + 不被 flex 压缩）。规则必须在 .theme-btn.active 之前：录制中
+   的 active 渐变态靠后写生效，不被覆盖 */
+.theme-btn.hotkey-btn {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  /* 组合值再长也不得折行或被 flex 行压缩溢出（实机反馈：设置页行内文字
+     溢出按钮边界）——flex-shrink:0 让按钮永远取内容自然宽度 */
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .theme-btn.active {
   background-image: var(--accent-grad);
   color: var(--accent-ink);
@@ -2228,6 +2991,8 @@ body.hover-ok .settings-close:hover {
 .cfg-chip:not(:disabled):active,
 .cfg-step-btn:not(:disabled):active,
 .search-toggle:not(:disabled):active,
+.group-more:not(:disabled):active,
+.group-new:not(:disabled):active,
 .settings-close:not(:disabled):active {
   transform: scale(0.97);
 }
@@ -2591,8 +3356,8 @@ body.hover-ok .settings-close:hover {
   /* 位移/缩放类入场降级为纯透明渐变（contentFade/fadeIn 本就纯透明，无需覆盖） */
   .confirm-dialog,
   .wizard-card,
+  .group-menu,
   .toast {
-  overflow-wrap: anywhere;
     animation-name: reducedFade;
   }
   .toast-out {
@@ -2603,7 +3368,7 @@ body.hover-ok .settings-close:hover {
   body.hover-ok .cfg-swatch:not(:disabled):hover {
     transform: none;
   }
-  .range-slider::-webkit-slider-thumb:hover {
+  body.hover-ok .range-slider::-webkit-slider-thumb:hover {
     transform: rotate(45deg);
   }
   /* 按压缩放关闭 */
@@ -2615,7 +3380,10 @@ body.hover-ok .settings-close:hover {
   .theme-btn:not(:disabled):active,
   .confirm-btn:not(:disabled):active,
   .cfg-chip:not(:disabled):active,
+  .cfg-step-btn:not(:disabled):active,
   .search-toggle:not(:disabled):active,
+  .group-more:not(:disabled):active,
+  .group-new:not(:disabled):active,
   .settings-close:not(:disabled):active {
     transform: none;
   }

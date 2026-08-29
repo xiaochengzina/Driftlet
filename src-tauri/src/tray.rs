@@ -1,7 +1,7 @@
 use tauri::{
     AppHandle, Manager,
     image::Image,
-    menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder},
+    menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState},
 };
 use crate::i18n::{tr, Key};
@@ -77,13 +77,106 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
         .id("quit")
         .build(app)?;
 
+    // 「皮肤显隐」子菜单：每个已加载皮肤一个勾选项（勾选 = 窗口可见），
+    // 按显示名排序（双语皮肤随语言取 name/name_en）；句柄 stash 进
+    // AppState.skin_vis_items 供 sync_tray_toggle_item 勾选同步/加载集
+    // 比对。空集时只放一行禁用占位（空子菜单观感差）
+    let skins_submenu = build_skins_submenu(app, lang)?;
+
+    // 「布局方案」子菜单：每个方案一项，点击即应用（布局变更后
+    // capture_layout/set_layouts 会重建托盘菜单同步本清单）
+    let layouts_submenu = build_layouts_submenu(app, lang)?;
+
     MenuBuilder::new(app)
         .item(&show_manager)
         .item(&reload_all)
         .item(&toggle_skins)
+        .item(&skins_submenu)
+        .item(&layouts_submenu)
         .item(&separator)
         .item(&quit)
         .build()
+}
+
+/// 构建「布局方案」子菜单（无方案时一行禁用占位）
+fn build_layouts_submenu(app: &AppHandle, lang: &str) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+    let state = app.state::<crate::AppState>();
+    let layouts = {
+        let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        cfg.layouts.clone()
+    };
+    let mut builder = SubmenuBuilder::new(app, tr(lang, Key::TrayLayouts));
+    if layouts.is_empty() {
+        let empty = MenuItemBuilder::new(tr(lang, Key::TrayLayoutsEmpty))
+            .enabled(false)
+            .build(app)?;
+        return builder.item(&empty).build();
+    }
+    for l in layouts {
+        let item = MenuItemBuilder::new(l.name)
+            .id(format!("layout:{}", l.id))
+            .build(app)?;
+        builder = builder.item(&item);
+    }
+    builder.build()
+}
+
+/// 构建「皮肤显隐」子菜单并 stash 每皮肤勾选项句柄
+fn build_skins_submenu(app: &AppHandle, lang: &str) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+    let state = app.state::<crate::AppState>();
+    let loaded: std::collections::HashSet<String> =
+        state.registry.loaded_ids().into_iter().collect();
+
+    let mut builder = SubmenuBuilder::new(app, tr(lang, Key::TraySkinsMenu));
+    let mut vis_items = state.skin_vis_items.lock().unwrap_or_else(|e| e.into_inner());
+    vis_items.clear();
+
+    if loaded.is_empty() {
+        let empty = MenuItemBuilder::new(tr(lang, Key::TraySkinsEmpty))
+            .enabled(false)
+            .build(app)?;
+        return builder.item(&empty).build();
+    }
+
+    // 已加载皮肤按显示名排序（名称取自 manifest；扫描按文件夹名稳定序后
+    // 再按名称排，跨语言下顺序确定）
+    let mut named: Vec<(String, String)> = crate::skin::loader::scan_skins_directory(&state.skins_dir)
+        .into_iter()
+        .filter(|s| loaded.contains(&s.id))
+        .map(|s| {
+            let name = if lang == "en" && s.manifest.bilingual {
+                s.manifest.name_en.clone().unwrap_or_else(|| s.manifest.name.clone())
+            } else {
+                s.manifest.name.clone()
+            };
+            (s.id, name)
+        })
+        .collect();
+    named.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+
+    // 扫描不到但已加载的（文件夹被外部删除的僵尸窗口）：以 id 兜底名称
+    // ——漏掉它们会让「加载集 ≠ 菜单项集合」恒成立，每次可见性同步都
+    // 误触发整菜单重建
+    for id in &loaded {
+        if !named.iter().any(|(nid, _)| nid == id) {
+            named.push((id.clone(), id.clone()));
+        }
+    }
+
+    for (id, name) in named {
+        let visible = state
+            .registry
+            .get(&id)
+            .map(|w| w.is_visible().unwrap_or(true))
+            .unwrap_or(false);
+        let item = CheckMenuItemBuilder::new(name)
+            .id(format!("skinvis:{}", id))
+            .checked(visible)
+            .build(app)?;
+        vis_items.insert(id, item.clone());
+        builder = builder.item(&item);
+    }
+    builder.build()
 }
 
 /// Rebuild the tray menu and tooltip after a language change.
@@ -113,7 +206,8 @@ pub fn create_tray(app: &AppHandle) -> Result<(), String> {
         .show_menu_on_left_click(false)
         .tooltip(tr(&lang, Key::TrayTooltip))
         .on_menu_event(move |app, event| {
-            match event.id().as_ref() {
+            let id = event.id().as_ref();
+            match id {
                 "show_manager" => {
                     show_manager_window(app);
                 }
@@ -126,7 +220,23 @@ pub fn create_tray(app: &AppHandle) -> Result<(), String> {
                 "quit" => {
                     graceful_exit(app);
                 }
-                _ => {}
+                other => {
+                    // 「皮肤显隐」子菜单项：skinvis:<skin_id> → 切换该皮肤显隐
+                    //（与皮肤专属热键同一路径；勾选态由 sync_tray_toggle_item
+                    // 漏斗按真实窗口状态回写）
+                    if let Some(skin_id) = other.strip_prefix("skinvis:") {
+                        crate::hotkey::toggle_one_skin(app, skin_id);
+                    } else if let Some(layout_id) = other.strip_prefix("layout:") {
+                        // 「布局方案」子菜单项：layout:<layout_id> → 应用该方案
+                        let app2 = app.clone();
+                        let lid = layout_id.to_string();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = crate::commands::apply_layout_impl(&app2, &lid).await {
+                                log::warn!("tray apply layout failed: {}", e);
+                            }
+                        });
+                    }
+                }
             }
         })
         .on_tray_icon_event(|tray, event| {

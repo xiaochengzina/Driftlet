@@ -13,7 +13,7 @@ import API from './api.js';
 import showToast from './toast.js';
 import { listen } from '@tauri-apps/api/event';
 import { t, getLang } from './i18n.js';
-import { esc, escAttr, dispName, confirmDialog } from './dom.js';
+import { esc, escAttr, dispName, confirmDialog, bindHotkeyCapture } from './dom.js';
 import { renderPermChipsHTML } from './perms.js';
 
 // 调色板缺省预设色（skin.json 未声明 options 时）
@@ -295,6 +295,7 @@ export default class SkinEditor {
             <div class="subtitle">${[d.author ? t('editor.byAuthor') + esc(d.author) : '', d.version ? `v${esc(d.version)}` : ''].filter(Boolean).join(' · ')}</div>
             <!-- 权限名称胶囊（perms.js 单一口源）：只列名称，颜色分级 -->
             ${renderPermChipsHTML(d.permissions)}
+            ${(d.origin_name || d.origin) ? `<div class="copy-origin">${t('editor.copyOrigin', { name: esc(d.origin_name || (d.origin || '').split('@')[0]) })}${d.origin_update ? ` · <span class="copy-origin-update">${t('editor.copyOriginUpdate', { version: esc(d.origin_update) })}</span>` : ''}</div>` : ''}
           </div>
           <span class="status-badge ${!d.loaded ? 'unloaded' : d.hidden ? 'hidden' : 'loaded'}"><span class="status-dot"></span>${!d.loaded ? t('common.unloaded') : d.hidden ? t('common.hidden') : t('common.running')}</span>
         </div>
@@ -360,6 +361,18 @@ export default class SkinEditor {
                 ${!d.loaded ? 'disabled' : ''}>
               <span class="slider"></span>
             </label>
+          </div>
+
+          <!-- 皮肤专属显隐热键：配置型设置（随皮肤存 skin_settings），
+               不随未加载禁用——注册表常驻，加载与否只是按下有无效果之分 -->
+          <div class="form-row">
+            <div>
+              <label>${t('editor.hotkeyLabel')}</label>
+              <span class="hint">${t('editor.hotkeyHint')}</span>
+            </div>
+            <div class="theme-options">
+              <button class="theme-btn hotkey-btn" id="cfg-skin-hotkey">${esc(cfg.hotkey || '') || t('settings.hotkeyNone')}</button>
+            </div>
           </div>
         </div>
 
@@ -443,14 +456,19 @@ export default class SkinEditor {
           <h3>${t('editor.actions')}<span class="sec-en">ACTIONS</span></h3>
           <div class="action-group">
             ${d.loaded
-              ? `<button class="action-btn danger" id="btn-unload">${t('editor.unloadSkin')}</button>`
+              ? `<button class="action-btn" id="btn-unload">${t('editor.unloadSkin')}</button>`
               : `<button class="action-btn primary" id="btn-load">${t('editor.loadSkin')}</button>`
             }
+            <!-- 显隐切换钮：与卸载同一坑位逻辑（当前状态取反），
+                 skins-visibility-changed 事件路径重灌编辑器后标签自翻 -->
+            ${d.loaded ? `<button class="action-btn" id="btn-toggle-visibility">${d.hidden ? t('editor.showSkin') : t('editor.hideSkin')}</button>` : ''}
             ${d.loaded ? `<button class="action-btn" id="btn-reload">${t('editor.reload')}</button>` : ''}
             ${d.loaded ? `<button class="action-btn" id="btn-capture">${t('editor.capture')}</button>` : ''}
             ${d.loaded ? `<button class="action-btn" id="btn-onscreen">${t('editor.bringOnscreen')}</button>` : ''}
             <button class="action-btn" id="btn-openfolder">${t('editor.openFolder')}</button>
             <button class="action-btn" id="btn-package">${t('editor.packageSkin')}</button>
+            ${!d.loaded ? `<button class="action-btn" id="btn-duplicate">${t('editor.duplicate')}</button>` : ''}
+            ${d.origin ? `<span class="sync-btn-wrap" title="${!d.origin_update ? t('editor.syncSourceUpToDate') : d.loaded ? t('list.unloadBeforeDelete') : ''}"><button class="action-btn" id="btn-sync-source" ${!d.origin_update || d.loaded ? 'disabled' : ''}>${t('editor.syncSource')}</button></span>` : ''}
             <button class="action-btn danger" id="btn-reset">${t('editor.resetData')}</button>
             ${!d.loaded ? `<button class="action-btn danger" id="btn-delete">${t('common.deleteSkin')}</button>` : ''}
           </div>
@@ -932,6 +950,46 @@ export default class SkinEditor {
         this.showToast(String(err), 'error');
       }
     });
+    // 显隐切换：目标隐藏态 = 当前 hidden 取反；命令参数是 visible
+    //（= 目标隐藏态再取反——两个语义别搅混，曾在此写反成双向 no-op）。
+    // 编辑器重灌走后端 skins-visibility-changed 事件路径（app.js 统一监听）
+    this.container.querySelector('#btn-toggle-visibility')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const nextHidden = !this.detail.hidden;
+      try {
+        await API.setSkinVisibility(this.skinId, !nextHidden);
+        this.showToast(t(nextHidden ? 'editor.skinHidden' : 'editor.skinShown'), 'info');
+      } catch (err) {
+        btn.disabled = false;
+        this.showToast(String(err), 'error');
+      }
+    });
+
+    // 皮肤专属显隐热键录制（dom.js 共享件，与设置页全局热键同交互）。
+    // 失败（组合冲突/被占用）toast 且显示态回滚；render 重绘前必须摘除
+    // 上一代的录制监听（每次 render 都换按钮元素，但 window 级监听要
+    // 显式 unbind——与设置页防叠开同纪律）
+    const skinHotkeyBtn = this.container.querySelector('#cfg-skin-hotkey');
+    if (skinHotkeyBtn) {
+      const renderHotkey = () => {
+        skinHotkeyBtn.textContent = this.detail?.config?.hotkey || t('settings.hotkeyNone');
+      };
+      this._skinHotkeyCapture?.unbind();
+      this._skinHotkeyCapture = bindHotkeyCapture(skinHotkeyBtn, {
+        recordingText: t('settings.hotkeyRecording'),
+        onSave: async (combo) => {
+          try {
+            await API.setSkinHotkey(this.skinId, combo);
+            if (this.detail?.config) this.detail.config.hotkey = combo;
+            this.showToast(t('settings.hotkeySaved'), 'success');
+          } catch (err) {
+            this.showToast(String(err), 'error');
+          }
+          renderHotkey();
+        },
+      });
+    }
     this.container.querySelector('#btn-reload')?.addEventListener('click', async (e) => {
       // 防连点（与 load/unload 按钮同款约定）
       e.currentTarget.disabled = true;
@@ -974,6 +1032,41 @@ export default class SkinEditor {
       API.packageSkin(this.skinId)
         .then(out => { if (out) this.showToast(t('editor.packagedTo', { path: out }), 'success'); })
         .catch(err => this.showToast(String(err), 'error'));
+    });
+    // 创建副本（皮肤多开，仅未加载时渲染此按钮）：后端克隆为新 id + 新名
+    // 的独立皮肤并返回其 SkinInfo；成功后刷新列表并选中副本（配置页随
+    // onSelect 联动切到副本——用户接着就能调整它的独立设置）
+    this.container.querySelector('#btn-duplicate')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const copy = await API.duplicateSkin(this.skinId);
+        this.showToast(t('editor.duplicated', { name: dispName(copy) || copy.id }), 'success');
+        await window.__app?.skinList?.refresh();
+        window.__app?.skinList?.select(copy.id);
+      } catch (err) {
+        // 后端错误已是完整本地化句子（先卸载/IO 失败），直接透传
+        this.showToast(String(err), 'error');
+      } finally {
+        if (btn.isConnected) btn.disabled = false;
+      }
+    });
+
+    // 从源同步副本（origin 存在且源版本更新且未加载才可点）：源文件夹
+    // 重放副本内容，设置值与窗口配置保留；成功后整页与列表重灌
+    //（预览图/版本经 skin-list 的版本变化检测自动 bust 缓存）
+    this.container.querySelector('#btn-sync-source')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const version = await API.syncSkinCopy(this.skinId);
+        this.showToast(t('editor.syncedFromSource', { version }), 'success');
+        await this.load(this.skinId);
+        await window.__app?.skinList?.refresh();
+      } catch (err) {
+        btn.disabled = false;
+        this.showToast(String(err), 'error');
+      }
     });
     this.container.querySelector('#btn-reset')?.addEventListener('click', () => {
       this.confirmReset();

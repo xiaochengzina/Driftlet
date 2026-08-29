@@ -37,7 +37,7 @@ my-skin/
 
 Optional files:
 
-- `preview.png` / `preview.jpg` / `preview.jpeg` — the preview image in the manager's list; can also be generated with "Capture Preview" in the manager's config panel.
+- `preview.png` / `preview.jpg` / `preview.jpeg` — the preview image in the manager's list (specs and recommended resolution in §8.4); can also be generated with "Capture Preview" in the manager's config panel.
 
 ### 1.2 How It Works (30-Second Version)
 
@@ -1109,7 +1109,7 @@ Pre-pack validation uses **exactly the same rules** as the install side (strongl
 - a missing `version` prints a warning (not blocking, but update detection degrades — recommended to add it);
 - a malformed `min_host_version` (must be a numeric-segment version like `"1.0.5"`) is rejected outright;
 - auto-excluded: `settings.json*` (user data), `.git` / `.svn` / `node_modules` directories, existing `*.dskin` artifacts, `.DS_Store` / `Thumbs.db` / `desktop.ini`;
-- over-limit is rejected outright: 64 MB archive / 256 MB extracted / 5000 files.
+- over-limit is rejected outright: 256 MB archive / 1 GB extracted / 10000 files.
 
 Source lives in `tools/pack-skin/` (Rust); rebuild with `cargo build --release`.
 
@@ -1126,6 +1126,30 @@ Source lives in `tools/pack-skin/` (Rust); rebuild with `cargo build --release`.
 - **Update/reinstall/downgrade all keep the user's settings data**: window config is stored per `id` in the global config.json, decoupled from skin files; user values from the "Skin Settings" tab live in `settings.json` in the skin folder — taken out before install and written back after replacement (user values win over a same-named file in the package). New setting items use defaults; data of removed setting items lapses automatically.
 - `settings.json` (including `.bak` / `.tmp`) is **user data and should never enter a distribution package** — `pack-skin.exe` excludes it automatically; don't include it in manual packaging either (even if it slips in, it gets overwritten by the user's existing values at install time).
 - A running skin is unloaded first and **stays unloaded** after update/reinstall/downgrade — the user reloads it in the manager when needed (the install wizard's "Load Now" works too).
+
+### 8.4 The Preview Image (preview.png)
+
+The preview image is the user's first impression of your skin in the manager's library list. Two sources — pick either (**a file in the folder always wins**):
+
+- **Hand-designed image**: place `preview.png` (or `preview.jpg` / `preview.jpeg` — the first of these names found wins) in the skin folder root. It ships with the `.dskin` to your users (it is not on the packaging skip list).
+- **Captured in the manager**: the "Capture Preview" button in the config panel's "Actions" section captures the skin window's current WebView2 render output (transparent backgrounds preserved correctly), overwriting `preview.png` — back up your hand-made image first if you care about it.
+
+**Dimension facts** (why you don't need to fuss over capture pixels):
+
+- A capture = **the skin window's current physical pixel size** (logical window width/height × the current display's DPI scale), not a fixed value. For a good capture: size and stage the window the way you want it shown, then capture.
+- The manager's list displays it in a fixed area of about **226 × 112 CSS px** (aspect ratio ≈ 2:1), scaled with `contain` — any excess margin reveals the dotted canvas underneath. **Images of any size display correctly**; the closer to 2:1, the less letterboxing.
+
+**Recommended specs for a hand-designed image**:
+
+| Item | Recommendation |
+| --- | --- |
+| Aspect ratio | Around 2:1 (almost no letterboxing under `contain`) |
+| Resolution | **904 × 448** (4× the display area — crisp on high-DPI screens; 452 × 224 is the floor) |
+| Format | PNG (transparency allowed) or JPG (smaller when you don't need transparency) |
+| File size | ≤ 200 KB (smooth decoding while the list scrolls; oversized files stutter) |
+| Content | The skin's most representative state (the preview is shown pure in the manager — no text overlaid on it) |
+
+Design note: at 226 px wide in the manager, full-desktop-screenshot detail turns to mush. **A zoomed-in fragment, a simplified composition, one clear subject** reads as your skin far better than a pixel-faithful 4K capture.
 
 ---
 
@@ -1147,7 +1171,7 @@ Go through these one by one before packaging:
 - [ ] If sensitive APIs are used: `permissions` declares only what's actually used (§2.3), and the declaration list shown in the install wizard is one you can stand behind
 - [ ] Bridge-less scenarios (opened in a plain browser) don't throw (`?.` defense, §7.2)
 - [ ] If you rely on commands/controls introduced in a newer version: declared `min_host_version` (install-time warning), or degrade at runtime via `__DESK_PP__.hostVersion`
-- [ ] A `preview.png` is provided, or a preview was captured in the manager
+- [ ] A `preview.png` is provided, or a preview was captured in the manager (specs and recommended resolution in §8.4)
 - [ ] Packed with `pack-skin.exe` into a `.dskin`, and actually installed/updated once in the manager to verify (including the permission declaration display)
 
 ---

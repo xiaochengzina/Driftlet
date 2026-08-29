@@ -52,6 +52,67 @@ export function closeOnMaskClick(overlay, close) {
 }
 
 /**
+ * 热键录制绑定（设置页全局热键与编辑器皮肤专属热键共用——单一口源，
+ * 勿再复制第三份）：点击进入录制态，Esc 取消，Backspace/Delete 清空，
+ * 合法组合（≥1 修饰键 + 普通键）调 onSave(combo)（可 async；显示态
+ * 由调用方在 onSave 里自绘）。录制期按钮只显短文案 recordingText。
+ * 操作提示（Esc 取消等）写在行的描述 hint 里，不进按钮（实机反馈）。
+ * 返回 { unbind }——宿主销毁/重绘/防叠开前必须调用，否则 window 级
+ * capture 监听残留劫持键盘。
+ * 注意：录制期间按下已注册热键仍会真实触发一次显隐切换（全局热键
+ * 无法局部屏蔽，已知小怪癖）。
+ */
+export function bindHotkeyCapture(btn, { recordingText, onSave }) {
+  let listener = null;
+  btn.addEventListener('click', () => {
+    if (listener) return; // 已在录制中
+    const prevText = btn.textContent;
+    btn.textContent = recordingText;
+    btn.classList.add('active');
+
+    const finish = () => {
+      window.removeEventListener('keydown', onKey, true);
+      listener = null;
+      btn.classList.remove('active');
+      btn.textContent = prevText;
+    };
+    const onKey = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') { finish(); return; }
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        finish();
+        onSave('');
+        return;
+      }
+      // 单独的修饰键按下不构成组合，继续等
+      if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+      const mods = [];
+      if (e.ctrlKey) mods.push('Ctrl');
+      if (e.altKey) mods.push('Alt');
+      if (e.shiftKey) mods.push('Shift');
+      if (e.metaKey) mods.push('Super');
+      if (mods.length === 0) return; // 必须带修饰键（裸键会全局劫持打字）
+      let key = e.key === ' ' ? 'Space' : e.key;
+      if (key.length === 1) key = key.toUpperCase();
+      finish();
+      onSave([...mods, key].join('+'));
+    };
+    listener = onKey;
+    window.addEventListener('keydown', onKey, true);
+  });
+  return {
+    unbind() {
+      if (listener) {
+        window.removeEventListener('keydown', listener, true);
+        listener = null;
+        btn.classList.remove('active');
+      }
+    },
+  };
+}
+
+/**
  * 确认弹窗工厂。统一行为：Esc 关闭、点遮罩关闭、初始焦点落「取消」
  * （危险操作焦点不放确认键）；danger 时确认按钮加 danger class。
  * 确认点击后先关弹窗再执行 onConfirm（可为 async）；

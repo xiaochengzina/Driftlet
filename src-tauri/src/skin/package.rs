@@ -16,9 +16,9 @@ use crate::skin::types::{Skin, SkinManifest};
 /// 安全上限：防恶意/损坏包耗尽磁盘
 /// （tools/pack-skin/src/main.rs 手工镜像了这些上限与清单体积上限——
 /// 改动必须同步并重建 pack-skin.exe）
-const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024; // 压缩包 64 MB
-const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024; // 解压后合计 256 MB
-const MAX_FILES: usize = 5000;
+const MAX_PACKAGE_BYTES: u64 = 256 * 1024 * 1024; // 压缩包 256 MB
+const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024; // 解压后合计 1 GB
+const MAX_FILES: usize = 10000;
 
 /// 包检查结果，发给前端用于确认弹窗
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +107,50 @@ pub fn inspect_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
 }
 
 /// 安装（或更新）皮肤包。调用方负责：已加载的皮肤先卸载、安装后再加载。
+/// 启动恢复 `skins/` 内的逐文件夹暂存残留（`.<folder>.old` / `.staging-*`）。
+/// 三段式替换（包安装/选择性导入/从源同步共用）崩溃在「让位 → 拷入」之间
+/// 会留下「目标缺失 + .old 唯一副本」——扫描器跳过点开头目录，皮肤就此
+/// 消失（随后 prune 把它的 config 条目也抹掉，残留连备份导出都跳过）。
+/// 恢复语义同 backup::rollback_interrupted_import（审查 A-H1，旧副本优先
+/// = 安全方向）：.staging-* 一律删除（纯半成品）；.<folder>.old → 目标在
+/// 也删目标（可能是半成品）后 rename 回 .old。返回恢复条数（日志用）。
+pub fn recover_interrupted_folder_ops(skins_dir: &Path) -> usize {
+    if !skins_dir.is_dir() {
+        return 0;
+    }
+    let mut recovered = 0;
+    let Ok(entries) = fs::read_dir(skins_dir) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path = entry.path();
+        if name.starts_with(".staging-") {
+            let _ = fs::remove_dir_all(&path);
+            continue;
+        }
+        let Some(folder) = name
+            .strip_prefix('.')
+            .and_then(|n| n.strip_suffix(".old"))
+            .filter(|f| !f.is_empty())
+        else {
+            continue;
+        };
+        let target = skins_dir.join(folder);
+        if target.exists() {
+            let _ = fs::remove_dir_all(&target);
+        }
+        match fs::rename(&path, &target) {
+            Ok(()) => {
+                recovered += 1;
+                log::warn!("folder-op recovery: {:?} restored from interrupted replace", target);
+            }
+            Err(e) => log::error!("folder-op recovery failed for {:?}: {}", path, e),
+        }
+    }
+    recovered
+}
+
 /// 用户数据不受影响：skin_settings[id] 按 id 归属与文件解耦；皮肤文件夹里的
 /// settings.json（皮肤设置页用户值）在整体替换后从旧目录写回（用户值
 /// 优先于包内同名文件）。
@@ -116,8 +160,7 @@ pub fn inspect_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
 /// ② 已存在的 `<id>` rename 为 `.<id>.old`；
 /// ③ staging rename 为 `<id>`（失败则把 .old rename 回去）；
 /// ④ 从 .old 恢复 settings.json，删除 .old。
-pub fn install_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Result<Skin, String> {
-    let extracted = extract_package(package_path, lang)?;
+pub fn install_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Result<Skin, String> {    let extracted = extract_package(package_path, lang)?;
     let base = find_skin_root(extracted.path(), lang)?;
     let manifest = read_manifest(&base, lang)?;
     let id = require_package_id(&manifest, lang)?;
@@ -208,6 +251,8 @@ pub fn install_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
     Ok(Skin {
         id,
         manifest,
+        // 安装路径的皮肤不是副本（副本只由 duplicate_skin 产生并写入标记）
+        origin: None,
         directory: dest,
     })
 }
@@ -422,12 +467,22 @@ pub fn create_package(skin_dir: &Path, out_path: &Path, lang: &str) -> Result<us
     })()
     .map_err(|e| trf(lang, Key::PackageCreateFailed, &[&e]));
     match result {
-        Ok(()) => fs::rename(&tmp, out_path)
-            .map(|_| files.len())
-            .map_err(|e| {
+        Ok(()) => {
+            // 产物必须装得回来：压缩后体积同样过上限（与安装侧同口径——
+            // 不可压缩内容（已压缩的图/视频）多时可能超，不查会产出安装侧
+            // 必拒的包）
+            let size = fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+            if size > MAX_PACKAGE_BYTES {
                 let _ = fs::remove_file(&tmp);
-                trf(lang, Key::PackageCreateFailed, &[&e.to_string()])
-            }),
+                return Err(tr(lang, Key::PackageTooLarge).to_string());
+            }
+            fs::rename(&tmp, out_path)
+                .map(|_| files.len())
+                .map_err(|e| {
+                    let _ = fs::remove_file(&tmp);
+                    trf(lang, Key::PackageCreateFailed, &[&e.to_string()])
+                })
+        }
         Err(e) => {
             let _ = fs::remove_file(&tmp);
             Err(e)
@@ -792,7 +847,7 @@ mod tests {
 
     #[test]
     fn rejects_zip_bomb_by_actual_bytes() {
-        // zip 头声明大小可造假：这里用 deflate 压缩 256MB+1 的零字节
+        // zip 头声明大小可造假：这里用 deflate 压缩「上限+1MB」的零字节
         //（压缩包本身只有几百 KB），按实际写出量必须触发上限
         let dir = unique_dir("bomb");
         let pkg = dir.join("bomb.dskin");
@@ -829,5 +884,35 @@ mod tests {
         assert_eq!(compare_versions(Some("abc"), Some("abc")), Same);
         assert_eq!(compare_versions(Some("abc"), Some("def")), Newer);
         assert_eq!(compare_versions(None, None), Same);
+    }
+
+    /// 审查高危修复的启动恢复：.<folder>.old 旧副本还原（目标缺失/半成品
+    /// 形态都还原——A-H1 旧副本优先），.staging-* 纯垃圾清理，正常目录不动
+    #[test]
+    fn recover_interrupted_folder_ops_restores_old_copy() {
+        let skins = unique_dir("skins-recover");
+        // 形态 1：目标缺失 + .old 唯一副本（让位后、拷入前崩）
+        fs::create_dir_all(skins.join(".clock.old")).unwrap();
+        fs::write(skins.join(".clock.old").join("skin.json"), r#"{"id":"clock"}"#).unwrap();
+        fs::write(skins.join(".clock.old").join("settings.json"), r#"{"city":"tokyo"}"#).unwrap();
+        // 形态 2：半成品目标 + 完好 .old（拷入中途崩——旧副本优先还原）
+        fs::create_dir_all(skins.join("dock")).unwrap(); // 半成品（无 skin.json）
+        fs::create_dir_all(skins.join(".dock.old")).unwrap();
+        fs::write(skins.join(".dock.old").join("skin.json"), r#"{"id":"dock"}"#).unwrap();
+        // 纯垃圾：.staging-*；正常目录：不得触碰
+        fs::create_dir_all(skins.join(".staging-junk")).unwrap();
+        fs::write(skins.join(".staging-junk").join("x"), "x").unwrap();
+        fs::create_dir_all(skins.join("fine-skin")).unwrap();
+        fs::write(skins.join("fine-skin").join("skin.json"), r#"{"id":"fine"}"#).unwrap();
+
+        assert_eq!(recover_interrupted_folder_ops(&skins), 2);
+        assert!(skins.join("clock").join("skin.json").is_file(), "缺失目标必须还原");
+        assert!(skins.join("clock").join("settings.json").is_file(), "用户设置必须随还原保留");
+        assert!(skins.join("dock").join("skin.json").is_file(), "半成品必须被旧副本覆盖");
+        assert!(!skins.join(".clock.old").exists() && !skins.join(".dock.old").exists(), "还原后暂存必须消失");
+        assert!(!skins.join(".staging-junk").exists(), "staging 垃圾必须清理");
+        assert!(skins.join("fine-skin").join("skin.json").is_file(), "正常目录不得被碰");
+
+        let _ = fs::remove_dir_all(&skins);
     }
 }

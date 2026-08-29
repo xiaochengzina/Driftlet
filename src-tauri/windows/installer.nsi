@@ -77,7 +77,12 @@ Var WixMode
 Var OldMainBinaryName
 
 Name "${PRODUCTNAME}"
-BrandingText "${COPYRIGHT}"
+; Driftlet customization: the stock line uses ${COPYRIGHT}, which the
+; bundler only fills from a copyright config this project doesn't set -
+; an empty branding text makes every installer page fall back to NSIS's
+; default "Nullsoft Install System vX.X" in the bottom corner. Show
+; product + version instead.
+BrandingText "${PRODUCTNAME} ${VERSION}"
 OutFile "${OUTFILE}"
 
 ; We don't actually use this value as default install path,
@@ -176,11 +181,21 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_WELCOME
 
-; 2. License Page (if defined)
-!if "${LICENSE}" != ""
-  !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-  !insertmacro MUI_PAGE_LICENSE "${LICENSE}"
-!endif
+; 2. License Page
+; Driftlet customization: the stock page is gated on the ${LICENSE} define,
+; which has no corresponding config field in @tauri-apps/cli 2.11.4's
+; NSISConfig (setting one fails config validation) — so we hardwire our own
+; agreement file. makensis compiles with the nsis/<arch> dir as cwd (set by
+; tauri-bundler), and the dir depth is constant (nsis/<arch> -> nsis ->
+; <profile> -> target -> src-tauri), making this relative path
+; profile/arch/machine independent. An upgraded cli that changes the bundler
+; layout must re-verify it (same re-sync checkpoint as the other template
+; customizations in docs/关键机制.md).
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+; NOTE: forward slashes on purpose - the bundler renders this template with
+; handlebars, and backslash-heavy literals are escape-minefields at every
+; layer (JS string -> handlebars -> NSIS). NSIS/Windows accept "/" fine.
+!insertmacro MUI_PAGE_LICENSE "../../../../windows/installer-license.txt"
 
 ; 3. Install mode (if it is set to `both`)
 !if "${INSTALLMODE}" == "both"
@@ -241,10 +256,13 @@ Function PageReinstall
   Pop $R0
   ; Reinstalling the same version
   ${If} $R0 = 0
-    StrCpy $R1 "$(alreadyInstalledLong)"
-    StrCpy $R2 "$(addOrReinstall)"
-    ; Driftlet customization: uninstalling always wipes app data (hook
-    ; POSTUNINSTALL), so the label says so — same as the upgrade branch.
+    ; Driftlet customization: all three strings are our own driftlet*
+    ; LangStrings (defined below) — the stock same-version prompt and the
+    ; "add or reinstall" label read like translated filler, and the
+    ; uninstall label must warn that data will be erased (the POSTUNINSTALL
+    ; hook always wipes app data, same as the upgrade branch).
+    StrCpy $R1 "$(driftletSameVersionPrompt)"
+    StrCpy $R2 "$(driftletReinstallApp)"
     StrCpy $R3 "$(driftletUninstallApp)"
     !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(chooseMaintenanceOption)"
   ; Upgrading
@@ -261,9 +279,10 @@ Function PageReinstall
   ; Downgrading
   ${ElseIf} $R0 = -1
     ; Driftlet customization: the two options are swapped/renamed as in the
-    ; upgrade branch, but the header prompt stays stock — downgrading is
-    ; genuinely discouraged, so "uninstall first" remains the recommendation.
-    StrCpy $R1 "$(newerVersionInstalled)"
+    ; upgrade branch, and the wordy stock prompt is replaced by our own —
+    ; downgrading is genuinely discouraged, so "uninstall first" remains
+    ; the recommendation.
+    StrCpy $R1 "$(driftletDowngradePrompt)"
     !if "${ALLOWDOWNGRADES}" == "true"
       StrCpy $R2 "$(driftletOverwriteInstall)"
     !else
@@ -514,33 +533,46 @@ FunctionEnd
 {{/each}}
 
 ; Driftlet customization: finish-page autostart checkbox label (used by
-; FinishPageShow above). Keep in sync with the settings panel wording.
-LangString autostart ${LANG_ENGLISH} "Launch Driftlet at login"
-LangString autostart ${LANG_SIMPCHINESE} "开机自动启动 Driftlet"
+; FinishPageShow above). Worded exactly like the settings-panel toggle
+; (i18n.js settings.autostart) so the two never drift apart.
+LangString autostart ${LANG_ENGLISH} "Launch at login"
+LangString autostart ${LANG_SIMPCHINESE} "开机自启动"
 
 ; Driftlet customization: welcome-page text (referenced by the
 ; MUI_WELCOMEPAGE_TEXT define above) — replaces the stock paragraph that
-; claims all other applications must be closed before installing.
-LangString driftletWelcomeText ${LANG_ENGLISH} "Setup will guide you through the installation of ${PRODUCTNAME}.$\r$\n$\r$\nNo need to close other applications first.$\r$\n$\r$\nClick Next to continue."
-LangString driftletWelcomeText ${LANG_SIMPCHINESE} "此程序将引导你完成 ${PRODUCTNAME} 的安装。$\r$\n$\r$\n安装过程无需关闭其他应用程序。$\r$\n$\r$\n点击 [下一步(N)] 继续。"
+; claims all other applications must be closed before installing (this
+; installer doesn't need that). The agreement lives on the LICENSE
+; page right after this one, so the welcome body is just the click-Next
+; nudge - repeating the terms here would be noise.
+LangString driftletWelcomeText ${LANG_ENGLISH} "Click Next to continue."
+LangString driftletWelcomeText ${LANG_SIMPCHINESE} "点击 [下一步(N)] 继续安装。"
 
-; Driftlet customization: reinstall-page prompt and radio labels (used by
-; PageReinstall above). Overwrite install is the first/default option;
-; uninstall-first is demoted to second and warns that data will be erased.
-; The upgrade prompt recommends overwriting; the downgrade prompt stays
-; stock (newerVersionInstalled). $R4 in the prompt holds
-; "$(older)"/"$(unknown)" at runtime.
-LangString driftletOverwriteInstall ${LANG_ENGLISH} "Install over the current version"
-LangString driftletOverwriteInstall ${LANG_SIMPCHINESE} "覆盖安装"
-LangString driftletUninstallFirst ${LANG_ENGLISH} "Uninstall before installing (data will be erased)"
-LangString driftletUninstallFirst ${LANG_SIMPCHINESE} "安装前卸载（数据将会清除）"
-LangString driftletUninstallApp ${LANG_ENGLISH} "Uninstall ${PRODUCTNAME} (data will be erased)"
-LangString driftletUninstallApp ${LANG_SIMPCHINESE} "卸载 ${PRODUCTNAME}（数据将会清除）"
-LangString driftletUpgradePrompt ${LANG_ENGLISH} "An $R4 version of ${PRODUCTNAME} is installed on your system. Installing over the current version is recommended. Select the operation you want to perform and click Next to continue."
-LangString driftletUpgradePrompt ${LANG_SIMPCHINESE} "系统中已存在版本为 $R4 的 ${PRODUCTNAME}。推荐直接覆盖安装。选择你想要执行的操作后点击下一步以继续。"
+; Driftlet customization: reinstall-page prompts and radio labels (used by
+; PageReinstall above; every user-visible string on this page is ours — the
+; bundler's stock equivalents read like translated filler). The first
+; option always keeps data and is the default; the uninstall option warns
+; that data will be erased (the POSTUNINSTALL hook always wipes app data).
+; $R4 in the upgrade prompt holds "$(older)"/"$(unknown)" at runtime
+; ("旧的"/"未知" in Chinese).
+LangString driftletOverwriteInstall ${LANG_ENGLISH} "Install over the current version (keeps your data)"
+LangString driftletOverwriteInstall ${LANG_SIMPCHINESE} "覆盖安装（保留现有数据）"
+LangString driftletUninstallFirst ${LANG_ENGLISH} "Uninstall the current version first (erases your data)"
+LangString driftletUninstallFirst ${LANG_SIMPCHINESE} "先卸载现有版本再安装（数据将被清除）"
+LangString driftletUninstallApp ${LANG_ENGLISH} "Uninstall ${PRODUCTNAME} (erases your data)"
+LangString driftletUninstallApp ${LANG_SIMPCHINESE} "卸载 ${PRODUCTNAME}（数据将被清除）"
+LangString driftletReinstallApp ${LANG_ENGLISH} "Reinstall (keeps your data)"
+LangString driftletReinstallApp ${LANG_SIMPCHINESE} "重新安装（保留现有数据）"
+LangString driftletSameVersionPrompt ${LANG_ENGLISH} "${PRODUCTNAME} ${VERSION} is already installed. Reinstalling keeps your data; uninstalling erases it. Choose an option and click Next to continue."
+LangString driftletSameVersionPrompt ${LANG_SIMPCHINESE} "已安装 ${PRODUCTNAME} ${VERSION}。重新安装会保留现有数据，卸载则会清除全部数据。选择一项操作，点击 [下一步(N)] 继续。"
+LangString driftletUpgradePrompt ${LANG_ENGLISH} "An $R4 version of ${PRODUCTNAME} is already installed - installing over it keeps your data. Choose an option and click Next to continue."
+LangString driftletUpgradePrompt ${LANG_SIMPCHINESE} "已安装$R4版本的 ${PRODUCTNAME}，覆盖安装即可保留现有数据。选择一项操作，点击 [下一步(N)] 继续。"
+; Downgrade: still warns and recommends uninstall-first (the stock
+; equivalent was a wordy translation).
+LangString driftletDowngradePrompt ${LANG_ENGLISH} "A newer version of ${PRODUCTNAME} is already installed, and downgrading is not recommended. Uninstalling first erases your data. Choose an option and click Next to continue."
+LangString driftletDowngradePrompt ${LANG_SIMPCHINESE} "已安装更新版本的 ${PRODUCTNAME}，不推荐降级。建议先卸载现有版本再安装（数据将被清除）。选择一项操作，点击 [下一步(N)] 继续。"
 ; Only used when ALLOWDOWNGRADES == "false" (currently not the case).
-LangString driftletOverwriteDowngradeDisabled ${LANG_ENGLISH} "Install over the current version (downgrading without uninstall is disabled for this installer)"
-LangString driftletOverwriteDowngradeDisabled ${LANG_SIMPCHINESE} "覆盖安装（此安装程序禁止未卸载就进行版本降级的操作）"
+LangString driftletOverwriteDowngradeDisabled ${LANG_ENGLISH} "Install over the current version (uninstall first to downgrade)"
+LangString driftletOverwriteDowngradeDisabled ${LANG_SIMPCHINESE} "覆盖安装（降级请先卸载）"
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode

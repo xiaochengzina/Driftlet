@@ -9,7 +9,8 @@ import showToast from './toast.js';
 import SkinList from './skin-list.js';
 import SkinEditor from './skin-editor.js';
 import InstallWizard from './install-wizard.js';
-import Settings, { initTheme, refreshOpenSettings } from './settings.js';
+import LayoutPanel from './layouts.js';
+import Settings, { initTheme, refreshOpenSettings, applyTheme } from './settings.js';
 import { initUpdateCheck } from './update-check.js';
 import { t, initI18n } from './i18n.js';
 
@@ -50,9 +51,23 @@ class App {
         onSelect: (skinId) => this.onSkinSelect(skinId),
       }
     );
+    // 分组数据随启动取到的 config 下发（之后由 SkinList 自持，
+    // 组操作整体回写 config——单窗口写者，无需重复拉取）
+    const appConfig = await API.getAppConfig().catch(() => null);
+    this.skinList.setGroups(appConfig?.skin_groups, appConfig?.skin_group_map);
     this.skinEditor = new SkinEditor(document.getElementById('main-panel'));
     this.wizard = new InstallWizard({
       onClose: (result) => this.onWizardClose(result),
+    });
+    // 布局方案面板：应用成功后刷新列表（加载/卸载/显隐已变，列表与徽标
+    // 需对齐真实状态；编辑器若开着也重灌）
+    this.layoutPanel = new LayoutPanel({
+      onApplied: async () => {
+        await this.skinList.refresh();
+        if (this.skinEditor.skinId) {
+          await this.skinEditor.load(this.skinEditor.skinId);
+        }
+      },
     });
     this.bindToolbar();
     this.bindSearch();
@@ -79,6 +94,23 @@ class App {
 
     // 启动更新检测（默认开；内部自行处理失败与弹窗，不阻塞首屏）
     initUpdateCheck();
+
+    // 主题切换钮图标随 data-theme 实态自动同步（设置页三态钮、系统
+    // 主题变化（auto 模式）、本钮点击，任何来源的属性变化都命中）
+    new MutationObserver(() => this.updateThemeToggleIcon())
+      .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
+
+  /** 按当前生效主题填充主题切换钮的图标与标题（亮显月亮→深、暗显太阳→浅） */
+  updateThemeToggleIcon() {
+    const btn = document.getElementById('btn-theme-toggle');
+    if (!btn) return;
+    const dark = document.documentElement.dataset.theme === 'dark';
+    // 官方 Feather moon / sun（全量官方化后的图标纪律）
+    btn.innerHTML = dark
+      ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
+      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+    btn.title = t(dark ? 'app.themeToLight' : 'app.themeToDark');
   }
 
   // Backend-originated events: the skin right-click menu and the tray can
@@ -130,6 +162,28 @@ class App {
         </div>
       </div>
       <div class="app-body">
+        <!-- 竖排图标栏（VS Code Activity Bar 式）：全局工具从上到下，
+             设置钉底（margin-top:auto）。按钮 id 不变，bindToolbar 零改动 -->
+        <nav class="icon-rail">
+          <button id="btn-layouts" class="icon-btn" title="${t('layout.title')}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+          </button>
+          <button id="btn-refresh" class="icon-btn" title="${t('app.refreshList')}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
+          <button id="btn-open-folder" class="icon-btn" title="${t('app.openFolder')}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </button>
+          <!-- 亮暗主题快速切换：亮显月亮（→深）、暗显太阳（→浅）。图标由
+               updateThemeToggleIcon 按 data-theme 实态填充；与设置钮同钉底 -->
+          <button id="btn-theme-toggle" class="icon-btn rail-bottom"></button>
+          <button id="btn-settings" class="icon-btn" title="${t('settings.title')}">
+            <!-- feathericons.dev 现行官方 settings 齿轮（维护者提供路径替换）：
+                 库内旧路径是手写近似的异版（单弧扫描齿形，与官方双弧齿形不同——
+                 14px 下齿缘渲染毛糙的根因）；官方路径 + 官方 stroke 2 -->
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        </nav>
         <aside class="sidebar">
           <div class="sidebar-header">
             <div class="sidebar-heading">
@@ -139,14 +193,14 @@ class App {
             <div class="sidebar-tools">
               <span class="sidebar-count" id="skin-count"></span>
               <button id="skin-search-toggle" class="search-toggle" title="${t('list.searchToggle')}">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               </button>
             </div>
           </div>
           <!-- 可收起搜索行：平时只占头部一个放大镜钮（零占位），点击或
                Ctrl/Cmd+F 展开；有查询词时强制保持展开，清空后 Esc/再点收起 -->
           <div class="sidebar-search">
-            <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+            <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input id="skin-search" type="text" placeholder="${t('list.searchPlaceholder')}" autocomplete="off" spellcheck="false" />
             <button id="skin-search-clear" class="search-clear" title="${t('list.searchClear')}">
               <svg width="10" height="10" viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -160,17 +214,6 @@ class App {
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/></svg>
               ${t('app.addSkin')}
             </button>
-            <div class="footer-actions">
-              <button id="btn-refresh" class="icon-btn" title="${t('app.refreshList')}">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
-              </button>
-              <button id="btn-open-folder" class="icon-btn" title="${t('app.openFolder')}">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              </button>
-              <button id="btn-settings" class="icon-btn" title="${t('settings.title')}">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-              </button>
-            </div>
           </div>
         </aside>
         <main class="main-panel" id="main-panel">
@@ -191,7 +234,7 @@ class App {
       <!-- 拖放安装的悬停反馈遮罩（拖入窗口时 .show，drop/leave 摘除） -->
       <div class="drop-mask" id="drop-mask">
         <div class="drop-mask-inner">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
           <span>${t('app.dropHint')}</span>
         </div>
       </div>`;
@@ -308,6 +351,32 @@ class App {
     // 「添加皮肤」直接安装 .dskin 皮肤包
     if (addBtn) {
       addBtn.onclick = () => this.installFromPackage();
+    }
+
+    // 亮暗主题快速切换：按当前生效主题（data-theme 实态——auto 模式下
+    // 就是系统解析结果）切到反方显式模式；图标与标题随属性自动同步
+    //（MutationObserver 盯 data-theme，设置页改动/系统自动切换同样命中）
+    const themeBtn = document.getElementById('btn-theme-toggle');
+    if (themeBtn) {
+      themeBtn.onclick = async () => {
+        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        themeBtn.disabled = true;
+        try {
+          await API.setTheme(next);
+          applyTheme(next);
+        } catch (err) {
+          this.showToast(t('common.setFailed') + String(err), 'error');
+        } finally {
+          themeBtn.disabled = false;
+        }
+      };
+      this.updateThemeToggleIcon();
+    }
+
+    // 布局方案面板（保存/应用/管理命名布局）
+    const layoutsBtn = document.getElementById('btn-layouts');
+    if (layoutsBtn) {
+      layoutsBtn.onclick = () => this.layoutPanel.open();
     }
 
     if (refreshBtn) {

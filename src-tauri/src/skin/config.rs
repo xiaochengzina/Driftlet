@@ -93,14 +93,18 @@ pub(crate) fn normalize_mode_flags(config: &mut AppConfig) -> bool {
 /// Drop persisted entries (skin_settings / loaded_skins) for skins that no
 /// longer exist on disk — folder deleted outside the app, or the author
 /// changed the id — otherwise residue accumulates in config.json forever.
+/// 分组归属表（skin_group_map）里的孤儿皮肤 id 一并清理；指向已消失组的
+/// 条目同清（皮肤回落「未分组」语义）。
 /// Returns how many entries were removed.  Called at startup (lib.rs setup)
 /// and after a backup import (backup.rs).
 pub fn prune_stale_entries(config: &mut AppConfig, skins: &[crate::skin::types::Skin]) -> usize {
     let valid: std::collections::HashSet<&str> = skins.iter().map(|s| s.id.as_str()).collect();
-    let before = config.skin_settings.len() + config.loaded_skins.len();
+    let before = config.skin_settings.len() + config.loaded_skins.len() + config.skin_group_map.len();
     config.skin_settings.retain(|id, _| valid.contains(id.as_str()));
     config.loaded_skins.retain(|id| valid.contains(id.as_str()));
-    before - config.skin_settings.len() - config.loaded_skins.len()
+    let group_ids: std::collections::HashSet<&str> = config.skin_groups.iter().map(|g| g.id.as_str()).collect();
+    config.skin_group_map.retain(|sid, gid| valid.contains(sid.as_str()) && group_ids.contains(gid.as_str()));
+    before - config.skin_settings.len() - config.loaded_skins.len() - config.skin_group_map.len()
 }
 
 /// Save config to disk atomically (write temp, then rename)

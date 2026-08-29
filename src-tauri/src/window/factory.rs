@@ -1464,6 +1464,7 @@ fn save_dragged_size(app: &AppHandle, skin_id: &str, width: u32, height: u32) {
 pub const SKIN_MENU_OPEN_CONFIG: u32 = 1;
 pub const SKIN_MENU_RELOAD: u32 = 2;
 pub const SKIN_MENU_UNLOAD: u32 = 3;
+pub const SKIN_MENU_HIDE: u32 = 4;
 
 /// Disable WebView2's default browser context menu on a skin window —
 /// right-click shows our own native menu instead (track_skin_popup_menu).
@@ -1590,9 +1591,11 @@ pub fn track_skin_popup_menu(window: &tauri::WebviewWindow, lang: &str) -> u32 {
         // the whole block anyway.
         let open_config = HSTRING::from(tr(lang, Key::MenuOpenConfig));
         let reload = HSTRING::from(tr(lang, Key::MenuReload));
+        let hide = HSTRING::from(tr(lang, Key::MenuHideSkin));
         let unload = HSTRING::from(tr(lang, Key::MenuUnload));
         let _ = AppendMenuW(menu, MF_STRING, SKIN_MENU_OPEN_CONFIG as usize, PCWSTR(open_config.as_ptr()));
         let _ = AppendMenuW(menu, MF_STRING, SKIN_MENU_RELOAD as usize, PCWSTR(reload.as_ptr()));
+        let _ = AppendMenuW(menu, MF_STRING, SKIN_MENU_HIDE as usize, PCWSTR(hide.as_ptr()));
         let _ = AppendMenuW(menu, MF_STRING, SKIN_MENU_UNLOAD as usize, PCWSTR(unload.as_ptr()));
 
         let mut pt = POINT::default();

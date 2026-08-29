@@ -56,6 +56,7 @@ pub fn scan_skins_directory(skins_dir: &Path) -> Vec<Skin> {
                 skins.push(Skin {
                     id,
                     manifest,
+                    origin: read_origin_marker(&path),
                     directory: path,
                 });
             }
@@ -72,6 +73,15 @@ pub fn scan_skins_directory(skins_dir: &Path) -> Vec<Skin> {
 
 /// skin.json 体积上限：手写/打包的清单都是小文件，超限即视为异常
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024; // 1 MB
+
+/// 提取 skin.json 的 `x-driftlet-origin`（副本来源标记，见 types.rs Skin.origin）。
+/// 单独以 Value 解析——manifest 结构体不含此字段（pack-skin 镜像零扰动）；
+/// 读失败/字段缺失/非字符串一律 None（宽容：手写的皮肤没有它）。
+fn read_origin_marker(skin_dir: &Path) -> Option<String> {
+    let text = fs::read_to_string(skin_dir.join("skin.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    value.get("x-driftlet-origin")?.as_str().map(str::to_string)
+}
 
 /// Parse skin.json from a skin directory
 pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
