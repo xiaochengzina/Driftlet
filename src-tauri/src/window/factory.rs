@@ -924,8 +924,8 @@ pub fn create_skin_window(
         // 持久化配置的宽高同钳 [1,10000]——config.json 可手改，钳制不能只
         // 拦 manifest 默认值一侧（复审 B-F5：巨型表面吃 GPU 内存/建窗失败）
         .inner_size(
-            config.width.clamp(1, 10000) as f64 * zoom,
-            config.height.clamp(1, 10000) as f64 * zoom,
+            config.width.clamp(1, crate::skin::types::MAX_DIMENSION) as f64 * zoom,
+            config.height.clamp(1, crate::skin::types::MAX_DIMENSION) as f64 * zoom,
         )
         .position(x as f64, y as f64)
         .decorations(false)
@@ -987,8 +987,12 @@ pub fn create_skin_window(
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
         install_frameless(app, hwnd.0 as isize, &skin.id);
-        // 边缘吸附状态登记（子类 WM_MOVING 按 HWND 查询）
-        crate::window::snap::upsert(hwnd.0 as isize, config.edge_snap, config.snap_gap);
+        // 边缘吸附状态登记（子类 WM_MOVING 按 HWND 查询）；None = 跟随 manifest
+        crate::window::snap::upsert(
+            hwnd.0 as isize,
+            config.edge_snap.unwrap_or(skin.manifest.window.edge_snap),
+            config.snap_gap.unwrap_or(skin.manifest.window.snap_gap),
+        );
         // 鼠标穿透：先登记 HWND（子类随即对 TRANSPARENT|LAYERED 放行），再让
         // tao 置位——顺序反了位会被子类摘回。失效仅降级为「不穿透」，不阻断建窗。
         if config.click_through {
@@ -1467,6 +1471,67 @@ pub const SKIN_MENU_OPEN_CONFIG: u32 = 1;
 pub const SKIN_MENU_RELOAD: u32 = 2;
 pub const SKIN_MENU_UNLOAD: u32 = 3;
 pub const SKIN_MENU_HIDE: u32 = 4;
+/// 窗口行为快捷开关段（勾选态 = 当前态；勾选语义与编辑器「窗口」页一致）
+pub const SKIN_MENU_PLACE_TOP: u32 = 10;
+pub const SKIN_MENU_LOCK: u32 = 11;
+pub const SKIN_MENU_CLICK_THROUGH: u32 = 12;
+pub const SKIN_MENU_RESIZABLE: u32 = 13;
+pub const SKIN_MENU_EDGE_SNAP: u32 = 14;
+/// 自定义菜单项（皮肤经 skin_set_menu_items 运行时注册）：菜单 id =
+/// SKIN_MENU_CUSTOM_BASE + 项序号，最多 SKIN_MENU_CUSTOM_MAX 条
+pub const SKIN_MENU_CUSTOM_BASE: u32 = 100;
+pub const SKIN_MENU_CUSTOM_MAX: usize = 8;
+
+/// 行为快捷开关段的当前态（菜单打开时快照一次）
+#[derive(Debug, Clone, Copy)]
+pub struct SkinQuickState {
+    pub on_top: bool,
+    pub locked: bool,
+    pub click_through: bool,
+    pub resizable: bool,
+    pub edge_snap: bool,
+}
+
+/// 皮肤自定义右键菜单项（运行时注册，与 manifest 无关——皮肤可随状态改
+/// 文案与勾选态，如倒数日的「当前尺寸档位」勾选）
+#[derive(Debug, Clone)]
+pub struct SkinMenuItem {
+    pub id: String,
+    pub label_zh: String,
+    pub label_en: String,
+    pub checked: bool,
+}
+
+/// 皮肤自定义菜单项注册表：皮肤 id → 项。皮肤重载后页面重建、自行重注册；
+/// 卸载时清除（unload_skin_impl）。
+static SKIN_MENU_ITEMS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, Vec<SkinMenuItem>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+pub fn skin_menu_items(skin_id: &str) -> Vec<SkinMenuItem> {
+    SKIN_MENU_ITEMS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(skin_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+pub fn set_skin_menu_items(skin_id: &str, items: Vec<SkinMenuItem>) {
+    let mut map = SKIN_MENU_ITEMS.lock().unwrap_or_else(|e| e.into_inner());
+    if items.is_empty() {
+        map.remove(skin_id);
+    } else {
+        map.insert(skin_id.to_string(), items);
+    }
+}
+
+pub fn clear_skin_menu_items(skin_id: &str) {
+    SKIN_MENU_ITEMS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(skin_id);
+}
 
 /// Disable WebView2's default browser context menu on a skin window —
 /// right-click shows our own native menu instead (track_skin_popup_menu).
@@ -1569,15 +1634,21 @@ pub fn spawn_webview_hardening_retry(app: &AppHandle, label: &str) {
 }
 
 /// Show the skin's right-click popup menu at the cursor position and return
-/// the chosen SKIN_MENU_* id (0 = cancelled).  Modal — MUST be called on
-/// the window's owner (main) thread.  `lang` selects the menu language.
+/// the chosen SKIN_MENU_* id (0 = cancelled, ≥ SKIN_MENU_CUSTOM_BASE = 自定义
+/// 项序号 + BASE)。  Modal — MUST be called on the window's owner (main)
+/// thread.  `lang` selects the menu language.
 #[cfg(target_os = "windows")]
-pub fn track_skin_popup_menu(window: &tauri::WebviewWindow, lang: &str) -> u32 {
+pub fn track_skin_popup_menu(
+    window: &tauri::WebviewWindow,
+    lang: &str,
+    quick: SkinQuickState,
+    custom_items: &[SkinMenuItem],
+) -> u32 {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Foundation::{HWND, POINT};
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, SetForegroundWindow,
-        TrackPopupMenu, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD,
+        TrackPopupMenu, MF_CHECKED, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD,
     };
     use crate::i18n::{tr, Key};
 
@@ -1591,14 +1662,58 @@ pub fn track_skin_popup_menu(window: &tauri::WebviewWindow, lang: &str) -> u32 {
         };
         // AppendMenuW copies the string, but keep the HSTRINGs alive for
         // the whole block anyway.
+        let mut keepalive: Vec<HSTRING> = Vec::new();
+        let mut append = |menu, flags, id, text: &HSTRING| {
+            let _ = AppendMenuW(menu, flags, id, PCWSTR(text.as_ptr()));
+            keepalive.push(text.clone());
+        };
         let open_config = HSTRING::from(tr(lang, Key::MenuOpenConfig));
         let reload = HSTRING::from(tr(lang, Key::MenuReload));
         let hide = HSTRING::from(tr(lang, Key::MenuHideSkin));
         let unload = HSTRING::from(tr(lang, Key::MenuUnload));
-        let _ = AppendMenuW(menu, MF_STRING, SKIN_MENU_OPEN_CONFIG as usize, PCWSTR(open_config.as_ptr()));
-        let _ = AppendMenuW(menu, MF_STRING, SKIN_MENU_RELOAD as usize, PCWSTR(reload.as_ptr()));
-        let _ = AppendMenuW(menu, MF_STRING, SKIN_MENU_HIDE as usize, PCWSTR(hide.as_ptr()));
-        let _ = AppendMenuW(menu, MF_STRING, SKIN_MENU_UNLOAD as usize, PCWSTR(unload.as_ptr()));
+        let place_top = HSTRING::from(tr(lang, Key::MenuPlaceTop));
+        let lock_pos = HSTRING::from(tr(lang, Key::MenuLockPosition));
+        let click_through = HSTRING::from(tr(lang, Key::MenuClickThrough));
+        let resizable = HSTRING::from(tr(lang, Key::MenuResizable));
+        let edge_snap = HSTRING::from(tr(lang, Key::MenuEdgeSnap));
+        append(menu, MF_STRING, SKIN_MENU_OPEN_CONFIG as usize, &open_config);
+        append(menu, MF_STRING, SKIN_MENU_RELOAD as usize, &reload);
+
+        // 窗口行为快捷开关段（勾选态 = 当前态；与编辑器「窗口」页同语义同文案）
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let mut quick_item = |on: bool, id: u32, text: &HSTRING| {
+            append(menu, if on { MF_STRING | MF_CHECKED } else { MF_STRING }, id as usize, text);
+        };
+        quick_item(quick.on_top, SKIN_MENU_PLACE_TOP, &place_top);
+        quick_item(quick.locked, SKIN_MENU_LOCK, &lock_pos);
+        quick_item(quick.click_through, SKIN_MENU_CLICK_THROUGH, &click_through);
+        quick_item(quick.resizable, SKIN_MENU_RESIZABLE, &resizable);
+        quick_item(quick.edge_snap, SKIN_MENU_EDGE_SNAP, &edge_snap);
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+        append(menu, MF_STRING, SKIN_MENU_HIDE as usize, &hide);
+
+        // 自定义项带分隔线自成一段、卸载始终垫底（破坏性操作不动位）
+        if !custom_items.is_empty() {
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+            let zh = lang.starts_with("zh");
+            for (i, item) in custom_items.iter().enumerate() {
+                // 与 manifest 文案同规则：界面语言优先、缺失回退另一语言
+                let label = if zh {
+                    if item.label_zh.is_empty() { &item.label_en } else { &item.label_zh }
+                } else if item.label_en.is_empty() {
+                    &item.label_zh
+                } else {
+                    &item.label_en
+                };
+                let text = HSTRING::from(label.as_str());
+                let flags = if item.checked { MF_STRING | MF_CHECKED } else { MF_STRING };
+                append(menu, flags, SKIN_MENU_CUSTOM_BASE as usize + i, &text);
+            }
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        }
+
+        append(menu, MF_STRING, SKIN_MENU_UNLOAD as usize, &unload);
 
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);

@@ -28,6 +28,8 @@ const I18N = {
     empty: '（空）',
     secretSet: (n) => `已设置（${n} 个字符）`,
     defaultFont: '默认字体',
+    gpuAuto: '首项（自动）',
+    gpuPicked: '已指定适配器（LUID 绑定）',
     weekdays: { mon: '周一', tue: '周二', wed: '周三', thu: '周四', fri: '周五', sat: '周六', sun: '周日' },
   },
   en: {
@@ -41,6 +43,8 @@ const I18N = {
     empty: '(empty)',
     secretSet: (n) => `Set (${n} chars)`,
     defaultFont: 'Default font',
+    gpuAuto: 'First (auto)',
+    gpuPicked: 'Adapter pinned (LUID)',
     weekdays: { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' },
   },
 };
@@ -182,6 +186,7 @@ function formatValue(def, value) {
     return value && value.start ? `${value.start} → ${value.end || '…'}` : t('notSet');
   }
   if (type === 'font') return value || t('defaultFont');
+  if (type === 'gpu_adapter') return value ? t('gpuPicked') : t('gpuAuto');
   if (value === '' || value === null || value === undefined) return t('notSet');
   return String(value);
 }

@@ -1,0 +1,24 @@
+{
+  "id": "isles-template",
+  "name_zh": "屿族模板",
+  "name_en": "Isles Template",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description_zh": "屿族新皮肤骨架：复制本文件夹、改 id 与名称后起步",
+  "description_en": "Starter skeleton for new Isles skins: copy this folder, then change id and names",
+  "entry": "index.html",
+  "window": {
+    "width": 200,
+    "height": 200,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0
+  },
+  "permissions": [],
+  "settings": [
+    { "key": "title", "type": "text", "label_zh": "标题", "label_en": "Title", "description_zh": "卡面顶部的一行小标题", "description_en": "A small caption at the top of the card", "default": "今年第几天" },
+    { "key": "accent", "type": "palette", "label_zh": "点缀色", "label_en": "Accent", "description_zh": "图标与强调元素的颜色", "description_en": "Color of the icon and emphasis elements", "default": "#3B82F6" }
+  ]
+}

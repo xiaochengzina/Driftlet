@@ -246,10 +246,11 @@ const API = {
     return invoke('open_release_page');
   },
 
-  // 自动下载新版安装包（完成才 resolve 出路径；网络失败 reject——
-  // 前端降级为「前往下载」）
-  downloadUpdate(url, version) {
-    return invoke('download_update', { url, version });
+  // 自动下载新版安装包（多源竞速 + 分段并行提速；sha256 = check_update
+  // 带回的官方哈希，有它镜像源才参与、落盘哈希不符即废；完成才 resolve
+  // 出路径——网络失败 reject，前端降级为「前往下载」）
+  downloadUpdate(url, version, sha256) {
+    return invoke('download_update', { url, version, sha256 });
   },
 
   // 立即安装：启动已下载的安装包并整站退出
@@ -269,6 +270,10 @@ const API = {
 
   listSystemFonts() {
     return invoke('list_system_fonts');
+  },
+
+  listGpuAdapters() {
+    return invoke('list_gpu_adapters');
   },
 
   openSkinFolder(skinId) {

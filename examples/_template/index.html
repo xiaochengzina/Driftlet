@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<!-- 引入顺序固定：tokens → base → 皮肤自身样式 -->
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="base.css" />
+<style>
+  /* 皮肤自身样式只写布局，不写令牌已有的颜色/字级 */
+  .card { align-items: flex-start; justify-content: space-between; }
+  .num-row { display: flex; align-items: baseline; gap: 0.35em; }
+</style>
+</head>
+<body>
+  <!-- 卡壳 = 唯一根容器，恒加 drag-region；M 档加 isles-card--s -->
+  <div class="isles-card isles-card--s drag-region card">
+    <div class="isles-caption" id="title"></div>
+    <div class="num-row">
+      <span class="isles-display" id="num"></span>
+      <span class="isles-unit" id="unit"></span>
+    </div>
+  </div>
+  <script src="base.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

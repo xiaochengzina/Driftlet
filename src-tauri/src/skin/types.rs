@@ -146,6 +146,10 @@ pub enum SkinSettingKind {
     File,
     /// 文件夹选择器，值 = 绝对路径字符串，空串 = 未选
     Directory,
+    /// GPU 适配器选择器（管理器运行时枚举本机 GPU 生成下拉项），
+    /// 值 = 适配器 LUID 字符串（"0xHHHHHHHH_0xLLLLLLLL"），空串 = 首项（自动）
+    #[serde(rename = "gpu_adapter")]   // 显式 rename：lowercase 规则会生成 gpuadapter，保留下划线名
+    GpuAdapter,
 }
 
 /// A custom setting declared by the skin author in skin.json "settings".
@@ -223,6 +227,13 @@ pub struct WindowDefaults {
     /// 刷新。仅网页皮肤有意义（本地皮肤的内容刷新走右键/热重载）。
     #[serde(default)]
     pub refresh_seconds: Option<u32>,
+    /// 边缘吸附默认值：拖动窗口靠近屏幕边缘或其他皮肤窗口边缘时自动对齐
+    ///（屏幕边缘优先）。仅作用于交互式拖动。「窗口」页可覆盖。
+    #[serde(default)]
+    pub edge_snap: bool,
+    /// 吸附间距默认值（逻辑像素）：吸附后与屏幕边缘/其他窗口之间保留的空隙。
+    #[serde(default)]
+    pub snap_gap: u32,
 }
 
 /// entry 是否是网页皮肤入口（http/https URL）：网页皮肤的窗口直接加载
@@ -231,6 +242,12 @@ pub(crate) fn is_url_entry(entry: &str) -> bool {
     let e = entry.trim_start();
     e.starts_with("https://") || e.starts_with("http://")
 }
+
+/// 窗口尺寸/不透明度钳制的单一锚点（审查 G7：字面量曾散落 commands/
+/// factory/loader/protocol 多处——改阈值只许动这里；pack-skin 侧为字面量
+/// 镜像，由 tools/check-pack-skin-mirror.py 对拍盯守）。
+pub const MAX_DIMENSION: u32 = 10000;
+pub const MIN_OPACITY: f64 = 0.1;
 
 fn default_width() -> u32 { 300 }
 fn default_height() -> u32 { 200 }
@@ -342,14 +359,15 @@ pub struct SkinRuntimeConfig {
     /// WS_EX_TRANSPARENT|WS_EX_LAYERED，无边框子类按 HWND 登记放行这两位。
     #[serde(default)]
     pub click_through: bool,
-    /// 边缘吸附开关：拖动窗口靠近屏幕边缘或其他皮肤窗口边缘时自动对齐
-    ///（屏幕边缘优先）。仅作用于交互式拖动（WM_MOVING），不影响面板
-    /// 输入的精确坐标。
+    /// 边缘吸附开关：None = 跟随 skin.json 的 window.edge_snap（老配置
+    /// 升级后字段缺失即 None）；Some(v) = 用户在「窗口」页/右键快捷段的
+    /// 显式选择。（与 resizable/zoom 同一 Option 跟随模式——审查 F2-A：
+    /// 裸 bool 让旧持久化条目永不跟随 manifest 新声明）
     #[serde(default)]
-    pub edge_snap: bool,
-    /// 吸附间距（逻辑像素）：吸附后与屏幕边缘/其他窗口之间保留的空隙。
+    pub edge_snap: Option<bool>,
+    /// 吸附间距（逻辑像素）：None = 跟随 manifest 默认；Some(v) = 用户显式选择。
     #[serde(default)]
-    pub snap_gap: u32,
+    pub snap_gap: Option<u32>,
     /// 皮肤专属显隐热键（"" = 未设置）：按下切换该皮肤窗口显隐——
     /// 注册表常驻（hotkey.rs 的 SKIN_HOTKEYS），皮肤未加载时按下静默
     /// 无效果（无窗可切），不需加载/卸载钩子。
@@ -377,8 +395,9 @@ impl SkinRuntimeConfig {
             resizable: None,
             zoom: None,
             click_through: false,
-            edge_snap: false,
-            snap_gap: 0,
+            // 边缘吸附：None = 跟随 manifest（皮肤可声明开启，如屿族六张）
+            edge_snap: None,
+            snap_gap: None,
             hotkey: String::new(),
         }
     }
@@ -402,8 +421,8 @@ impl Default for SkinRuntimeConfig {
             resizable: None,
             zoom: None,
             click_through: false,
-            edge_snap: false,
-            snap_gap: 0,
+            edge_snap: None,
+            snap_gap: None,
             hotkey: String::new(),
         }
     }
@@ -454,6 +473,10 @@ pub struct AppConfig {
     ///（elevation.rs 的 should_demote 读它）。
     #[serde(default)]
     pub allow_elevated: bool,
+    /// 内置族皮肤首装种子已落（安装包打包的 isles-* 已装进 skins 目录并归入
+    /// 「默认皮肤」组）：一次性标记——用户删过的皮肤不复活、组被删过不重建。
+    #[serde(default)]
+    pub bundled_skins_seeded: bool,
 }
 
 fn default_hot_reload() -> bool {
@@ -553,6 +576,7 @@ impl Default for AppConfig {
             hot_reload: default_hot_reload(),
             update_check: default_update_check(),
             allow_elevated: false,
+            bundled_skins_seeded: false,
         }
     }
 }

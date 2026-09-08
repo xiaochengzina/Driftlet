@@ -66,6 +66,7 @@ pub fn collect() -> Vec<GpuInfo> {
             };
             GpuInfo {
                 name: a.name,
+                luid: format!("0x{:08X}_0x{:08X}", a.luid.0, a.luid.1),
                 gpu_type: if a.unified { "integrated" } else { "discrete" }.to_string(),
                 usage,
                 vram_total,

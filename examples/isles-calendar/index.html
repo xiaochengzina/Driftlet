@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="base.css" />
+<style>
+  /* 基态 = P 横条：左区日期信息（随点选换）+ 右区月历，发丝分隔线分区（天气同款） */
+  .card {
+    flex-direction: row;
+    align-items: stretch;
+    gap: clamp(10px, min(4cqw, 8cqh), 22px);
+    /* 文字深浅副色按卡面主色重新派生（自定义属性继承声明处计算值的经典坑） */
+    --isles-fg-2: color-mix(in srgb, var(--isles-fg) 62%, transparent);
+    --isles-fg-3: color-mix(in srgb, var(--isles-fg) 45%, transparent);
+  }
+
+  .side {
+    flex: none;
+    /* 宽度上限：农历长行（星期一 · 七月廿六 · 白露）会把右区月历挤出卡——
+       钉 42cqw + 省略号（无头截图实证：右区被顶出卡缘、末两列被裁） */
+    width: clamp(112px, 42cqw, 170px);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-width: 0;
+    padding-right: clamp(12px, min(4cqw, 8cqh), 20px);
+    border-right: 1px solid color-mix(in srgb, var(--isles-fg) 8%, transparent);
+  }
+  #ym, #lunar { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #ym { color: var(--isles-fg-3); }
+  #day { font-weight: 400; }   /* 横档数字加重（350 偏飘的族实机教训） */
+  #lunar { color: var(--isles-fg-2); }
+  /* 节日行：全卡唯一 accent 文字元素（无节日时真移除不占位） */
+  .fest { color: var(--isles-accent); font-weight: 600; }
+  .fest:empty { display: none; }
+
+  /* ── 右区月历：月份导航行 + 星期头 + 42 格 ── */
+  .month {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    /* 导航行/星期头/网格三段之间给足呼吸（原 1.2cqh 过紧，实机反馈间距） */
+    gap: clamp(4px, 2.4cqh, 8px);
+  }
+  .mhead { display: flex; align-items: center; }
+  #mtitle {
+    flex: 1;
+    text-align: center;
+    color: var(--isles-fg-2);
+    letter-spacing: 0.12em;
+    cursor: pointer;   /* 点标题 = 回本月今天 */
+    border: none;
+    background: transparent;
+    padding: 1px 8px;
+    border-radius: 8px;
+    font-family: inherit;
+    transition: background 0.15s ease;
+  }
+  #mtitle:hover { background: color-mix(in srgb, var(--isles-fg) 7%, transparent); }   /* 可点性可视化 */
+  .mnav {
+    width: clamp(20px, min(8cqw, 16cqh), 26px);
+    height: clamp(20px, min(8cqw, 16cqh), 26px);
+    flex: none;
+    /* 幽灵化：默认无钮底，悬停才浮现 chip（实机反馈） */
+    background: transparent;
+    color: var(--isles-fg-3);
+  }
+  .mnav:hover {
+    background: color-mix(in srgb, var(--isles-ink) 8%, transparent);
+    color: var(--isles-fg-2);
+  }
+  .whead, .grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+  }
+  .whead span {
+    text-align: center;
+    font-size: clamp(9px, min(3cqw, 6cqh), 12px);
+    letter-spacing: 0.08em;
+    color: var(--isles-fg-3);
+  }
+  .grid { flex: 1; grid-auto-rows: 1fr; min-height: 0; row-gap: clamp(1px, 1cqh, 3px); }
+  .cell {
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    min-width: 0;
+    /* 日期格必须是 button（桥的拖动接管豁免 button/input 等交互元素——
+       div 格子的 click 会被 start_skin_drag 吃掉，实机点选失灵的事故） */
+    border: none;
+    background: transparent;
+    padding: 0;
+    font-family: inherit;
+    color: inherit;
+  }
+  .cell > span {
+    display: grid;
+    place-items: center;
+    width: 1.7em;
+    height: 1.7em;
+    border-radius: 50%;
+    font-size: clamp(9px, min(3.2cqw, 6.5cqh), 13px);
+    font-variant-numeric: tabular-nums;
+    color: var(--isles-fg-2);
+    transition: background 0.12s ease, transform 0.12s ease;
+  }
+  .cell.other > span { color: var(--isles-fg-3); opacity: 0.55; }
+  /* 周末两列弱化（今天/选中/节日态让位） */
+  .cell.weekend:not(.today):not(.sel):not(.fest-day) > span { color: var(--isles-fg-3); }
+  .cell:hover > span { background: color-mix(in srgb, var(--isles-fg) 8%, transparent); }
+  .cell:active > span { transform: scale(0.85); }   /* 按压回弹（与族工具钮同律） */
+  /* 节日日 = accent 数字（被选中/今天态另有所属时让位） */
+  .cell.fest-day:not(.today):not(.sel) > span { color: var(--isles-accent); font-weight: 600; }
+  /* 今天 = accent 实心圆点；点选 = 加粗 accent 圆环 + 格圈放大一档（选中要一眼可辨） */
+  .cell.today > span { background: var(--isles-accent); color: var(--isles-on-photo); font-weight: 600; }
+  .cell.sel:not(.today) > span {
+    width: 1.9em;
+    height: 1.9em;
+    box-shadow: inset 0 0 0 2px var(--isles-accent);
+    color: var(--isles-accent);
+    font-weight: 600;
+  }
+
+  /* 「回今天」小链：仅选中非今天时浮现（隐形回程路径是可用性坑） */
+  #back-today {
+    display: none;
+    border: none;
+    background: transparent;
+    padding: 0;
+    font-family: inherit;
+    font-size: clamp(11px, min(3.6cqw, 7cqh), 15px);
+    letter-spacing: 0.1em;
+    color: var(--isles-accent);
+    cursor: pointer;
+    text-align: left;
+  }
+  .card.has-sel #back-today { display: block; }   /* has-sel 只在横条档加（M 档恒今天） */
+
+  /* M 档顶/底悬浮行（P 档隐藏） */
+  .mtop, .mbot { display: none; }
+
+  /* ── M 小方（≤240px 宽）：只看今天——大日子居中、顶/底行悬浮，月历隐藏 ── */
+  @container (max-width: 240px) {
+    .side { position: absolute; inset: 0; width: auto; padding-right: 0; border-right: none; align-items: center; justify-content: center; z-index: 1; }
+    #day { font-weight: 500; }   /* 小档数字加重 */
+    #ym, #lunar, #fest { display: none; }
+    .month { display: none; }
+    .mtop, .mbot {
+      display: block;
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      text-align: center;
+      z-index: 1;
+    }
+    .mtop { top: 12px; }
+    .mbot { bottom: 12px; }
+  }
+  /* 英文界面底行留空时真移除（英文不显示农历/节日——实机反馈） */
+  .mbot:empty { display: none; }
+</style>
+</head>
+<body>
+  <div class="isles-card drag-region card" id="card">
+    <span class="isles-caption mtop" id="mtop"></span>
+    <div class="side" id="side">
+      <span class="isles-caption" id="ym"></span>
+      <span class="isles-display" id="day"></span>
+      <span class="isles-caption" id="lunar"></span>
+      <span class="isles-caption fest" id="fest"></span>
+      <button type="button" id="back-today"></button>
+    </div>
+    <div class="month" id="month">
+      <div class="mhead">
+        <button type="button" class="isles-toolbtn mnav" id="prev">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <button type="button" class="isles-caption" id="mtitle"></button>
+        <button type="button" class="isles-toolbtn mnav" id="next">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+      <div class="whead" id="whead"></div>
+      <div class="grid" id="grid"></div>
+    </div>
+    <span class="isles-caption mbot" id="mbot"></span>
+  </div>
+  <script src="base.js"></script>
+  <script src="vendor/lunar.min.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

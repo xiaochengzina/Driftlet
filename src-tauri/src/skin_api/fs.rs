@@ -231,7 +231,15 @@ pub fn write_file(base: &Path, rel: &str, data: &str, binary: bool, lang: &str) 
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
     }
-    std::fs::write(&p, bytes).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
+    // 原子写（tmp + rename，与 config 保存同范式）：崩溃中写不得留下半文件
+    // ——timer-state.json 周期写、weather-cache.json、user-bg.jpg 都走这里
+    //（审查发现：直写崩一次整文件损坏）
+    let tmp = p.with_file_name(format!(
+        "{}.tmp",
+        p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    ));
+    std::fs::write(&tmp, &bytes).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
+    std::fs::rename(&tmp, &p).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
     // 登记自写：hotreload 不把皮肤自己的保存当成外部改动而触发热重载
     // （hotreload 模块仅 debug 构建存在，release 需同步 cfg 掉）
     #[cfg(debug_assertions)]

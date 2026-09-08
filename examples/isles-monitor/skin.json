@@ -1,0 +1,72 @@
+{
+  "id": "isles-monitor",
+  "name_zh": "系统占用",
+  "name_en": "System Load",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description_zh": "屿族纸卡：CPU / GPU / 内存三环占比 + 系统整体占用热力图，一瞥全览",
+  "description_en": "Isles paper card: CPU / GPU / memory rings plus an overall-load heatmap, everything at a glance",
+  "entry": "index.html",
+  "window": {
+    "width": 420,
+    "height": 200,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0,
+    "edge_snap": true,
+    "snap_gap": 20
+  },
+  "permissions": ["sys_info"],
+  "settings": [
+    { "key": "size", "type": "radio", "label_zh": "尺寸", "label_en": "Size", "group_zh": "窗口", "group_en": "Window", "description_zh": "屿族栅格两档——切换即调整窗口到对应尺寸", "description_en": "Two Isles grid tiers — switching resizes the window", "default": "wide",
+      "options": [
+        { "value": "wide", "label_zh": "横条 420×200（2×1）", "label_en": "Wide 420×200 (2×1)" },
+        { "value": "mini", "label_zh": "小方 200×200（1×1）", "label_en": "Mini 200×200 (1×1)" }
+      ] },
+
+    { "key": "outer", "type": "select", "label_zh": "外环数据", "label_en": "Outer Ring", "group_zh": "数据", "group_en": "Data", "description_zh": "最外环显示哪项；与其他环重复时自动对调位置", "description_en": "Metric on the outermost ring; duplicates swap places automatically", "default": "mem",
+      "options": [
+        { "value": "cpu", "label_zh": "CPU", "label_en": "CPU" },
+        { "value": "gpu", "label_zh": "GPU", "label_en": "GPU" },
+        { "value": "mem", "label_zh": "内存", "label_en": "Memory" }
+      ] },
+    { "key": "mid", "type": "select", "label_zh": "中环数据", "label_en": "Middle Ring", "group_zh": "数据", "group_en": "Data", "description_zh": "中间环显示哪项；与其他环重复时自动对调位置", "description_en": "Metric on the middle ring; duplicates swap places automatically", "default": "cpu",
+      "options": [
+        { "value": "cpu", "label_zh": "CPU", "label_en": "CPU" },
+        { "value": "gpu", "label_zh": "GPU", "label_en": "GPU" },
+        { "value": "mem", "label_zh": "内存", "label_en": "Memory" }
+      ] },
+    { "key": "inner", "type": "select", "label_zh": "内环数据", "label_en": "Inner Ring", "group_zh": "数据", "group_en": "Data", "description_zh": "最内环显示哪项；与其他环重复时自动对调位置", "description_en": "Metric on the inner ring; duplicates swap places automatically", "default": "gpu",
+      "options": [
+        { "value": "cpu", "label_zh": "CPU", "label_en": "CPU" },
+        { "value": "gpu", "label_zh": "GPU", "label_en": "GPU" },
+        { "value": "mem", "label_zh": "内存", "label_en": "Memory" }
+      ] },
+    { "key": "gpu_adapter", "type": "gpu_adapter", "label_zh": "GPU 数据源", "label_en": "GPU Source", "group_zh": "数据", "group_en": "Data", "description_zh": "多个 GPU（核显/独显）时按型号名选择本机 GPU（绑定 LUID，枚举顺序变化不影响）；「自动」= 独显优先（无独显取枚举首项）", "description_en": "Pick a GPU by model name when several exist (bound by LUID, immune to enumeration order); Auto = discrete GPU first (first enumerated when none)", "default": "" },
+
+    { "key": "w_cpu", "type": "stepper", "label_zh": "CPU 权重", "label_en": "CPU Weight", "group_zh": "热力图", "group_en": "Heatmap", "description_zh": "整体占用均值中 CPU 的占比权重（0–10）", "description_en": "CPU's weight in the overall mean (0–10)", "default": 1, "min": 0, "max": 10, "step": 1 },
+    { "key": "w_gpu", "type": "stepper", "label_zh": "GPU 权重", "label_en": "GPU Weight", "group_zh": "热力图", "group_en": "Heatmap", "description_zh": "整体占用均值中 GPU 的占比权重（0–10）", "description_en": "GPU's weight in the overall mean (0–10)", "default": 1, "min": 0, "max": 10, "step": 1 },
+    { "key": "w_mem", "type": "stepper", "label_zh": "内存权重", "label_en": "Memory Weight", "group_zh": "热力图", "group_en": "Heatmap", "description_zh": "整体占用均值中内存的占比权重（0–10）", "description_en": "Memory's weight in the overall mean (0–10)", "default": 1, "min": 0, "max": 10, "step": 1 },
+    { "key": "heat_seconds", "type": "stepper", "label_zh": "每格秒数", "label_en": "Seconds per Cell", "group_zh": "热力图", "group_en": "Heatmap", "description_zh": "热力图一格汇总多少秒（取窗口内均值，5–120）", "description_en": "How many seconds one heatmap cell aggregates (window mean, 5–120)", "default": 30, "min": 5, "max": 120, "step": 5 },
+
+    { "key": "theme", "type": "select", "label_zh": "主题", "label_en": "Theme", "group_zh": "外观", "group_en": "Appearance", "description_zh": "一键应用整套配色（会覆盖下方五个颜色项）", "description_en": "Apply a whole color scheme at once (overrides the five color settings below)", "default": "sora",
+      "options": [
+        { "value": "sora", "label_zh": "澄空", "label_en": "Clear Sky" },
+        { "value": "lime", "label_zh": "青柠", "label_en": "Lime" },
+        { "value": "lavender", "label_zh": "薰衣", "label_en": "Lavender" },
+        { "value": "nord", "label_zh": "极光（暗）", "label_en": "Nord (dark)" }
+      ] },
+    { "key": "direction", "type": "radio", "label_zh": "方向", "label_en": "Direction", "group_zh": "外观", "group_en": "Appearance", "description_zh": "横条档环与指标的左右排布（小方档上下对称不受影响）", "description_en": "Ring/metrics left-right arrangement in the wide tier (the mini tier is symmetric)", "default": "left",
+      "options": [
+        { "value": "left", "label_zh": "环在左", "label_en": "Ring left" },
+        { "value": "right", "label_zh": "环在右", "label_en": "Ring right" }
+      ] },
+    { "key": "bg_color", "type": "palette", "label_zh": "背景色", "label_en": "Background", "group_zh": "外观", "group_en": "Appearance", "description_zh": "卡面背景色；透明度滑杆让卡面半透明；零值格轨道色自动按背景明暗派生", "description_en": "Card background; the opacity slider makes the card translucent; the zero-cell track tint derives from its lightness automatically", "default": "#F0F6FC" },
+    { "key": "outer_color", "type": "palette", "label_zh": "外环颜色", "label_en": "Outer Ring Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "最外环的弧色与对应数据条", "description_en": "Arc of the outer ring and its metric bar", "default": "#2C82E4" },
+    { "key": "mid_color", "type": "palette", "label_zh": "中环颜色", "label_en": "Middle Ring Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "中间环的弧色与对应数据条", "description_en": "Arc of the middle ring and its metric bar", "default": "#2FA3D8" },
+    { "key": "inner_color", "type": "palette", "label_zh": "内环颜色", "label_en": "Inner Ring Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "最内环的弧色与对应数据条", "description_en": "Arc of the inner ring and its metric bar", "default": "#7A6FE8" },
+    { "key": "heat_color", "type": "palette", "label_zh": "热力色", "label_en": "Heat Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "热力图格子的五档加深基色（0 值格为前景淡轨道）", "description_en": "Base color of the heatmap's five deepening levels (zero cells use a faint foreground track)", "default": "#2C82E4" }
+  ]
+}

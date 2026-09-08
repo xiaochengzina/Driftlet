@@ -1,0 +1,42 @@
+{
+  "id": "isles-weather",
+  "name_zh": "天气",
+  "name_en": "Weather",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description_zh": "屿族天气卡：当下温度与五日预报一瞥（数据源 Open-Meteo，免密钥）",
+  "description_en": "Isles weather card: current temperature and a five-day outlook at a glance (Open-Meteo, no key)",
+  "entry": "index.html",
+  "window": {
+    "width": 420,
+    "height": 200,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0,
+    "edge_snap": true,
+    "snap_gap": 20
+  },
+  "permissions": ["network"],
+  "settings": [
+    { "key": "size", "type": "radio", "label_zh": "尺寸", "label_en": "Size", "group_zh": "窗口", "group_en": "Window", "description_zh": "屿族栅格两档——切换即调整窗口到对应尺寸", "description_en": "Two Isles grid tiers — switching resizes the window", "default": "wide",
+      "options": [
+        { "value": "wide", "label_zh": "横条 420×200（2×1）", "label_en": "Wide 420×200 (2×1)" },
+        { "value": "mini", "label_zh": "小方 200×200（1×1）", "label_en": "Mini 200×200 (1×1)" }
+      ] },
+
+    { "key": "city", "type": "text", "label_zh": "城市", "label_en": "City", "group_zh": "内容", "group_en": "Content", "description_zh": "城市名（中文/英文/拼音皆可，如 重庆 / Chongqing）——经 Open-Meteo 地理编码解析坐标", "description_en": "City name (any language or pinyin, e.g. Chongqing) — resolved to coordinates via Open-Meteo geocoding", "default": "" },
+    { "key": "refresh_min", "type": "stepper", "label_zh": "刷新间隔（分钟）", "label_en": "Refresh Interval (min)", "group_zh": "内容", "group_en": "Content", "description_zh": "天气数据多久刷新一次（10–120）", "description_en": "How often weather data refreshes (10–120)", "default": 30, "min": 10, "max": 120, "step": 5 },
+
+    { "key": "theme", "type": "select", "label_zh": "主题", "label_en": "Theme", "group_zh": "外观", "group_en": "Appearance", "description_zh": "一键应用整套配色（会覆盖下方颜色项）", "description_en": "Apply a whole color scheme at once (overrides the color settings below)", "default": "sora",
+      "options": [
+        { "value": "sora", "label_zh": "澄空", "label_en": "Clear Sky" },
+        { "value": "lime", "label_zh": "青柠", "label_en": "Lime" },
+        { "value": "lavender", "label_zh": "薰衣", "label_en": "Lavender" },
+        { "value": "nord", "label_zh": "极光（暗）", "label_en": "Nord (dark)" }
+      ] },
+    { "key": "bg_color", "type": "palette", "label_zh": "背景色", "label_en": "Background", "group_zh": "外观", "group_en": "Appearance", "description_zh": "卡面背景色；透明度滑杆让卡面半透明", "description_en": "Card background; the opacity slider makes the card translucent", "default": "#F0F6FC" },
+    { "key": "text_color", "type": "palette", "label_zh": "文字颜色", "label_en": "Text Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "卡面文字主色，副标自动派生深浅", "description_en": "Main text color; captions derive shades automatically", "default": "#17334E" }
+  ]
+}

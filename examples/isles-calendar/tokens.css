@@ -1,0 +1,49 @@
+/* ==========================================================================
+   屿 · Isles —— 设计令牌（三层：原语 → 语义）
+   唯一事实源：examples/shared/tokens.css
+   皮肤文件夹内的副本由 sync-shared.cjs 生成，禁止手工修改。
+   皮肤代码禁止写死十六进制色值——一律引用语义层变量。
+   ========================================================================== */
+
+:root {
+  /* ── 原语层 · 中性 ─────────────────────────────────────────── */
+  --isles-paper: #FBFCFE;   /* 卡面（微冷白） */
+  --isles-ink:   #1E2430;   /* 主文字 */
+  --isles-ink-2: #5A6474;   /* 次文字 */
+  --isles-ink-3: #9AA3B2;   /* 弱文字 / 单位 / 占位 */
+
+  /* ── 原语层 · 功能点缀 ─────────────────────────────────────── */
+  --isles-blue:   #3B82F6;  /* 信息（族默认 accent） */
+  --isles-green:  #12B886;  /* 健康 / 完成 */
+  --isles-coral:  #F26D5B;  /* 提醒 / 倒数 */
+  --isles-violet: #8B5CF6;  /* 纪念 / 生日 */
+
+  /* ── 原语层 · 图片卡用色 ───────────────────────────────────── */
+  /* 定向暗纱：色相 × 强度（0–1 乘数）由用户设置开放——color-mix 合成
+     见 base.css 的 .isles-card--photo::before */
+  --isles-scrim-color: #10141C;
+  --isles-on-photo:   #FFFFFF;
+  /* 兜底常量；真正的「随主色派生」在 base.css 的 .isles-card--photo 上
+     重新声明——自定义属性继承的是声明处的计算值，:root 里的 color-mix
+     不会跟随卡面对 --isles-on-photo 的覆盖（经典坑） */
+  --isles-on-photo-2: rgba(255, 255, 255, 0.72);
+  --isles-on-photo-3: rgba(255, 255, 255, 0.52);
+}
+
+:root {
+  /* ── 语义层 ────────────────────────────────────────────────── */
+  --isles-card-bg: var(--isles-paper);
+  --isles-fg:   var(--isles-ink);
+  --isles-fg-2: var(--isles-ink-2);
+  --isles-fg-3: var(--isles-ink-3);
+  --isles-accent: var(--isles-blue);  /* 皮肤经 Isles.setAccent() 覆盖 */
+
+  /* 族签名：恒定圆角，无外投影无描边——透明窗口里任何画到卡面外的
+     东西都会在圆角外积出半透明色晕（实机反馈），参考族谱是纯平卡片 */
+  --isles-radius: 24px;
+  --isles-radius-s: 20px;             /* M 档小卡 */
+
+  --isles-font:
+    "Segoe UI Variable Display", "Microsoft YaHei UI", "PingFang SC",
+    system-ui, sans-serif;
+}

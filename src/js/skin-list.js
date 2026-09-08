@@ -142,7 +142,14 @@ export default class SkinList {
 
     // 每行：勾选框 + 状态灯 + 名称 +（在别的组时的）现属组名——勾选他组
     // 皮肤 = 移过来，现属组名让这个「移」可预期
-    const rows = this.skins.map(s => {
+    // 排序：未分组皮肤靠前（新建/编辑都要先挑它们入组），其余保持列表
+    // 原顺序（sort 稳定）；勾选态与现属组签不受排序影响
+    const sorted = [...this.skins].sort((a, b) => {
+      const ga = this._groupOf(a.id) ? 1 : 0;
+      const gb = this._groupOf(b.id) ? 1 : 0;
+      return ga - gb;
+    });
+    const rows = sorted.map(s => {
       const owner = this._groupOf(s.id);
       const ownerName = (owner && owner !== gid)
         ? (this.groups.find(x => x.id === owner)?.name || '') : '';
@@ -260,6 +267,62 @@ export default class SkinList {
     });
   }
 
+  // 删除分组和所有皮肤（不可逆 + 批量 → 两段式二次确认）：第一段列明细，
+  // 第二段「最后确认」才执行；成员皮肤逐个卸载（remove_skin 拒绝运行中）
+  // 再删除——文件夹与设置一并消失；部分失败时组照删、失败皮肤回落「未分组」
+  confirmDeleteGroupAll(gid) {
+    const g = this.groups.find(x => x.id === gid);
+    if (!g) return;
+    const count = this.skins.filter(s => this._groupOf(s.id) === gid).length;
+    const run = async () => {
+      const members = this.skins.filter(s => this._groupOf(s.id) === gid);
+      let ok = 0;
+      let failed = 0;
+      // 逐个串行（窗口生命周期不开并发，与组内批量控制同口径）
+      for (const s of members) {
+        try {
+          if (s.loaded) await API.unloadSkin(s.id);
+          await API.removeSkin(s.id);
+          ok++;
+        } catch {
+          failed++;
+        }
+      }
+      // 组与归属清理：失败皮肤随组删除回落「未分组」（仍在盘上）
+      await this._commitGroups(() => {
+        this.groups = this.groups.filter(x => x.id !== gid);
+        for (const sid of Object.keys(this.groupMap)) {
+          if (this.groupMap[sid] === gid) delete this.groupMap[sid];
+        }
+      });
+      if (ok > 0) this.showToast(t('list.groupDeletedAll', { count: ok }), failed ? 'info' : 'success');
+      if (failed > 0) this.showToast(t('list.batchFailed', { count: failed }), 'error');
+      if (ok === 0 && failed === 0) this.showToast(t('list.groupDeleted'), 'info');   // 空组（无皮肤可删）也回馈
+      await this.refresh();
+    };
+    confirmDialog({
+      title: t('list.groupDeleteAllTitle'),
+      bodyHtml: count > 0
+        ? t('list.groupDeleteAllBody', { name: `<strong>"${esc(g.name)}"</strong>`, count })
+        : t('list.groupDeleteAllEmpty', { name: `<strong>"${esc(g.name)}"</strong>` }),
+      hint: t('list.groupDeleteAllHint'),
+      confirmText: count > 0 ? t('list.groupDeleteAllConfirm', { count }) : t('common.delete'),
+      danger: true,
+      onConfirm: () => {
+        // 空组（没有皮肤可删）与单段等价——第二段只在地基塌方时出现
+        if (count === 0) { run(); return; }
+        confirmDialog({
+          title: t('list.groupDeleteAllFinalTitle'),
+          bodyHtml: t('list.groupDeleteAllFinalBody', { name: `<strong>"${esc(g.name)}"</strong>`, count }),
+          hint: t('list.groupDeleteAllFinalHint'),
+          confirmText: t('list.groupDeleteAllFinalConfirm'),
+          danger: true,
+          onConfirm: run,
+        });
+      },
+    });
+  }
+
   // 组 ⋯ 菜单（body 级浮层；管理器全局禁右键，组操作走左键小菜单）。
   // 定位：右缘对齐锚点钮，横向钳在窗口内。结构：上段组编辑（编辑/删除），
   // 分隔线，下段组内皮肤批量控制（加载/卸载/隐藏/显示）
@@ -277,6 +340,7 @@ export default class SkinList {
     menu.innerHTML =
       item('edit', '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>', t('list.groupEdit')) +
       item('delete', '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>', t('list.groupDelete'), 'danger') +
+      item('delete-all', '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>', t('list.groupDeleteAll'), 'danger') +
       '<div class="menu-sep"></div>' +
       item('load', '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>', t('list.groupLoadAll')) +
       item('unload', '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>', t('list.groupUnloadAll')) +
@@ -295,6 +359,10 @@ export default class SkinList {
     menu.querySelector('[data-act="delete"]').addEventListener('click', () => {
       this.closeGroupMenu();
       this.confirmDeleteGroup(gid);
+    });
+    menu.querySelector('[data-act="delete-all"]').addEventListener('click', () => {
+      this.closeGroupMenu();
+      this.confirmDeleteGroupAll(gid);
     });
     for (const act of ['load', 'unload', 'hide', 'show']) {
       menu.querySelector(`[data-act="${act}"]`).addEventListener('click', () => {

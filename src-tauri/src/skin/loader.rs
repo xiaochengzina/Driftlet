@@ -119,16 +119,18 @@ pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
     // window 默认值归一化（作者手写的 skin.json 不做任何信任假设）：
     // 宽高钳到 [1, MAX_DIMENSION]（超大值会建出巨型表面吃 GPU 内存）；
     // opacity 非有限/越界回落 [0.1, 1.0]（opacity:0 + 置顶 + 巨尺寸 =
-    // 隐形置顶吃点击窗口——安装向导不展示 window 默认值，必须在这里拦）。
+    // 隐形置顶吃点击窗口——安装向导不展示 window 默认值，必须在这里拦）；
+    // snap_gap 钳到 ≤MAX_SNAP_GAP（与命令路径同一把尺）。
     // 注意：此钳制是安装端加载时的归一化（非拒绝）；pack-skin 有提示式
     // 镜像（声明值会被钳时打印提示，不改包内容、不拦截——给创作者
     // 「所见即所得」，无「打包放行、安装拒载」分歧）。
     // 改动必须同步镜像到 tools/pack-skin 并重建 exe。
-    manifest.window.width = manifest.window.width.clamp(1, 10000);
-    manifest.window.height = manifest.window.height.clamp(1, 10000);
+    manifest.window.width = manifest.window.width.clamp(1, crate::skin::types::MAX_DIMENSION);
+    manifest.window.height = manifest.window.height.clamp(1, crate::skin::types::MAX_DIMENSION);
     let op = manifest.window.opacity;
-    manifest.window.opacity = if op.is_finite() { op.clamp(0.1, 1.0) } else { 1.0 };
+    manifest.window.opacity = if op.is_finite() { op.clamp(crate::skin::types::MIN_OPACITY, 1.0) } else { 1.0 };
     manifest.window.zoom = crate::commands::clamp_zoom(manifest.window.zoom);
+    manifest.window.snap_gap = manifest.window.snap_gap.min(crate::window::snap::MAX_SNAP_GAP);
     // 网页皮肤自动刷新间隔钳到 ≤24h（作者手滑写大值的兜底）
     manifest.window.refresh_seconds = manifest.window.refresh_seconds.map(|s| s.min(86400));
 
@@ -273,7 +275,8 @@ fn type_fallback(def: &crate::skin::types::SkinSettingDef) -> serde_json::Value 
         | SkinSettingKind::Password
         | SkinSettingKind::Font
         | SkinSettingKind::File
-        | SkinSettingKind::Directory => Value::from(""),
+        | SkinSettingKind::Directory
+        | SkinSettingKind::GpuAdapter => Value::from(""),
         SkinSettingKind::Select | SkinSettingKind::Radio => def
             .options
             .first()
@@ -306,7 +309,8 @@ fn setting_value_matches(kind: SkinSettingKind, v: &serde_json::Value) -> bool {
         | SkinSettingKind::Radio
         | SkinSettingKind::Font
         | SkinSettingKind::File
-        | SkinSettingKind::Directory => v.is_string(),
+        | SkinSettingKind::Directory
+        | SkinSettingKind::GpuAdapter => v.is_string(),
         SkinSettingKind::MultiSelect
         | SkinSettingKind::TaskList
         | SkinSettingKind::TodoList
@@ -505,7 +509,7 @@ mod tests {
 
     #[test]
     fn shipped_example_skins_parse() {
-        let skins_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+        let skins_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../demos");
         let skins = scan_skins_directory(&skins_dir);
         assert!(skins.len() >= 1, "example skins failed to parse in {}", skins_dir.display());
 

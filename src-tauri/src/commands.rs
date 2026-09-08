@@ -325,6 +325,7 @@ pub(crate) async fn unload_skin_impl(app: AppHandle, skin_id: String) -> Result<
 
         factory::destroy_skin_window(&handle, &label)?;
         state.registry.unregister(&sid);
+        factory::clear_skin_menu_items(&sid);   // 自定义右键菜单项随窗口生命周期清除
 
         {
             let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
@@ -425,7 +426,7 @@ pub(crate) fn set_skin_opacity_impl(app: &AppHandle, skin_id: &str, opacity: f64
 
     // NaN 防线（与 clamp_zoom 同口径）：NaN 穿透 clamp 会落盘成 JSON null，
     // 整份配置读回时 opacity 字段失守回落默认
-    let clamped = if opacity.is_finite() { opacity.clamp(0.1, 1.0) } else { 1.0 };
+    let clamped = if opacity.is_finite() { opacity.clamp(crate::skin::types::MIN_OPACITY, 1.0) } else { 1.0 };
     window.eval(&format!("document.documentElement.style.opacity = '{}';", clamped))
         .map_err(|e| format!("opacity: {}", e))?;
 
@@ -523,35 +524,49 @@ pub(crate) fn set_skin_placement_impl(app: &AppHandle, skin_id: &str, placement:
         return Ok(());
     }
 
-    // 桌面 → 置顶：先 unpin 再置顶（pin 的 HWND_BOTTOM 会剥掉后设的位）
-    if aot && was_desktop {
-        if let Some(window) = state.registry.get(skin_id) {
-            #[cfg(target_os = "windows")]
-            if let Ok(hwnd) = window.hwnd() {
-                app.state::<AppState>().pinner.unpin(skin_id, hwnd.0 as isize);
+    // 窗口原位翻转失败 → 配置回滚到翻转前并落盘（先存后改不回滚 = 配置说
+    // 已翻转、窗口没动的三方分歧，审查 F4-B；快捷开关段让它一键可达后
+    // 暴露面变大）
+    let op_result: Result<(), String> = (|| {
+        // 桌面 → 置顶：先 unpin 再置顶（pin 的 HWND_BOTTOM 会剥掉后设的位）
+        if aot && was_desktop {
+            if let Some(window) = state.registry.get(skin_id) {
+                #[cfg(target_os = "windows")]
+                if let Ok(hwnd) = window.hwnd() {
+                    app.state::<AppState>().pinner.unpin(skin_id, hwnd.0 as isize);
+                }
+                window.set_always_on_top(true).map_err(|e| format!("{}", e))?;
+                #[cfg(target_os = "windows")]
+                factory::force_clean_skin_window(&window);
             }
-            window.set_always_on_top(true).map_err(|e| format!("{}", e))?;
-            #[cfg(target_os = "windows")]
-            factory::force_clean_skin_window(&window);
+            emit_window_config_changed(app, skin_id, "placement", serde_json::json!("top"));
+            return Ok(());
         }
-        emit_window_config_changed(app, skin_id, "placement", serde_json::json!("top"));
-        return Ok(());
-    }
 
-    // 置顶 → 桌面：先退置顶再 pin（原位翻转，不再 reload——整窗重建
-    // 会重置皮肤 JS 运行时状态）。pin 的落底与登记即建窗时同一路径
-    if !aot && !was_desktop {
-        if let Some(window) = state.registry.get(skin_id) {
-            window.set_always_on_top(false).map_err(|e| format!("{}", e))?;
-            #[cfg(target_os = "windows")]
-            if let Ok(hwnd) = window.hwnd() {
-                app.state::<AppState>().pinner.pin(skin_id, hwnd.0 as isize);
+        // 置顶 → 桌面：先退置顶再 pin（原位翻转，不再 reload——整窗重建
+        // 会重置皮肤 JS 运行时状态）。pin 的落底与登记即建窗时同一路径
+        if !aot && !was_desktop {
+            if let Some(window) = state.registry.get(skin_id) {
+                window.set_always_on_top(false).map_err(|e| format!("{}", e))?;
+                #[cfg(target_os = "windows")]
+                if let Ok(hwnd) = window.hwnd() {
+                    app.state::<AppState>().pinner.pin(skin_id, hwnd.0 as isize);
+                }
+                #[cfg(target_os = "windows")]
+                factory::force_clean_skin_window(&window);
             }
-            #[cfg(target_os = "windows")]
-            factory::force_clean_skin_window(&window);
+            emit_window_config_changed(app, skin_id, "placement", serde_json::json!("desktop"));
+            return Ok(());
         }
-        emit_window_config_changed(app, skin_id, "placement", serde_json::json!("desktop"));
-        return Ok(());
+        Ok(())
+    })();
+    if let Err(e) = op_result {
+        let mut app_config = state.config.lock().unwrap_or_else(|e2| e2.into_inner());
+        let entry = runtime_entry_or_manifest(&state, &mut app_config, skin_id);
+        entry.always_on_top = !was_desktop;
+        entry.on_desktop = was_desktop;
+        let _ = config::save_config(&state.config_dir, &app_config);
+        return Err(e);
     }
 
     Ok(())
@@ -629,7 +644,6 @@ pub(crate) fn set_skin_click_through_impl(app: &AppHandle, skin_id: &str, on: bo
 /// 位置/尺寸的钳制范围（逻辑像素）：IPC 入口统一把关，防离谱值把窗口
 /// 扔到屏幕外或撑爆桌面。
 const MAX_COORD: i32 = 32767;
-const MAX_DIMENSION: u32 = 10000;
 
 #[tauri::command]
 pub fn set_skin_position(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, x: i32, y: i32) -> Result<(), String> {
@@ -672,8 +686,8 @@ pub(crate) fn set_skin_size_impl(app: &AppHandle, skin_id: &str, width: u32, hei
     let state = app.state::<AppState>();
     let lang = state.lang();
     let window = state.registry.get(skin_id).ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
-    let width = width.clamp(1, MAX_DIMENSION);
-    let height = height.clamp(1, MAX_DIMENSION);
+    let width = width.clamp(1, crate::skin::types::MAX_DIMENSION);
+    let height = height.clamp(1, crate::skin::types::MAX_DIMENSION);
     // Config and UI store logical pixels (same convention as position and
     // as create_skin_window's inner_size).  PhysicalSize would disagree with
     // the creation size on scaled displays and "revert" on every reload.
@@ -865,6 +879,11 @@ pub(crate) fn validate_custom_setting(
             // 空串 = 未选）
             let s = require_str(def, value, Key::WhatText, lang)?;
             Ok(Value::String(s.chars().take(1024).collect()))
+        }
+        SkinSettingKind::GpuAdapter => {
+            // LUID 字符串：只验类型与长度（适配器存续由使用方兜底——找不到回退首项）
+            let s = require_str(def, value, Key::WhatText, lang)?;
+            Ok(Value::String(s.chars().take(64).collect()))
         }
         SkinSettingKind::Palette => {
             // 调色板带透明度调整：#rrggbb（视为不透明）或 #rrggbbaa
@@ -1089,6 +1108,47 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
         return Err(tr(&lang, Key::NotASkinWindow).to_string());
     };
 
+    // 自定义菜单项（皮肤经 skin_set_menu_items 注册）：闭包与点选分发各持一份
+    let menu_items = factory::skin_menu_items(&skin_id);
+
+    // 行为快捷开关段当前态（有效值口径与 skin_get_window_config 一致：
+    // resizable 的 None 回退 skin.json 默认）
+    let quick = {
+        let state = app.state::<AppState>();
+        let skins = loader::scan_skins_directory(&state.skins_dir);
+        let app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = app_config
+            .skin_settings
+            .get(&skin_id)
+            .cloned()
+            .unwrap_or_else(|| {
+                skins
+                    .iter()
+                    .find(|s| s.id == skin_id)
+                    .map(|s| crate::skin::types::SkinRuntimeConfig::from_manifest(&s.manifest))
+                    .unwrap_or_default()
+            });
+        factory::SkinQuickState {
+            on_top: cfg.always_on_top,
+            locked: cfg.position_locked,
+            click_through: cfg.click_through,
+            resizable: cfg.resizable.unwrap_or_else(|| {
+                skins
+                    .iter()
+                    .find(|s| s.id == skin_id)
+                    .map(|s| s.manifest.window.resizable)
+                    .unwrap_or(false)
+            }),
+            edge_snap: cfg.edge_snap.unwrap_or_else(|| {
+                skins
+                    .iter()
+                    .find(|s| s.id == skin_id)
+                    .map(|s| s.manifest.window.edge_snap)
+                    .unwrap_or(false)
+            }),
+        }
+    };
+
     // TrackPopupMenu is modal and must run on the window's owner (main) thread.
     // 等待挪进 spawn_blocking：rx.recv() 裸阻塞会把 tokio worker 占满整个
     // 模态期间（配合上面的重入守卫，worker 池不再被本命令停放）。
@@ -1102,10 +1162,11 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
         // 菜单闭包 move 会吃掉捕获的窗口句柄——克隆一个给它，
         // 原句柄留给 SKIN_MENU_HIDE 臂隐藏当前窗口
         let menu_window = window.clone();
+        let items_for_menu = menu_items.clone();
         let wait = tauri::async_runtime::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             app2.run_on_main_thread(move || {
-                let _ = tx.send(factory::track_skin_popup_menu(&menu_window, &lang2));
+                let _ = tx.send(factory::track_skin_popup_menu(&menu_window, &lang2, quick, &items_for_menu));
             })
             .map_err(|e| e.to_string())?;
             rx.recv().map_err(|e| e.to_string())
@@ -1158,6 +1219,48 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
                     log::error!("skin menu unload failed: {}", e);
                 }
             });
+        }
+        // 行为快捷开关段：与编辑器「窗口」页同一进程内实现（勾选语义即面板
+        // 开关语义；配置持久化 + 运行态应用 + 面板事件全部由 impl 完成）。
+        // 不动窗口存亡，无需生命周期锁
+        factory::SKIN_MENU_PLACE_TOP => {
+            // 「置顶」勾选翻转：当前置顶 → 回正常（贴桌面）；否则置顶
+            let to = if quick.on_top { "desktop" } else { "top" };
+            if let Err(e) = set_skin_placement_impl(&app, &skin_id, to) {
+                log::error!("skin menu placement failed: {}", e);
+            }
+        }
+        factory::SKIN_MENU_LOCK => {
+            if let Err(e) = set_skin_position_locked_impl(&app, &skin_id, !quick.locked) {
+                log::error!("skin menu position-lock failed: {}", e);
+            }
+        }
+        factory::SKIN_MENU_CLICK_THROUGH => {
+            if let Err(e) = set_skin_click_through_impl(&app, &skin_id, !quick.click_through) {
+                log::error!("skin menu click-through failed: {}", e);
+            }
+        }
+        factory::SKIN_MENU_RESIZABLE => {
+            if let Err(e) = set_skin_resizable_impl(&app, &skin_id, !quick.resizable) {
+                log::error!("skin menu resizable failed: {}", e);
+            }
+        }
+        factory::SKIN_MENU_EDGE_SNAP => {
+            if let Err(e) = set_skin_edge_snap_impl(&app, &skin_id, !quick.edge_snap) {
+                log::error!("skin menu edge-snap failed: {}", e);
+            }
+        }
+        // 自定义项：≥ SKIN_MENU_CUSTOM_BASE。fire-and-forget 回投 DOM 事件
+        // （与 desk-setting-changed 同 eval 通道；只通知，不动窗口存亡）
+        c if c >= factory::SKIN_MENU_CUSTOM_BASE => {
+            let idx = (c - factory::SKIN_MENU_CUSTOM_BASE) as usize;
+            if let Some(item) = menu_items.get(idx) {
+                if let Ok(id_json) = serde_json::to_string(&item.id) {
+                    let _ = window.eval(&format!(
+                        r#"document.dispatchEvent(new CustomEvent('desk-skin-menu-item',{{detail:{{id:{id_json}}}}}));"#
+                    ));
+                }
+            }
         }
         _ => {} // menu cancelled
     }
@@ -1378,19 +1481,22 @@ pub(crate) fn set_skin_edge_snap_impl(app: &AppHandle, skin_id: &str, on: bool) 
     let state = app.state::<AppState>();
     let lang = state.lang();
 
-    // 持久化前先确认皮肤仍在盘上（对齐 set_skin_zoom）：皮肤已被删除时
-    // or_default 会为一个不存在的 id 播种配置项
-    let skin_exists = loader::scan_skins_directory(&state.skins_dir)
-        .iter().any(|s| s.id == skin_id);
-    if !skin_exists {
-        return Err(trf(&lang, Key::SkinNotFound, &[skin_id]));
-    }
+    // 持久化前先确认皮肤仍在盘上（对齐 set_skin_zoom）：一次扫描同时取
+    // manifest 默认间距（edge_snap/snap_gap 为 Option 跟随模式——None =
+    // 跟随 manifest，审查 F2-A）；皮肤已被删除时 or_default 会为一个不存在
+    // 的 id 播种配置项
+    let m_gap = match loader::scan_skins_directory(&state.skins_dir)
+        .iter().find(|s| s.id == skin_id)
+    {
+        Some(s) => s.manifest.window.snap_gap,
+        None => return Err(trf(&lang, Key::SkinNotFound, &[skin_id])),
+    };
 
     let gap = {
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         let entry = runtime_entry_or_manifest(&state, &mut app_config, skin_id);
-        entry.edge_snap = on;
-        let gap = entry.snap_gap;
+        entry.edge_snap = Some(on);
+        let gap = entry.snap_gap.unwrap_or(m_gap);
         config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
         gap
     };
@@ -1421,19 +1527,21 @@ pub(crate) fn set_skin_snap_gap_impl(app: &AppHandle, skin_id: &str, gap: u32) -
     let lang = state.lang();
     let gap = gap.min(crate::window::snap::MAX_SNAP_GAP);
 
-    // 持久化前先确认皮肤仍在盘上（对齐 set_skin_zoom）：皮肤已被删除时
+    // 持久化前先确认皮肤仍在盘上（对齐 set_skin_zoom）：一次扫描同时取
+    // manifest 默认开关（Option 跟随模式，审查 F2-A）；皮肤已被删除时
     // or_default 会为一个不存在的 id 播种配置项
-    let skin_exists = loader::scan_skins_directory(&state.skins_dir)
-        .iter().any(|s| s.id == skin_id);
-    if !skin_exists {
-        return Err(trf(&lang, Key::SkinNotFound, &[skin_id]));
-    }
+    let m_snap = match loader::scan_skins_directory(&state.skins_dir)
+        .iter().find(|s| s.id == skin_id)
+    {
+        Some(s) => s.manifest.window.edge_snap,
+        None => return Err(trf(&lang, Key::SkinNotFound, &[skin_id])),
+    };
 
     let enabled = {
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         let entry = runtime_entry_or_manifest(&state, &mut app_config, skin_id);
-        entry.snap_gap = gap;
-        let enabled = entry.edge_snap;
+        entry.snap_gap = Some(gap);
+        let enabled = entry.edge_snap.unwrap_or(m_snap);
         config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
         enabled
     };
@@ -2135,10 +2243,14 @@ pub fn set_hot_reload(window: tauri::WebviewWindow, app: AppHandle, on: bool) ->
 /// 启动更新检测：查公开仓库 GitHub 最新 release 并与当前版本比较。阻塞
 /// HTTPS 调用放 spawn_blocking（内部 10s 超时）；网络失败/无 release 返回
 /// Err，前端静默忽略。开关（config.update_check）由前端在调用前把关。
+/// 结果附 `installer_sha256`（release 说明解析的官方哈希）与
+/// `installer_ready`（该版本安装包是否已就位且通过核对——true 前端跳过
+/// 下载直接「立即安装」）。
 #[tauri::command]
-pub async fn check_update(window: tauri::WebviewWindow) -> Result<crate::update::UpdateCheckResult, String> {
+pub async fn check_update(window: tauri::WebviewWindow, app: AppHandle) -> Result<crate::update::UpdateCheckResult, String> {
     require_manager(&window)?;
-    tauri::async_runtime::spawn_blocking(crate::update::fetch_latest_release)
+    let config_dir = app.state::<AppState>().config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::update::fetch_latest_release(&config_dir))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -2163,14 +2275,42 @@ pub fn open_release_page(window: tauri::WebviewWindow, app: AppHandle) -> Result
     crate::skin_api::open_target_impl(crate::update::RELEASES_LATEST_URL, &lang)
 }
 
-/// 自动下载新版安装包到更新目录（固定文件名覆盖旧包 + .tmp 中断不留垃圾）。
-/// 完成才返回路径——前端在下载完成后才提示安装。
+/// 自动下载新版安装包到更新目录（固定文件名覆盖旧包 + 分段 .part 起手
+/// 全清不留垃圾）。多源竞速 + 分段并行提速（国内直连 GitHub 常极慢），
+/// 官方 SHA-256 在时镜像源才参与、落盘哈希不符即废；完成才返回路径——
+/// 前端在下载完成后才提示安装。进度经 update-download-progress 事件节流
+/// 下发（前端进度条）。`sha256` = check_update 带回的官方哈希（老
+/// release 无 → 只走 GitHub 直连）。
 #[tauri::command]
-pub async fn download_update(window: tauri::WebviewWindow, app: AppHandle, url: String, version: String) -> Result<String, String> {
+pub async fn download_update(window: tauri::WebviewWindow, app: AppHandle, url: String, version: String, sha256: Option<String>) -> Result<String, String> {
     require_manager(&window)?;
     let config_dir = app.state::<AppState>().config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::update::download_installer(&config_dir, &url, &version)
+        let window = window;
+        let on_progress = move |p: crate::update::DownloadProgress| {
+            let sources: Vec<serde_json::Value> = p
+                .sources
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "index": s.index,
+                        "downloaded": s.downloaded,
+                        "total": s.total,
+                    })
+                })
+                .collect();
+            let payload = serde_json::json!({
+                "stage": match p.stage {
+                    crate::update::ProgressStage::Connecting => "connecting",
+                    crate::update::ProgressStage::Downloading => "downloading",
+                    crate::update::ProgressStage::Verifying => "verifying",
+                    crate::update::ProgressStage::Done => "done",
+                },
+                "sources": sources,
+            });
+            let _ = window.emit("update-download-progress", payload);
+        };
+        crate::update::download_installer(&config_dir, &url, &version, sha256.as_deref(), &on_progress)
             .map(|p| p.to_string_lossy().into_owned())
     })
     .await
@@ -2320,9 +2460,17 @@ pub fn set_skin_groups(
         .collect();
 
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
-    config.skin_groups = clean_groups;
-    config.skin_group_map = clean_map;
-    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+    // 保存失败回滚内存态（对齐 set_skin_zoom_impl 范式）：先改后存不回滚会让
+    // 内存=新、盘=旧、下一次任意保存把内存态落盘（审查 F3-A——前端
+    // _commitGroups 失败回滚 UI，三方分歧由此而来）
+    let prev_groups = std::mem::replace(&mut config.skin_groups, clean_groups);
+    let prev_map = std::mem::replace(&mut config.skin_group_map, clean_map);
+    if let Err(e) = config::save_config(&state.config_dir, &config) {
+        config.skin_groups = prev_groups;
+        config.skin_group_map = prev_map;
+        return Err(trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]));
+    }
+    Ok(())
 }
 
 /// 布局方案：把当前桌面状态（已加载集 + 各皮肤几何/显隐）捕获为命名方案。
@@ -2614,6 +2762,36 @@ pub fn list_system_fonts(window: tauri::WebviewWindow) -> Result<Vec<String>, St
         Ok(Vec::new())
     }
 }
+
+// ─── GPU Adapters ───
+
+/// Enumerate GPU adapters for the manager's `gpu_adapter` setting control
+///（下拉项展示型号名，值存 LUID）。名称可重复、枚举顺序会变，LUID 才是
+/// 稳定标识——皮肤侧按 LUID 精确匹配，失配回退首项。
+#[derive(serde::Serialize)]
+pub struct GpuAdapterItem {
+    pub name: String,
+    pub luid: String,
+    pub gpu_type: String,
+    pub usage: f32,
+}
+
+#[tauri::command]
+pub fn list_gpu_adapters(window: tauri::WebviewWindow) -> Result<Vec<GpuAdapterItem>, String> {
+    require_manager(&window)?;
+    #[cfg(target_os = "windows")]
+    {
+        Ok(crate::skin_api::gpu::collect()
+            .into_iter()
+            .map(|g| GpuAdapterItem { name: g.name, luid: g.luid, gpu_type: g.gpu_type, usage: g.usage })
+            .collect())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(Vec::new())
+    }
+}
+
 
 #[cfg(target_os = "windows")]
 fn enum_system_fonts() -> Vec<String> {

@@ -1,0 +1,43 @@
+{
+  "id": "isles-timer",
+  "name_zh": "计时器",
+  "name_en": "Timer",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description_zh": "屿族小卡：倒计时 + 正向计时，同款圆环一瞥进度，悬停环内步进调时长，状态跨重载续跑",
+  "description_en": "Isles mini card: countdown + count-up with the family's signature ring; hover to adjust minutes in place; state survives reloads",
+  "entry": "index.html",
+  "window": {
+    "width": 200,
+    "height": 200,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0,
+    "edge_snap": true,
+    "snap_gap": 20
+  },
+  "permissions": ["notify"],
+  "settings": [
+    { "key": "mode", "type": "radio", "label_zh": "模式", "label_en": "Mode", "group_zh": "内容", "group_en": "Content", "description_zh": "倒计时 = 从设定时长倒数到零；正向计时 = 从零开始累加。切换会重置当前计时", "description_en": "Countdown runs down from the set length; count-up accumulates from zero. Switching resets the current run", "default": "down",
+      "options": [
+        { "value": "down", "label_zh": "倒计时", "label_en": "Countdown" },
+        { "value": "up", "label_zh": "正向计时", "label_en": "Count up" }
+      ] },
+    { "key": "minutes", "type": "stepper", "label_zh": "倒计时时长（分钟）", "label_en": "Countdown Length (min)", "group_zh": "内容", "group_en": "Content", "description_zh": "默认 25 分钟（1–180）；倒计时就绪时悬停卡面，环内 ± 钮同样可调；进行中的倒计时不受影响，下次开始生效", "description_en": "Default is 25 min (1–180); hover the card while the countdown is ready and use the in-ring ± buttons too; a running countdown is unaffected — applies to the next start", "default": 25, "min": 1, "max": 180, "step": 1 },
+    { "key": "sound", "type": "boolean", "label_zh": "到时提示音", "label_en": "Chime on Finish", "group_zh": "内容", "group_en": "Content", "description_zh": "倒计时结束时播放一段上行琶音", "description_en": "Play a rising arpeggio when the countdown finishes", "default": true },
+    { "key": "notify", "type": "boolean", "label_zh": "到时系统通知", "label_en": "System Notification", "group_zh": "内容", "group_en": "Content", "description_zh": "倒计时结束时弹 Windows 通知中心通知——皮肤被隐藏/最小化也不会错过", "description_en": "Pop a Windows toast when the countdown finishes — you won't miss it even with the skin hidden or minimized", "default": true },
+
+    { "key": "theme", "type": "select", "label_zh": "主题", "label_en": "Theme", "group_zh": "外观", "group_en": "Appearance", "description_zh": "一键应用整套配色（会覆盖下方颜色项）", "description_en": "Apply a whole color scheme at once (overrides the color settings below)", "default": "sora",
+      "options": [
+        { "value": "sora", "label_zh": "澄空", "label_en": "Clear Sky" },
+        { "value": "lime", "label_zh": "青柠", "label_en": "Lime" },
+        { "value": "lavender", "label_zh": "薰衣", "label_en": "Lavender" },
+        { "value": "nord", "label_zh": "极光（暗）", "label_en": "Nord (dark)" }
+      ] },
+    { "key": "bg_color", "type": "palette", "label_zh": "背景色", "label_en": "Background", "group_zh": "外观", "group_en": "Appearance", "description_zh": "卡面背景色；透明度滑杆让卡面半透明", "description_en": "Card background; the opacity slider makes the card translucent", "default": "#F0F6FC" },
+    { "key": "text_color", "type": "palette", "label_zh": "文字颜色", "label_en": "Text Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "卡面文字主色，副标自动派生深浅", "description_en": "Main text color; captions derive their shades automatically", "default": "#17334E" },
+    { "key": "accent", "type": "palette", "label_zh": "圆环颜色", "label_en": "Ring Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "进度环的颜色", "description_en": "Color of the progress ring", "default": "#2C82E4" }
+  ]
+}

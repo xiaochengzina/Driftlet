@@ -174,6 +174,9 @@ enum SkinSettingKind {
     DateTaskList,
     File,
     Directory,
+    /// 对应安装端 GpuAdapter（GPU 适配器选择器，管理器运行时枚举生成选项）
+    #[serde(rename = "gpu_adapter")]   // 同安装端：显式 rename 保下划线名
+    GpuAdapter,
 }
 
 /// 对应安装端 SkinSettingDef
@@ -235,6 +238,11 @@ struct WindowDefaults {
     #[serde(default)]
     #[allow(dead_code)]
     refresh_seconds: Option<u32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    edge_snap: bool,
+    #[serde(default)]
+    snap_gap: u32,
 }
 
 fn default_entry() -> String {
@@ -471,8 +479,8 @@ fn main() {
     }
     // 窗口默认值归一化镜像（安装端 loader.rs 加载时钳制：宽高 [1,10000]、
     // opacity 非有限/越界回落 [0.1,1.0]、zoom [0.5,2.0] 非有限归 1.0、
-    // refresh_seconds ≤24h）：打包不改包内容，但声明值会被钳时提示创作者
-    // 「安装生效值 ≠ 声明值」（所见即所得；归一化非拒绝，无放行分歧）
+    // refresh_seconds ≤24h、snap_gap ≤200）：打包不改包内容，但声明值会被钳
+    // 时提示创作者「安装生效值 ≠ 声明值」（所见即所得；归一化非拒绝，无放行分歧）
     {
         let w = &manifest.window;
         let cw = w.width.clamp(1, 10000);
@@ -480,6 +488,7 @@ fn main() {
         let cop = if w.opacity.is_finite() { w.opacity.clamp(0.1, 1.0) } else { 1.0 };
         let czoom = if w.zoom.is_finite() { w.zoom.clamp(0.5, 2.0) } else { 1.0 };
         let crs = w.refresh_seconds.map(|s| s.min(86400));
+        let cgap = w.snap_gap.min(200);
         let mut notes = Vec::new();
         if cw != w.width {
             notes.push(format!("width {} → {}", w.width, cw));
@@ -495,6 +504,9 @@ fn main() {
         }
         if crs != w.refresh_seconds {
             notes.push(format!("refresh_seconds {:?} → {:?}", w.refresh_seconds, crs));
+        }
+        if cgap != w.snap_gap {
+            notes.push(format!("snap_gap {} → {}", w.snap_gap, cgap));
         }
         if !notes.is_empty() {
             eprintln!("提示：window 默认值超出范围，安装端加载时将归一化为：{}", notes.join("、"));

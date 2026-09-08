@@ -70,6 +70,9 @@ window.Driftlet = (() => {
     showSkin: (skinId) => call('skin_show', { skinId }),
     // 皮肤间广播（免权限；所有已加载皮肤含自己都会收到 desk-skin-message）
     broadcast: (channel, payload) => call('skin_broadcast', { channel, payload }),
+    // 给自己的右键菜单注册自定义项（免权限；≤8 条，id 小写 ≤32 字符、
+    // 文案 ≤40，支持 checked 勾选态与 label_zh/label_en 双语）
+    setMenuItems: (items) => call('skin_set_menu_items', { items }),
 
     // ── 敏感能力（需在 skin.json 声明对应 permissions）──
     readRegistryValue: (root, path, name) => call('read_registry_value', { root, path, name }),  // registry
@@ -143,6 +146,12 @@ window.Driftlet = (() => {
       const h = (e) => fn(e.detail?.key, e.detail?.value);
       document.addEventListener('desk-window-config-changed', h);
       return () => document.removeEventListener('desk-window-config-changed', h);
+    },
+    /** 用户点了本皮肤的自定义右键菜单项：fn(id)——与 setMenuItems 配套 */
+    onMenuItem(fn) {
+      const h = (e) => fn(e.detail?.id);
+      document.addEventListener('desk-skin-menu-item', h);
+      return () => document.removeEventListener('desk-skin-menu-item', h);
     },
   };
 })();

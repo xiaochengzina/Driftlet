@@ -2861,6 +2861,44 @@ body.hover-ok .confirm-btn.primary:not(:disabled):hover {
   cursor: pointer;
 }
 
+/* 更新弹窗下载进度条（多源竞速下载期间显示；未知总大小时滑块态，
+   已知时按最领先源的百分比填充） */
+.update-progress-wrap {
+  margin-top: 14px;
+}
+
+.update-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s var(--ease);
+}
+
+.update-progress.indeterminate .update-progress-fill {
+  width: 35%;
+  margin-left: -35%;
+  animation: updateProgressSlide 1.1s var(--ease) infinite alternate;
+}
+
+@keyframes updateProgressSlide {
+  to { margin-left: 100%; }
+}
+
+.update-progress-text {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  min-height: 14px;
+}
+
 /* 设置面板不加面板级入场动画：任何面板 transform 入场都会带动行内容
    ——位移版（popIn 的 translateY）让整排按钮滑动 ~10px；缩放版绕面板
    中心进行，偏离中心的按钮仍会被带几 px——反馈均为「按钮在动」。
@@ -3386,6 +3424,13 @@ body.hover-ok .settings-close:hover {
   .group-new:not(:disabled):active,
   .settings-close:not(:disabled):active {
     transform: none;
+  }
+  /* 更新进度条滑动降级（宽度突变是纯状态反馈，保留） */
+  .update-progress.indeterminate .update-progress-fill {
+    animation: none;
+  }
+  .update-progress-fill {
+    transition: none;
   }
 }
 

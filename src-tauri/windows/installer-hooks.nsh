@@ -28,12 +28,18 @@
 !macro NSIS_HOOK_POSTUNINSTALL
   !insertmacro UPDATEFILEASSOC
   ; Two kinds of leftovers the template never removes:
-  ; 1) App data. resolve_portable_dir keeps config/skins NEXT TO THE EXE for
-  ;    writable install locations (falling back to %APPDATA% for protected
-  ;    ones like Program Files); WebView2 data sits in %LOCALAPPDATA%. The
-  ;    template only deletes the files it installed itself, then does a
-  ;    non-recursive RMDir on $INSTDIR — which fails while config/skins are
-  ;    inside, leaving the whole install directory behind.
+  ; 1) Everything else under the install root. resolve_portable_dir keeps
+  ;    config/skins NEXT TO THE EXE for writable install locations (falling
+  ;    back to %APPDATA% for protected ones like Program Files), and the
+  ;    updater's download dir sits at $INSTDIR\update (Driftlet-update-setup.exe
+  ;    + version marker + .part segments). The template only deletes the files
+  ;    it installed itself, then does a non-recursive RMDir on $INSTDIR —
+  ;    which fails while ANY of these remain, leaving the whole install
+  ;    directory behind (previously the hook deleted only config/skins, so a
+  ;    downloaded update package orphaned the entire install root). So the
+  ;    hook recursively deletes $INSTDIR itself — files the user dropped
+  ;    there are removed too; that is the documented, intended behavior.
+  ;    /REBOOTOK sweeps up anything still locked at uninstall time.
   ; 2) Registry keys written at install (${MANUPRODUCTKEY}, and our
   ;    "Installer Language" value).
   ; Remove them unconditionally (idempotent). The stock template gated the
@@ -41,13 +47,10 @@
   ; skipped on silent/passive uninstalls) — our custom installer.nsi drops
   ; that checkbox entirely, so this hook is the single deletion path.
   ; NEVER on updates ($UpdateMode = 1): the incoming version keeps the
-  ; user's config and skins.
+  ; user's config and skins — and the running update installer itself lives
+  ; in $INSTDIR\update, so wiping the root would break the update mid-flight.
   ${If} $UpdateMode <> 1
-    RmDir /r "$INSTDIR\config"
-    RmDir /r "$INSTDIR\skins"
-    ; Non-recursive on purpose: removes the install root only if nothing but
-    ; our leftovers kept it non-empty; user files dropped there survive.
-    RMDir "$INSTDIR"
+    RMDir /r /REBOOTOK "$INSTDIR"
     DeleteRegValue HKCU "${MANUPRODUCTKEY}" "Installer Language"
     DeleteRegKey SHCTX "${MANUPRODUCTKEY}"
     DeleteRegKey /ifempty SHCTX "${MANUKEY}"

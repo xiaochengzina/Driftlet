@@ -1,0 +1,46 @@
+{
+  "id": "isles-countdown",
+  "name_zh": "倒数日",
+  "name_en": "Countdown",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description_zh": "屿族纸卡：倒数一个值得等待的日子（可换自定义背景图）",
+  "description_en": "Isles paper card: count down to a day worth waiting for (custom background image optional)",
+  "entry": "index.html",
+  "window": {
+    "width": 200,
+    "height": 200,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0,
+    "edge_snap": true,
+    "snap_gap": 20
+  },
+  "permissions": [],
+  "settings": [
+    { "key": "size", "type": "radio", "label_zh": "尺寸", "label_en": "Size", "group_zh": "窗口", "group_en": "Window", "description_zh": "屿族栅格两档——切换即调整窗口到对应尺寸", "description_en": "Two Isles grid tiers — switching resizes the window", "default": "mini",
+      "options": [
+        { "value": "mini", "label_zh": "小方 200×200（1×1）", "label_en": "Mini 200×200 (1×1)" },
+        { "value": "wide", "label_zh": "横条 420×200（2×1）", "label_en": "Wide 420×200 (2×1)" }
+      ] },
+
+    { "key": "tasks", "type": "datetasklist", "label_zh": "倒数日清单", "label_en": "Countdowns", "group_zh": "内容", "group_en": "Content", "description_zh": "每条 = 日期 + 名称；自动倒数最近的一个，当天停留一天，过完自动跳到下一个", "description_en": "Each entry = date + name; counts down the nearest, stays on the day itself, then moves to the next", "default": [] },
+    { "key": "show_date", "type": "boolean", "label_zh": "显示目标日期", "label_en": "Show Target Date", "group_zh": "内容", "group_en": "Content", "description_zh": "卡面右下角的目标日期", "description_en": "The target date at the bottom-right", "default": true },
+
+    { "key": "theme", "type": "select", "label_zh": "主题", "label_en": "Theme", "group_zh": "外观", "group_en": "Appearance", "description_zh": "一键应用整套配色（会覆盖下方颜色项）；「图片背景」= 白字 + 黑暗纱，配合自定义背景图使用", "description_en": "Apply a whole color scheme at once (overrides the color settings below); Image background = white text + black scrim for custom background images", "default": "sora",
+      "options": [
+        { "value": "sora", "label_zh": "澄空", "label_en": "Clear Sky" },
+        { "value": "lime", "label_zh": "青柠", "label_en": "Lime" },
+        { "value": "lavender", "label_zh": "薰衣", "label_en": "Lavender" },
+        { "value": "nord", "label_zh": "极光（暗）", "label_en": "Nord (dark)" },
+        { "value": "photo", "label_zh": "图片背景", "label_en": "Image background" }
+      ] },
+    { "key": "accent", "type": "palette", "label_zh": "点缀色", "label_en": "Accent", "group_zh": "外观", "group_en": "Appearance", "description_zh": "大数字的颜色", "description_en": "Color of the big number", "default": "#2C82E4" },
+    { "key": "bg_color", "type": "palette", "label_zh": "背景色", "label_en": "Background", "group_zh": "外观", "group_en": "Appearance", "description_zh": "纸卡模式的卡面背景色；透明度滑杆让卡面半透明", "description_en": "Card background in paper mode; the opacity slider makes the card translucent", "default": "#F0F6FC" },
+    { "key": "text_color", "type": "palette", "label_zh": "文字颜色", "label_en": "Text Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "卡面文字主色，副标与单位自动派生深浅", "description_en": "Main text color; captions and units derive their shades automatically", "default": "#17334E" },
+    { "key": "scrim_color", "type": "palette", "label_zh": "暗纱色相", "label_en": "Scrim Tint", "group_zh": "外观", "group_en": "Appearance", "description_zh": "自定义图片卡的压底渐变颜色；透明度滑杆调浓度（拉到最左 = 关闭暗纱）", "description_en": "Color of the dimming gradient on custom-image cards; use the opacity slider for strength (far left = scrim off)", "default": "#10141C" },
+    { "key": "bg_blur", "type": "slider", "label_zh": "背景模糊", "label_en": "Background Blur", "group_zh": "外观", "group_en": "Appearance", "description_zh": "自定义图片卡背景的高斯模糊（0 = 不模糊），文字始终清晰", "description_en": "Gaussian blur of the custom image background (0 = none); text always stays sharp", "default": 0, "min": 0, "max": 20, "step": 1 }
+  ]
+}

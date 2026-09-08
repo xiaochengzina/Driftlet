@@ -1,0 +1,34 @@
+{
+  "id": "isles-clock",
+  "name_zh": "时钟",
+  "name_en": "Clock",
+  "version": "1.0.0",
+  "author": "Driftlet",
+  "description_zh": "屿族小卡：指针式时钟——圆点时刻表盘 + 时分秒三针，秒针 accent 色平滑扫秒",
+  "description_en": "Isles mini card: analog clock — dot-marker dial with hour/minute/second hands, accent second hand sweeping smoothly",
+  "entry": "index.html",
+  "window": {
+    "width": 200,
+    "height": 200,
+    "transparent": true,
+    "always_on_top": false,
+    "on_desktop": true,
+    "resizable": false,
+    "opacity": 1.0,
+    "edge_snap": true,
+    "snap_gap": 20
+  },
+  "permissions": [],
+  "settings": [
+    { "key": "theme", "type": "select", "label_zh": "主题", "label_en": "Theme", "group_zh": "外观", "group_en": "Appearance", "description_zh": "一键应用整套配色（会覆盖下方颜色项）", "description_en": "Apply a whole color scheme at once (overrides the color settings below)", "default": "sora",
+      "options": [
+        { "value": "sora", "label_zh": "澄空", "label_en": "Clear Sky" },
+        { "value": "lime", "label_zh": "青柠", "label_en": "Lime" },
+        { "value": "lavender", "label_zh": "薰衣", "label_en": "Lavender" },
+        { "value": "nord", "label_zh": "极光（暗）", "label_en": "Nord (dark)" }
+      ] },
+    { "key": "bg_color", "type": "palette", "label_zh": "背景色", "label_en": "Background", "group_zh": "外观", "group_en": "Appearance", "description_zh": "卡面背景色；透明度滑杆让卡面半透明", "description_en": "Card background; the opacity slider makes the card translucent", "default": "#F0F6FC" },
+    { "key": "text_color", "type": "palette", "label_zh": "指针颜色", "label_en": "Hands Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "时针/分针与刻度的主色，刻度自动派生浅淡", "description_en": "Main color of hour/minute hands; tick marks derive a lighter shade automatically", "default": "#17334E" },
+    { "key": "accent", "type": "palette", "label_zh": "秒针颜色", "label_en": "Second Hand Color", "group_zh": "外观", "group_en": "Appearance", "description_zh": "秒针与轴帽的点缀色", "description_en": "Accent color of the second hand and center pin", "default": "#2C82E4" }
+  ]
+}

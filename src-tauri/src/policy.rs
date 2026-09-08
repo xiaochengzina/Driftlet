@@ -98,9 +98,15 @@ fn perm_const_value(name: &str) -> &'static str {
 
 /// 命令名 → 闸门档。与 lib.rs 的 generate_handler! 清单一一对应
 /// （完备性测试强制双向匹配）。
+/// 顺序约定（审查 S4 定案）：闸门必须先于取数与副作用——唯一合规前导 =
+/// `let lang`/`let state` 取句柄、或闸门输入的归一化（如 open_external 的
+/// target.trim()）。曾尝试把顺序断言写进测试，被「归一化后gate」这类
+/// 合法前导误伤（误报率高于价值），退回文档约定 + 人工审查。
 #[allow(dead_code)] // 运行时不读表——价值在测试与审查；勿删
 pub const COMMAND_POLICIES: &[(&str, Gate)] = &[
-    // ─── commands.rs：管理器命令（ManagerOnly）与无害例外 ───
+    // ─── 管理器命令（ManagerOnly）与皮肤自作用例外 ───
+    // （例外 = Ungated 拖动/缩放 + SkinLabel 只作用自己窗口的项；
+    //  SkinLabel 的函数体分散在 commands.rs 与 skin_api/，不按文件分区）
     ("start_skin_drag", Gate::Ungated),
     ("start_skin_resize", Gate::Ungated),
     ("list_skins", Gate::ManagerOnly),
@@ -119,6 +125,8 @@ pub const COMMAND_POLICIES: &[(&str, Gate)] = &[
     ("set_skin_position", Gate::ManagerOnly),
     ("bring_skin_onscreen", Gate::ManagerOnly),
     ("show_skin_context_menu", Gate::SkinLabel),
+    // 皮肤自定义右键菜单项：只影响本皮肤菜单，自作用无害（SkinLabel）
+    ("skin_set_menu_items", Gate::SkinLabel),
     ("set_skin_size", Gate::ManagerOnly),
     ("set_skin_custom_setting", Gate::ManagerOnly),
     ("reset_skin_config", Gate::ManagerOnly),
@@ -152,6 +160,8 @@ pub const COMMAND_POLICIES: &[(&str, Gate)] = &[
     ("pick_path", Gate::ManagerOnly),
     ("open_skin_folder", Gate::ManagerOnly),
     ("list_system_fonts", Gate::ManagerOnly),
+    // GPU 适配器枚举：管理器 gpu_adapter 控件的数据源（只读系统信息，无写面）
+    ("list_gpu_adapters", Gate::ManagerOnly),
     ("capture_skin_preview", Gate::ManagerOnly),
     ("take_pending_package_install", Gate::ManagerOnly),
     ("export_config", Gate::ManagerOnly),
@@ -350,14 +360,14 @@ mod tests {
     #[test]
     fn gate_distribution_snapshot() {
         let count = |pred: fn(&Gate) -> bool| COMMAND_POLICIES.iter().filter(|(_, g)| pred(g)).count();
-        assert_eq!(count(|g| matches!(g, Gate::ManagerOnly)), 54);
+        assert_eq!(count(|g| matches!(g, Gate::ManagerOnly)), 55);
         assert_eq!(count(|g| matches!(g, Gate::LogWindow)), 2);
         assert_eq!(count(|g| matches!(g, Gate::Ungated)), 2);
-        assert_eq!(count(|g| matches!(g, Gate::SkinLabel)), 3);
+        assert_eq!(count(|g| matches!(g, Gate::SkinLabel)), 4);
         assert_eq!(count(|g| matches!(g, Gate::CallerSkin)), 8);
         assert_eq!(count(|g| matches!(g, Gate::ControlTarget)), 7);
         assert_eq!(count(|g| matches!(g, Gate::AnyPerm)), 1);
         assert_eq!(count(|g| matches!(g, Gate::Perm(_))), 38);
-        assert_eq!(COMMAND_POLICIES.len(), 115);
+        assert_eq!(COMMAND_POLICIES.len(), 117);
     }
 }

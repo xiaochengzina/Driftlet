@@ -242,6 +242,23 @@ pub fn run() {
             // Load config
             let mut app_config = config::load_config(&config_dir);
 
+            // 首装种子：内置族皮肤落 skins 目录 + 归入「默认皮肤」组
+            //（一次性标记；置位后删过的不复活、组删过不重建）。装了新皮肤
+            // 就重扫目录，让下面的 prune 与自动加载看到它们
+            let skins = if !app_config.bundled_skins_seeded {
+                let installed = seed_bundled_skins(&app, &skins_dir, &mut app_config);
+                if let Err(e) = config::save_config(&config_dir, &app_config) {
+                    log::warn!("Failed to save bundled-skins seed flag: {}", e);
+                }
+                if installed {
+                    loader::scan_skins_directory(&skins_dir)
+                } else {
+                    skins
+                }
+            } else {
+                skins
+            };
+
             // Prune persisted entries for skins that no longer exist on disk
             // (folder deleted outside the app, or the author changed the id).
             {
@@ -525,6 +542,7 @@ pub fn run() {
             commands::pick_path,
             commands::open_skin_folder,
             commands::list_system_fonts,
+            commands::list_gpu_adapters,
             commands::capture_skin_preview,
             commands::take_pending_package_install,
             commands::export_config,
@@ -546,6 +564,7 @@ pub fn run() {
             skin_api::skin_list_dir,
             skin_api::skin_delete_file,
             skin_api::skin_set_setting,
+            skin_api::skin_set_menu_items,
             skin_api::skin_get_setting,
             skin_api::read_registry_value,
             skin_api::run_command,
@@ -750,8 +769,89 @@ fn migrate_legacy_config(
     }
 }
 
+/// 安装包内置的屿族皮肤 id（源在仓库 examples/，经 tauri bundle resources
+/// 装进安装目录 bundled-skins/）。组内显示顺序 = 此数组序。
+const BUNDLED_SKIN_IDS: [&str; 6] = [
+    "isles-countdown",
+    "isles-calendar",
+    "isles-clock",
+    "isles-monitor",
+    "isles-weather",
+    "isles-timer",
+];
+
+/// 首装种子：把安装包内置族皮肤装进 skins 目录并归入「默认皮肤」组。
+/// 一次性——配置标记 bundled_skins_seeded 置位后不再执行（用户删过的皮肤
+/// 不复活、组被删过不重建）。补缺不覆盖：盘上已有的同名皮肤（用户更新/
+/// 修改过的拷贝）一律不动。返回是否有皮肤新装（需要重扫目录）。
+fn seed_bundled_skins(app: &tauri::App, skins_dir: &std::path::Path, config: &mut skin::types::AppConfig) -> bool {
+    let mut installed = false;
+    match app.path().resource_dir() {
+        Ok(rdir) => {
+            let src_root = rdir.join("bundled-skins");
+            if src_root.is_dir() {
+                for id in BUNDLED_SKIN_IDS {
+                    let src = src_root.join(id);
+                    let dest = skins_dir.join(id);
+                    if src.is_dir() && !dest.exists() {
+                        // staging + rename：中途失败/崩溃不留半成品目录（残留
+                        // .staging-* 由启动 recover_interrupted_folder_ops 清理）；
+                        // 直写最终目录会让 dest.exists() 把残缺目录当成「已装」
+                        // 永久挡住补拷（审查 F1-A）
+                        let staging = skins_dir.join(format!(".staging-{}", id));
+                        let _ = std::fs::remove_dir_all(&staging);
+                        let res = copy_dir_recursive(&src, &staging)
+                            .and_then(|_| std::fs::rename(&staging, &dest));
+                        match res {
+                            Ok(_) => {
+                                installed = true;
+                                log::info!("Installed bundled skin: {}", id);
+                            }
+                            Err(e) => {
+                                let _ = std::fs::remove_dir_all(&staging);
+                                log::warn!("Failed to install bundled skin {}: {}", id, e);
+                            }
+                        }
+                    }
+                }
+            } else if !cfg!(debug_assertions) {
+                // 生产安装包漏带资源 = 打包事故——响亮记一笔（审查 F1-C）；
+                // dev 下资源可能尚未被 tauri-build 拷贝，静默
+                log::warn!("bundled skins resource dir missing: {:?}", src_root);
+            }
+        }
+        Err(e) => {
+            if !cfg!(debug_assertions) {
+                log::warn!("resource_dir unavailable for bundled skins seeding: {}", e);
+            }
+        }
+    }
+    // 归组：盘上存在的内置皮肤里**尚未归组**的进「默认皮肤」组——升级用户
+    // 自建组里的归属保持不动（审查 F1-B）；全部已有归属则不建空组
+    let ungrouped: Vec<&str> = BUNDLED_SKIN_IDS
+        .iter()
+        .copied()
+        .filter(|id| skins_dir.join(id).join("skin.json").is_file())
+        .filter(|id| !config.skin_group_map.contains_key(*id))
+        .collect();
+    if !ungrouped.is_empty() {
+        config.skin_groups.push(skin::types::SkinGroup {
+            id: "g-default-skins".to_string(),
+            name: crate::i18n::tr(&config.language, crate::i18n::Key::DefaultSkinsGroup).to_string(),
+            collapsed: false,
+        });
+        for id in ungrouped {
+            config.skin_group_map.insert(id.to_string(), "g-default-skins".to_string());
+        }
+    }
+    config.bundled_skins_seeded = true;
+    installed
+}
+
 /// Sync example skins into the skins directory (development only).
-/// 示例皮肤只随仓库分发（`examples/`，以独立 .dskin 另行发布），安装包不打包。
+/// 屿族官方皮肤（`examples/`）随安装包打包（资源 bundled-skins/，首装种子
+/// 见 seed_bundled_skins）；开发期从这里同步进 skins 目录保持最新。
+/// 演示皮肤（`demos/`）不再同步——它们只是接口演示，装即用的族皮肤才是默认内容。
 /// Skins that don't exist yet are copied; existing skins are updated if the source is newer.
 fn copy_example_skins(skins_dir: &PathBuf) {
     // release 构建直接返回：示例源是相对 CWD 的仓库 examples/ 路径，生产环境
@@ -759,55 +859,83 @@ fn copy_example_skins(skins_dir: &PathBuf) {
     if !cfg!(debug_assertions) {
         return;
     }
-    // 开发期的示例皮肤源（仓库 examples/ 目录）
-    let example_sources: Vec<PathBuf> = vec![
-        // Development: check ../examples (when running from src-tauri/)
-        PathBuf::from("../examples"),
-        // Development: check ./examples (when running from project root)
-        PathBuf::from("examples"),
-    ];
+    // 开发期的皮肤源（仓库 examples/ 目录；demos/ 已停同步——接口演示不属于
+    // 开发期默认内容）
+    let example_dirs = ["examples"];
+    let prefixes = ["..", "."];   // ..: CWD=src-tauri；.: CWD=项目根
 
     let canonical_dest = skins_dir.canonicalize().ok();
+    let mut synced_any = false;
 
-    for source in &example_sources {
-        if !source.exists() || !source.is_dir() {
-            continue;
-        }
-        // Skip when the source IS the skins directory itself — in the
-        // production layout the bundled example skins already live next to
-        // the executable, so there is nothing to copy.
-        if let (Some(dest), Ok(src)) = (&canonical_dest, source.canonicalize()) {
-            if src == *dest {
+    for dir in example_dirs {
+        for prefix in prefixes {
+            let source = PathBuf::from(prefix).join(dir);
+            if !source.exists() || !source.is_dir() {
                 continue;
             }
-        }
-        log::info!("Syncing example skins from {:?}", source);
-        if let Ok(entries) = std::fs::read_dir(source) {
-            for entry in entries.flatten() {
-                let dest = skins_dir.join(entry.file_name());
-                if !dest.exists() {
-                    let _ = copy_dir_recursive(&entry.path(), &dest);
-                    log::info!("  Installed example skin: {:?}", entry.file_name());
-                } else if source_is_newer(&entry.path(), &dest) {
-                    // 更新示例皮肤时保留用户设置值：settings.json 先取出，
-                    // 拷贝后写回（与 package.rs 的安装保留同一约定）
-                    let saved_settings =
-                        std::fs::read(dest.join(skin::settings::SETTINGS_FILENAME)).ok();
-                    let _ = std::fs::remove_dir_all(&dest);
-                    let _ = copy_dir_recursive(&entry.path(), &dest);
-                    if let Some(bytes) = saved_settings {
-                        let _ = std::fs::write(
-                            dest.join(skin::settings::SETTINGS_FILENAME),
-                            bytes,
-                        );
-                    }
-                    log::info!("  Updated example skin: {:?}", entry.file_name());
+            // Skip when the source IS the skins directory itself — in the
+            // production layout the bundled example skins already live next to
+            // the executable, so there is nothing to copy.
+            if let (Some(dest), Ok(src)) = (&canonical_dest, source.canonicalize()) {
+                if src == *dest {
+                    continue;
                 }
             }
+            synced_any = true;
+            log::info!("Syncing example skins from {:?}", source);
+            if let Ok(entries) = std::fs::read_dir(source) {
+                for entry in entries.flatten() {
+                    // 只同步「皮肤目录」：含 skin.json 且非 `_` 开头（_ 开头 =
+                    // 基建/模板，如 examples/_template、shared/ 不同步）
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if name.starts_with('_')
+                        || !entry.path().join("skin.json").is_file()
+                    {
+                        continue;
+                    }
+                    let dest = skins_dir.join(entry.file_name());
+                    if !dest.exists() {
+                        let _ = copy_dir_recursive(&entry.path(), &dest);
+                        log::info!("  Installed example skin: {:?}", entry.file_name());
+                    } else if source_is_newer(&entry.path(), &dest) {
+                        // 更新示例皮肤时保留用户设置值：settings.json 先取出，
+                        // 拷贝后写回（与 package.rs 的安装保留同一约定）。
+                        // staging + rename：直删直拷中途失败/崩溃会留下被删或
+                        // 半拷的开发皮肤（审查 F1-D）——.staging-* 残留由启动
+                        // recover_interrupted_folder_ops 清理
+                        let saved_settings =
+                            std::fs::read(dest.join(skin::settings::SETTINGS_FILENAME)).ok();
+                        let staging = skins_dir.join(format!(".staging-{}", name.as_ref()));
+                        let _ = std::fs::remove_dir_all(&staging);
+                        match copy_dir_recursive(&entry.path(), &staging)
+                            .and_then(|_| {
+                                std::fs::remove_dir_all(&dest)?;
+                                std::fs::rename(&staging, &dest)
+                            }) {
+                            Ok(_) => {
+                                if let Some(bytes) = saved_settings {
+                                    let _ = std::fs::write(
+                                        dest.join(skin::settings::SETTINGS_FILENAME),
+                                        bytes,
+                                    );
+                                }
+                                log::info!("  Updated example skin: {:?}", entry.file_name());
+                            }
+                            Err(e) => {
+                                let _ = std::fs::remove_dir_all(&staging);
+                                log::warn!("  Failed to update example skin {:?}: {}", entry.file_name(), e);
+                            }
+                        }
+                    }
+                }
+            }
+            break; // 本目录已就位，不再看另一候选前缀
         }
-        return; // Successfully found and synced
     }
-    log::info!("No example skins found to copy");
+    if !synced_any {
+        log::info!("No example skins found to copy");
+    }
 }
 
 /// Check if any file in `src` has a newer modification time than the corresponding file in `dst`.

@@ -2,10 +2,10 @@
   "id": "controls-demo",
   "name_zh": "控件演示",
   "name_en": "Controls Demo",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "Driftlet",
-  "description_zh": "演示全部 22 种设置控件；皮肤界面语言跟随管理器自动切换",
-  "description_en": "Demo of all 22 settings controls; the skin UI language follows the manager automatically",
+  "description_zh": "演示全部 23 种设置控件；皮肤界面语言跟随管理器自动切换",
+  "description_en": "Demo of all 23 settings controls; the skin UI language follows the manager automatically",
   "entry": "index.html",
   "window": {
     "width": 340,
@@ -55,6 +55,7 @@
 
     { "key": "bg_image", "type": "file", "label_zh": "文件选择器", "label_en": "File Picker", "group_zh": "路径", "group_en": "Paths", "description_zh": "管理器弹系统对话框选一个文件，值是绝对路径（限图片扩展名）；皮肤可配合 file_system 权限的 __fs__ 端点直接引用", "description_en": "Picks one file via the manager-hosted system dialog; the value is an absolute path (image extensions only here). Combine with the file_system permission's __fs__ endpoint to reference it in the page", "filters": ["png", "jpg", "jpeg", "webp"] },
     { "key": "data_dir", "type": "directory", "label_zh": "文件夹选择器", "label_en": "Folder Picker", "group_zh": "路径", "group_en": "Paths", "description_zh": "选一个文件夹，值是绝对路径；空串 = 未选", "description_en": "Pick a folder; the value is an absolute path. Empty string = not set" },
+    { "key": "gpu", "type": "gpu_adapter", "label_zh": "GPU 适配器选择器", "label_en": "GPU Adapter Picker", "group_zh": "路径", "group_en": "Paths", "description_zh": "管理器运行时枚举本机 GPU 生成下拉项（型号名 + 核显/独显标签）；值 = LUID，空串 = 首项（自动）", "description_en": "The manager enumerates the machine's GPUs at render time to build the dropdown (model name + integrated/discrete tag); the value is the LUID, empty = first (auto)" },
 
     { "key": "tasks", "type": "tasklist", "label_zh": "任务列表", "label_en": "Task List", "group_zh": "任务", "group_en": "Tasks", "description_zh": "回车或失焦保存，空白项自动忽略", "description_en": "Saved on Enter or blur; blank items are ignored",
       "default": ["Weekly report", "Water the plants"] },

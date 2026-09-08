@@ -1,0 +1,243 @@
+/* ==========================================================================
+   屿 · Isles —— 基座：卡壳 / 字阶 / 组件 / 图片卡
+   唯一事实源：examples/shared/base.css（须先于皮肤自身样式引入）
+   缩放模型：卡壳 container-type: size，子元素一律用 cqw/cqh（双轴取小）
+   随实际窗口尺寸缩放——满足宿主「布局必须自适应任意窗口尺寸」硬约定。
+   ========================================================================== */
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  background: transparent;            /* 透明窗口：背景只画在卡壳上 */
+  font-family: var(--isles-font);
+  color: var(--isles-fg);
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 卡壳（皮肤的唯一根容器，恒加 .drag-region） ────────────────── */
+.isles-card {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--isles-radius);
+  background: var(--isles-card-bg);
+  /* 无外投影无描边：透明窗口圆角外不允许任何绘制（色晕事故） */
+  container-type: size;
+  padding: clamp(16px, min(5.6cqw, 11cqh), 40px);
+  display: flex;
+  flex-direction: column;
+}
+.isles-card--s { border-radius: var(--isles-radius-s); }  /* M 档小卡 */
+
+/* ── 字阶（一张卡只允许一个 .isles-display） ────────────────────── */
+.isles-display {
+  font-size: clamp(28px, min(34cqw, 44cqh), 96px);
+  font-weight: 350;
+  line-height: 1.04;
+  letter-spacing: 0.02em;    /* 主指标松开字距：数字与「今天」都需要呼吸感 */
+  font-variant-numeric: tabular-nums;
+  color: var(--isles-fg);
+}
+.isles-title {
+  font-size: clamp(13px, min(4.6cqw, 9cqh), 22px);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.08em;    /* CJK 标题：看得见的松 */
+  color: var(--isles-fg);
+}
+.isles-body {
+  font-size: clamp(12px, min(4cqw, 8cqh), 18px);
+  line-height: 1.5;
+  letter-spacing: 0.05em;
+  color: var(--isles-fg);
+}
+.isles-caption {
+  font-size: clamp(11px, min(3.6cqw, 7cqh), 15px);
+  line-height: 1.45;
+  letter-spacing: 0.1em;     /* 小字给足——杂志感字距 */
+  color: var(--isles-fg-2);
+}
+.isles-unit {
+  font-size: clamp(11px, min(3.6cqw, 7cqh), 15px);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--isles-fg-3);
+}
+
+/* ── 图标块（accent 浅染 + Feather 语系 SVG） ───────────────────── */
+.isles-chip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: clamp(28px, min(11cqw, 22cqh), 44px);
+  height: clamp(28px, min(11cqw, 22cqh), 44px);
+  border-radius: 30%;
+  background: color-mix(in srgb, var(--isles-accent) 12%, var(--isles-card-bg));
+  color: var(--isles-accent);
+}
+.isles-chip svg { width: 55%; height: 55%; }
+
+/* ── 列表行（4px accent 色条 + 文本） ───────────────────────────── */
+.isles-row {
+  position: relative;
+  padding-left: clamp(10px, min(3.4cqw, 6.8cqh), 14px);
+  font-size: clamp(12px, min(4cqw, 8cqh), 18px);
+  line-height: 1.5;
+  color: var(--isles-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.isles-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 1.1em;
+  border-radius: 2px;
+  background: var(--isles-row-accent, var(--isles-accent));
+}
+
+/* ── 进度条 ─────────────────────────────────────────────────────── */
+.isles-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--isles-accent) 14%, var(--isles-card-bg));
+  overflow: hidden;
+}
+.isles-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--isles-accent);
+  transition: width 0.35s ease;
+}
+
+/* ── 状态点 ─────────────────────────────────────────────────────── */
+.isles-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--isles-accent);
+}
+
+/* ==========================================================================
+   图片卡（photo 变体）——自定义背景图专用：白族文字 + 定向暗纱 + 细噪点
+   营造氛围。多层渐变「场景类」已随族视觉统一轮整体移除（族皮肤一律纸卡
+   出厂；如需找回渐变定义查 git 历史）。
+   用法：<div class="isles-card isles-card--photo isles-card--custom"
+            style="--isles-custom-bg: url(...)">
+           <div class="isles-bg"></div>  ← 背景图层必须存在（模糊只糊它）
+           ...内容...
+   卡面背景经 --isles-scene-bg 变量进 .isles-bg 图层绘制（--custom 类把它
+   映射到 --isles-custom-bg）——这样「背景高斯模糊」（--isles-bg-blur-filter，
+   Isles.setBgBlur）只作用背景，文字/暗纱/噪点不受 filter 影响。
+   ========================================================================== */
+.isles-card--photo {
+  color: var(--isles-on-photo);
+  /* 卡壳背景透明：纸色底对场景卡多余（背景层已铺满），且圆角抗锯齿流苏
+     会混出纸底的白点（实机反馈）——边缘只混背景层自身的颜色 */
+  background: transparent;
+  /* 深浅副色在卡壳上按本卡实际主色重新派生——自定义属性继承的是声明处
+     的计算值，:root 里的 color-mix 不会跟随卡面覆盖（经典坑），必须在这里
+     重新声明；皮肤经 Isles.setTextColor() 覆盖 --isles-on-photo 即全卡联动 */
+  --isles-on-photo-2: color-mix(in srgb, var(--isles-on-photo) 72%, transparent);
+  --isles-on-photo-3: color-mix(in srgb, var(--isles-on-photo) 52%, transparent);
+}
+/* 背景图层：inset 放大一圈吃掉 blur 边缘的透明流苏（卡壳 overflow:hidden 裁掉外溢）。
+   特异性纪律：下面这条类规则（0-2-0）压过通配规则，背景层自己拿 position/z-index；
+   内容层的 `> *` 必须保持 0-1-0 低特异性——皮肤样式表靠后同特异性胜出，
+   才能把 .head/.base 改写成 absolute 定位（上次用 :not() 升到 0-2-0 打乱了皮肤布局） */
+.isles-card--photo > * { position: relative; z-index: 3; }
+.isles-card--photo > .isles-bg {
+  position: absolute;
+  inset: -16px;
+  background: var(--isles-scene-bg, none);
+  /* 默认 none 不走滤镜合成路径（blur(0px) 也会强制建滤镜层） */
+  filter: var(--isles-bg-blur-filter, none);
+  transition: opacity 0.25s ease;   /* 场景/底图切换过场（皮肤侧 pulseBg 驱动） */
+  z-index: 0;
+  pointer-events: none;
+}
+.isles-card--photo::before {          /* 定向暗纱：顶保眉题可读、中部通透、底部压主指标。
+                                         单一旋钮 = --isles-scrim-color（Isles.setScrimColor）：
+                                         颜色即色相、其 alpha 即浓度（四挡比例恒定保形态） */
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--isles-scrim-color) 28%, transparent) 0%,
+    color-mix(in srgb, var(--isles-scrim-color) 6%, transparent) 34%,
+    color-mix(in srgb, var(--isles-scrim-color) 10%, transparent) 55%,
+    color-mix(in srgb, var(--isles-scrim-color) 55%, transparent) 100%);
+  pointer-events: none;
+}
+.isles-card--photo::after {           /* 细噪点：去渐变带状感（压在暗纱上，模糊之下无噪点） */
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+  pointer-events: none;
+}
+.isles-card--photo .isles-display,
+.isles-card--photo .isles-title,
+.isles-card--photo .isles-body { color: var(--isles-on-photo); }
+.isles-card--photo .isles-caption { color: var(--isles-on-photo-2); }
+.isles-card--photo .isles-unit { color: var(--isles-on-photo-3); }
+
+
+/* 自定义背景图（运行期经 skin_write_file 写入皮肤目录、CSS 变量注入；
+   声明在 --photo 之后，盖过任何 --isles-scene-bg 值。与 --photo 同款暗纱/白字由类叠加获得） */
+.isles-card--custom {
+  --isles-scene-bg: var(--isles-custom-bg) center / cover no-repeat, #2A2F38;
+}
+
+/* ── hover 工具钮（卡面角落浮现的小圆钮；button 元素不受桥拖动接管影响） ── */
+.isles-toolbtn {
+  display: grid;
+  place-items: center;
+  width: clamp(22px, min(9cqw, 18cqh), 30px);
+  height: clamp(22px, min(9cqw, 18cqh), 30px);
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--isles-ink) 7%, transparent);
+  color: var(--isles-fg-2);
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
+}
+.isles-toolbtn:hover {
+  background: color-mix(in srgb, var(--isles-ink) 13%, transparent);
+  color: var(--isles-fg);
+}
+/* 按压回弹：小圆钮尺寸小，缩放得给足才读得出（0.97 在 26px 上仅 0.8px） */
+.isles-toolbtn:active { transform: scale(0.88); }
+.isles-toolbtn svg { width: 58%; height: 58%; }
+/* 场景卡上用深色半透明 chip——不用 backdrop-filter 毛玻璃：它对背后滤镜层
+   （.isles-bg 的 blur / 自定义图片）的采样在 WebView2 合成器下会画出位置错乱
+   的残留块（实机反馈，hover 淡入时复现） */
+.isles-card--photo .isles-toolbtn {
+  background: rgba(16, 20, 28, 0.42);
+  color: var(--isles-on-photo);
+}
+.isles-card--photo .isles-toolbtn:hover { background: rgba(16, 20, 28, 0.6); }
+
+/* ── 入场：直接子层统一轻微浮起（尊重系统「减弱动画」设置；单一事实源——
+   皮肤里不要再写第二份入场动画） ── */
+@media (prefers-reduced-motion: no-preference) {
+  .isles-card > * { animation: isles-in 0.24s ease-out; }
+}
+@keyframes isles-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}

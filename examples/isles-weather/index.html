@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="base.css" />
+<style>
+  /* 基态 = P 横条（420×200）：左区当下（大温度 + 状况行 + 范围·城市），
+     右区未来五日预报（跳过今天）——「左主右次」分区语言 */
+  .card {
+    flex-direction: row;
+    align-items: stretch;
+    gap: clamp(10px, min(4cqw, 8cqh), 22px);
+    /* 文字深浅副色按卡面主色重新派生（自定义属性继承声明处计算值的经典坑） */
+    --isles-fg-2: color-mix(in srgb, var(--isles-fg) 62%, transparent);
+    --isles-fg-3: color-mix(in srgb, var(--isles-fg) 45%, transparent);
+  }
+
+  .now {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-width: 0;
+    padding-right: clamp(12px, min(4cqw, 8cqh), 20px);
+    border-right: 1px solid color-mix(in srgb, var(--isles-fg) 8%, transparent);
+  }
+  /* 负两位数温度（-10°）也不溢出：字级上限压到 72、禁折行；左区宽度内
+     最坏 4 字符约 158px 放得下 */
+  .temp { font-size: clamp(40px, min(17cqw, 38cqh), 72px); font-weight: 350; white-space: nowrap; }
+  .condline { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+  #cond-icon { width: 30px; height: 30px; }
+  /* 浅色纸卡上白云/浅蓝图标发虚——一层随主色走的投影描边，任何底色都立得住 */
+  .condline img, .day img {
+    filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--isles-fg) 30%, transparent));
+  }
+  .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* 右区：五列等分、整列空间分推撑满高度（实机反馈上下留白过大）——
+     列内节奏 = 星期（顶）/ 图标（中）/ 温度区间（低~高）/ 日期（底） */
+  .more { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .forecast { flex: 1; display: flex; justify-content: space-between; align-items: stretch; }
+  .day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 0;
+    padding: 2px 0;
+  }
+  .day img { width: 32px; height: 32px; }
+  .dw { font-size: clamp(11px, min(3.4cqw, 7cqh), 14px); color: var(--isles-fg-2); white-space: nowrap; }
+  .dtemp { font-size: clamp(11px, min(3.8cqw, 7.6cqh), 15px); color: var(--isles-fg-2); white-space: nowrap; }
+  .dt { font-size: clamp(10px, min(3cqw, 6cqh), 12px); color: var(--isles-fg-3); white-space: nowrap; }
+
+  /* 未设城市 / 加载中：整卡空态引导（不是左区一行小字）——中央大图标 + 说明。
+     两种整卡态共用一个 #empty，文案由 JS 切换 */
+  #empty {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--isles-fg-3);
+    z-index: 3;
+  }
+  #empty svg { width: clamp(30px, min(14cqw, 24cqh), 44px); height: auto; }
+  #empty-text { font-size: clamp(11px, min(3.6cqw, 7.4cqh), 14px); letter-spacing: 0.08em; }
+  .card.no-city .now, .card.no-city .more,
+  .card.loading .now, .card.loading .more { display: none; }
+  .card.no-city #empty, .card.loading #empty { display: flex; }
+
+  /* ── M 小方（≤240px 宽）：当下块几何居中 + 预报隐藏；
+     空态整卡不变（绝对定位两档通用）。纪律：容器查询只样式化子元素 ── */
+  @container (max-width: 240px) {
+    .now {
+      position: absolute;
+      inset: 0;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding-right: 0;
+      border-right: none;
+      text-align: center;
+      z-index: 1;
+    }
+    .temp { font-size: clamp(38px, 30cqw, 52px); }
+    .condline { justify-content: center; }
+    .meta { max-width: 100%; }
+    .more { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="isles-card drag-region card loading" id="card">
+    <div class="now" id="now">
+      <span class="isles-display temp" id="temp">--°</span>
+      <span class="condline">
+        <img id="cond-icon" alt="" draggable="false" />
+        <span class="isles-caption" id="cond"></span>
+      </span>
+      <span class="isles-caption meta" id="meta"></span>
+    </div>
+    <div class="more" id="more"><div class="forecast" id="forecast"></div></div>
+    <div id="empty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+      <span id="empty-text"></span>
+    </div>
+  </div>
+  <script src="base.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

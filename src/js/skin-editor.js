@@ -12,6 +12,10 @@
 import API from './api.js';
 import showToast from './toast.js';
 import { listen } from '@tauri-apps/api/event';
+
+// 吸附间距上限：上游事实源 = src-tauri/src/window/snap.rs 的 MAX_SNAP_GAP
+//（跨进程镜像——改上游常量必须同步这里）
+const SNAP_GAP_MAX = 200;
 import { t, getLang } from './i18n.js';
 import { esc, escAttr, dispName, confirmDialog, bindHotkeyCapture } from './dom.js';
 import { renderPermChipsHTML } from './perms.js';
@@ -105,6 +109,19 @@ export default class SkinEditor {
       }
     } else {
       this.systemFonts = null;
+    }
+    // gpu_adapter 控件需要本机 GPU 适配器清单（同字体模式：代际校验防旧代际覆盖）
+    if (schema.some(d => d.type === 'gpu_adapter')) {
+      try {
+        const adapters = await API.listGpuAdapters();
+        if (gen !== this._gen) return;
+        this.gpuAdapters = adapters;
+      } catch {
+        if (gen !== this._gen) return;
+        this.gpuAdapters = [];
+      }
+    } else {
+      this.gpuAdapters = null;
     }
     this.render(skinChanged);
 
@@ -446,7 +463,7 @@ export default class SkinEditor {
             </div>
             <div class="num-inputs">
               <label>px <input type="number" id="cfg-snapgap"
-                value="${cfg.snap_gap ?? 0}" min="0" max="200"
+                value="${cfg.snap_gap ?? 0}" min="0" max="${SNAP_GAP_MAX}"
                 ${!d.loaded || !cfg.edge_snap ? 'disabled' : ''}></label>
             </div>
           </div>
@@ -767,6 +784,27 @@ export default class SkinEditor {
             </div></div>`;
           break;
         }
+        case 'gpu_adapter': {
+          // 同 font 模式：管理器运行时枚举本机 GPU 生成下拉项（型号名展示，
+          // LUID 存值——名称可重复、枚举顺序会变，LUID 才是稳定标识）；
+          // 当前值不在列表保留为可选防显示跳变——但裸 LUID 对用户无意义
+          //（驱动更新/拔出/禁用会让同一显卡的 LUID 变掉，实机反馈），
+          // 失效项给「已失效的适配器（LUID）」明示文案，换选即消失
+          const adapters = this.gpuAdapters || [];
+          const current = String(value || '');
+          const typeTag = (g) => g.gpu_type === 'integrated' ? t('editor.gpuIntegrated') : t('editor.gpuDiscrete');
+          const opts = current && !adapters.some(g => g.luid === current)
+            ? [{ luid: current, name: t('editor.gpuStale', { luid: current }), gpu_type: '' }, ...adapters]
+            : adapters;
+          row = `<div class="form-row">${labelCell}
+            <select class="cfg-custom cfg-select" data-key="${key}" data-type="gpu_adapter">
+              <option value="" ${current ? '' : 'selected'}>${t('editor.gpuAuto')}</option>
+              ${opts.map(g =>
+                `<option value="${escAttr(g.luid)}" ${g.luid === current ? 'selected' : ''}>${esc(g.name)}${g.gpu_type ? `（${esc(typeTag(g))}）` : ''}</option>`
+              ).join('')}
+            </select></div>`;
+          break;
+        }
         default: // text
           row = `<div class="form-row">${labelCell}
             <input type="text" class="cfg-custom cfg-input" data-key="${key}" data-type="text"
@@ -904,7 +942,7 @@ export default class SkinEditor {
     snapGapInput?.addEventListener('change', () => {
       const gap = parseInt(snapGapInput.value);
       if (Number.isNaN(gap)) return;
-      const clamped = Math.max(0, Math.min(200, gap));
+      const clamped = Math.max(0, Math.min(SNAP_GAP_MAX, gap));
       snapGapInput.value = clamped;
       API.setSnapGap(this.skinId, clamped)
         .catch(err => {
@@ -1264,7 +1302,9 @@ export default class SkinEditor {
     });
 
     // 调色板：预设色块 / 自定义取色 / 透明度滑块
-    // （屏幕取色用原生取色面板自带的吸管）
+    // 屏幕取色：原生取色面板自带吸管在 WebView2 失效，EyeDropper API 独立按钮
+    // 在运行时 152 即调即 AbortError——两路全灭，定案不提供应用内吸管、
+    // 等常青运行时自修（事故依据见关键机制「调色板屏幕取色」条目）
     // 透明度是独立轴——换色保留当前透明度；存储时 100% 写 #rrggbb，否则 #rrggbbaa
     this.container.querySelectorAll('.cfg-palette').forEach(pal => {
       const key = pal.dataset.key;

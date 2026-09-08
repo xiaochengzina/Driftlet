@@ -24,6 +24,7 @@ LOADER = (SRC / "skin" / "loader.rs").read_text(encoding="utf-8")
 PACKAGE = (SRC / "skin" / "package.rs").read_text(encoding="utf-8")
 COMMANDS = (SRC / "commands.rs").read_text(encoding="utf-8")
 UPDATE = (SRC / "update.rs").read_text(encoding="utf-8")
+SNAP = (SRC / "window" / "snap.rs").read_text(encoding="utf-8")
 MIRROR = (ROOT / "tools" / "pack-skin" / "src" / "main.rs").read_text(encoding="utf-8")
 
 failures = []
@@ -176,7 +177,7 @@ for name in ["SkinManifest", "SkinSettingOption", "SkinSettingDef", "WindowDefau
 
 # ─── 2. SkinSettingKind 变体（保序） ───
 a, b = enum_variants(TYPES, "SkinSettingKind"), enum_variants(MIRROR, "SkinSettingKind")
-check("SkinSettingKind 22 变体保序一致", a == b and a is not None,
+check("SkinSettingKind 23 变体保序一致", a == b and a is not None,
       f"安装端 {a} vs pack-skin {b}" if a != b else "")
 # rename_all 判定限定在枚举声明之前的紧邻属性区（复审 D-D/C-F4：全文件
 # 子串判定会被别处的同名属性骗过）
@@ -229,14 +230,33 @@ for fname in ["validate_skin_id", "is_reserved_device_name", "is_valid_entry_nam
         check(f"{fname} 逐字一致", a == b and a is not None, "函数体 token 流不一致")
 
 # ─── 6. window 默认值钳制镜像（loader.rs ↔ main.rs 字面量） ───
+# 安装端钳制锚点 = types.rs 的 MAX_DIMENSION / MIN_OPACITY 常量（审查 G7
+# 收口：字面量曾散多处）——对拍 = 锚点值与镜像字面量一致 + loader 走常量
+dim_anchor = re.search(r"MAX_DIMENSION[^=\n]*=\s*(\d+)", TYPES)
+check("window 钳制镜像：宽高 [1,MAX_DIMENSION]",
+      bool(dim_anchor and dim_anchor.group(1) == "10000"
+           and "types::MAX_DIMENSION" in LOADER
+           and re.search(r"clamp\(1,\s*10000\)", MIRROR)),
+      f"锚点 {dim_anchor and dim_anchor.group(1)}")
+op_anchor = re.search(r"MIN_OPACITY[^=\n]*=\s*([\d.]+)", TYPES)
+check("window 钳制镜像：opacity [MIN_OPACITY,1.0]",
+      bool(op_anchor and op_anchor.group(1) == "0.1"
+           and "types::MIN_OPACITY" in LOADER
+           and re.search(r"clamp\(0\.1,\s*1\.0\)", MIRROR)),
+      f"锚点 {op_anchor and op_anchor.group(1)}")
 clamp_pairs = [
-    ("宽高 [1,10000]", r"clamp\(1,\s*10000\)"),
-    ("opacity [0.1,1.0]", r"clamp\(0\.1,\s*1\.0\)"),
     ("refresh_seconds ≤24h", r"min\(86400\)"),
 ]
 for label, pat in clamp_pairs:
     check(f"window 钳制镜像：{label}",
           re.search(pat, LOADER) is not None and re.search(pat, MIRROR) is not None)
+# snap_gap：安装端引用 snap::MAX_SNAP_GAP 常量，pack-skin 侧为字面量镜像——
+# 对拍 = 安装端常量值与镜像字面量一致
+snap_max = re.search(r"MAX_SNAP_GAP[^=\n]*=\s*(\d+)", SNAP)
+snap_mirror = re.search(r"snap_gap\.min\((\d+)\)", MIRROR)
+check("snap_gap 钳制镜像（snap.rs 常量 → pack-skin）",
+      bool(snap_max and snap_mirror and snap_max.group(1) == snap_mirror.group(1)),
+      f"安装端 {snap_max and snap_max.group(1)} vs 镜像 {snap_mirror and snap_mirror.group(1)}")
 zoom_lo = re.search(r"MIN_ZOOM[^=\n]*=\s*([\d.]+)", COMMANDS)
 zoom_hi = re.search(r"MAX_ZOOM[^=\n]*=\s*([\d.]+)", COMMANDS)
 zoom_ok = (zoom_lo and zoom_hi

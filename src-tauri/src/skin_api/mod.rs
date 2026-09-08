@@ -48,7 +48,7 @@ mod system;
 #[cfg(target_os = "windows")]
 mod audio;
 #[cfg(target_os = "windows")]
-mod gpu;
+pub(crate) mod gpu;
 #[cfg(target_os = "windows")]
 mod media;
 #[cfg(target_os = "windows")]
@@ -76,6 +76,9 @@ use crate::AppState;
 #[derive(Debug, Clone, Serialize)]
 pub struct GpuInfo {
     pub name: String,
+    /// "0xHHHHHHHH_0xLLLLLLLL" 形式的适配器 LUID——同一适配器的稳定标识
+    ///（gpu_adapter 设置控件的值；枚举顺序/索引会变，名称可重复，LUID 不变）
+    pub luid: String,
     /// "discrete" | "integrated"（核显：D3D12 UMA 统一内存适配器）
     pub gpu_type: String,
     pub usage: f32,
@@ -976,6 +979,81 @@ pub async fn skin_get_setting(
     let overrides = crate::skin::settings::load_skin_settings(&skin.directory);
     let values = crate::skin::loader::effective_settings(&skin.manifest, Some(&overrides));
     Ok(values.get(&key).cloned().unwrap_or(serde_json::Value::Null))
+}
+
+// ─── Skin context-menu custom items (label identity, harmless) ───
+
+/// 皮肤自定义右键菜单项的输入形态（label 为单语言皮肤的便捷键——
+/// label_zh/label_en 都缺时它兜底）。
+#[derive(Debug, serde::Deserialize)]
+pub struct SkinMenuItemInput {
+    pub id: String,
+    pub label: Option<String>,
+    pub label_zh: Option<String>,
+    pub label_en: Option<String>,
+    pub checked: Option<bool>,
+}
+
+/// 注册/更新调用方皮肤的右键菜单自定义项（≤8 条）。菜单拼装见
+/// `factory::track_skin_popup_menu`——自定义项带分隔线自成一段、位于隐藏
+/// 与卸载之间；点选后经 `desk-skin-menu-item` DOM 事件回投本皮肤
+/// （fire-and-forget）。身份取自窗口 label（同 show_skin_context_menu）：
+/// 项只影响本皮肤的菜单，自作用无害，不走 caller_skin 全量重验；
+/// 传空数组 = 清除自定义项。
+#[tauri::command]
+pub fn skin_set_menu_items(
+    window: tauri::WebviewWindow,
+    items: Vec<SkinMenuItemInput>,
+) -> Result<(), String> {
+    let state = window.app_handle().state::<crate::AppState>();
+    let lang = state.lang();
+    let Some(skin_id) = window.label().strip_prefix("skin-") else {
+        return Err(tr(&lang, Key::NotASkinWindow).to_string());
+    };
+
+    // 作者面向的快速失败校验：条数 / id 形态与唯一性 / 文案长度与存在性
+    let invalid = |why: String| Err(trf(&lang, Key::InvalidMenuItems, &[&why]));
+    if items.len() > crate::window::factory::SKIN_MENU_CUSTOM_MAX {
+        return invalid(format!(
+            "too many items ({} > {})",
+            items.len(),
+            crate::window::factory::SKIN_MENU_CUSTOM_MAX
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<crate::window::factory::SkinMenuItem> = Vec::with_capacity(items.len());
+    for it in items {
+        let id = it.id.trim().to_string();
+        if id.is_empty()
+            || id.len() > 32
+            || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        {
+            return invalid(format!("bad id '{id}' (1–32, a-z 0-9 - _)"));
+        }
+        if !seen.insert(id.clone()) {
+            return invalid(format!("duplicate id '{id}'"));
+        }
+        let mut label_zh = it.label_zh.unwrap_or_default().trim().to_string();
+        let mut label_en = it.label_en.unwrap_or_default().trim().to_string();
+        let label_plain = it.label.unwrap_or_default().trim().to_string();
+        if label_zh.is_empty() { label_zh = label_plain.clone(); }
+        if label_en.is_empty() { label_en = label_plain; }
+        if label_zh.is_empty() && label_en.is_empty() {
+            return invalid(format!("item '{id}' has no label"));
+        }
+        if label_zh.chars().count() > 40 || label_en.chars().count() > 40 {
+            return invalid(format!("item '{id}' label too long (≤40 chars)"));
+        }
+        out.push(crate::window::factory::SkinMenuItem {
+            id,
+            label_zh,
+            label_en,
+            checked: it.checked.unwrap_or(false),
+        });
+    }
+
+    crate::window::factory::set_skin_menu_items(skin_id, out);
+    Ok(())
 }
 
 /// Persist one of the calling skin's OWN declared custom settings — the same
@@ -1899,8 +1977,8 @@ pub fn skin_get_window_config(
         position_locked: cfg.position_locked,
         resizable,
         zoom,
-        edge_snap: cfg.edge_snap,
-        snap_gap: cfg.snap_gap,
+        edge_snap: cfg.edge_snap.unwrap_or(skin.manifest.window.edge_snap),
+        snap_gap: cfg.snap_gap.unwrap_or(skin.manifest.window.snap_gap),
         x: cfg.x,
         y: cfg.y,
         width: cfg.width,
@@ -1948,7 +2026,7 @@ pub fn skin_set_window_config(
     let mut pos: (Option<i32>, Option<i32>) = (None, None);
     let mut size: (Option<u32>, Option<u32>) = (None, None);
     for (key, value) in &patch {
-        let bad = || format!("invalid value for '{}': {} (支持 {})", key, value, KEYS);
+        let bad = || format!("invalid value for '{}': {} (supported: {})", key, value, KEYS);
         match key.as_str() {
             "opacity" => ops.push(Op::Opacity(value.as_f64().ok_or_else(bad)?)),
             "placement" => {
@@ -1970,7 +2048,7 @@ pub fn skin_set_window_config(
             "y" => pos.1 = Some(i32::try_from(value.as_i64().ok_or_else(bad)?).map_err(|_| bad())?),
             "width" => size.0 = Some(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?),
             "height" => size.1 = Some(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?),
-            other => return Err(format!("unknown config key: '{}' (支持 {})", other, KEYS)),
+            other => return Err(format!("unknown config key: '{}' (supported: {})", other, KEYS)),
         }
     }
     // x/y、width/height 合并成单次调用；缺的一边取**当前实际几何**（已加载

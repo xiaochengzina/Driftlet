@@ -12,23 +12,23 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Install/update skins from `.dskin` skin packages (zip format); updates preserve user settings data
 - Double-click a `.dskin` file to bring up the install wizard directly (the installer registers the file association)
 - Skin permission model: sensitive capabilities must be declared in `permissions` in `skin.json` (12 kinds: registry / Shell / system control (open links / power & Recycle Bin) / clipboard / microphone / arbitrary-path file access / skin window control / media control / notifications / system info / network requests / opening web links); the install wizard lists them one by one and flags them with a three-tier high/medium/low risk grading (see "Security Model")
-- Custom skin settings: declare config items in `skin.json` (22 control types + groups + descriptions); the config panel is generated automatically
+- Custom skin settings: declare config items in `skin.json` (23 control types + groups + descriptions); the config panel is generated automatically
 - Adjust a skin's opacity, position, size, and zoom (the "Window" tab can enable resize-by-dragging: shows a frame hint, drag edges/corners to resize directly; zoom scales the whole window and its content from 50%–200%)
 - Always on top / pin to desktop (mutually exclusive, pin to desktop by default), disable dragging
 - Click-through (per-skin toggle on the "Window" tab, off by default): clicks and scrolls pass through to the window or desktop below — combined with pin-to-desktop the skin becomes a pure display widget
 - Capture preview images for skins
 - Tray icon management; closing the main window hides it to the tray
 - Autostart, dark/light theme switching
-- Right-click a skin window to open the skin menu (open config / refresh / hide / unload)
+- Right-click a skin window to open the skin menu (open config / refresh / hide / unload, plus a window-behavior quick-toggle section: always-on-top / lock position / click-through / resize by dragging / edge snapping; skins can register custom menu items)
 - A global hotkey hides/shows all loaded skins with one keystroke (default Ctrl+Shift+Alt+D, changeable or disabled in Settings), with a synced checked item in the tray menu; Alt+F4 on a skin window only hides it — call it back via the hotkey or the tray
 - Tray "Skin Visibility" submenu: one checkable row per loaded skin, click to toggle that skin's visibility, with the check state synced in real time with the editor, the right-click menu, and the global hotkey
 - Per-skin visibility shortcut: each skin can record a combo in the editor to toggle just that skin's visibility (saving is refused when it duplicates the global hotkey / another skin's combo or is taken by another program)
 - Browser refresh/navigation shortcuts like F5 are blocked in both the manager and skin windows — pages cannot be refreshed by keystroke; the window lifecycle belongs entirely to the manager
 - Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing; the import review shows the permission declarations of the skins inside, same conventions as the install wizard; selective import supported — checking skins in the review list switches to merge mode, replacing only the checked skins and merging their config and layouts, everything else untouched)
 - Layout presets: save the current desktop state (load set + each skin's position/size/visibility) as a named preset and apply it with one click; the tray menu lists presets too
-- Skin groups: custom grouping with fold/unfold, rename and checkbox-based member editing; batch load/unload/hide/show for all members of a group
+- Skin groups: custom grouping with fold/unfold, rename and checkbox-based member editing; batch load/unload/hide/show for all members of a group, or delete a whole group together with its skins (two-step confirmation)
 - Skin duplication: create an independent copy of a skin (separate settings/preview/permissions), and pull the source's latest content into the copy with one click after the source is updated
-- Startup update check (on by default, can be turned off in Settings): downloads the installer in the background once a new GitHub release is found (fixed name `update/Driftlet-update-setup.exe`, overwritten on the next download — no piles of installers), and only then shows an "Install now" prompt; on download failure it falls back to the "Go to download page" flow
+- Startup update check (on by default, can be turned off in Settings): once a new GitHub release is found it prompts immediately and downloads the installer in the background — direct connection and acceleration mirrors race in parallel with segmented downloading (slow/failed direct downloads no longer force a manual trip to the web page; the official SHA-256 of the installer is verified throughout), a progress bar shows during the download, and the primary button turns into "Install now" when done; only on download failure does it fall back to the "Go to download page" flow
 
 ---
 
@@ -75,7 +75,8 @@ npm run tauri build
 │   ├── skin/             # Skin scanning, loading, config, .dskin package installation
 │   └── skin_api/         # System info and sensitive-capability commands callable by skins (require_perm authorization)
 ├── src-tauri/capabilities/ # Window permissions: default.json (main window) / skin.json (skin windows, empty permissions)
-├── examples/             # Example skin sources (reference; shipped as standalone .dskin, not bundled)
+├── examples/             # Official skin family "Isles" sources (design spec / shared base / isles-* skins, bundled into the installer as the "Default Skins" group)
+├── demos/                # Demo skin sources (reference; shipped as standalone .dskin, not bundled)
 │   ├── controls-demo/        # Demo of all settings controls (bilingual; UI language follows the manager)
 │   ├── sys-monitor/          # System monitor (the read-only system-info API set)
 │   ├── media-hub/            # Media console (volume / media / spectrum / notifications)
@@ -164,7 +165,7 @@ if (window.driftlet?.invoke) {
 }
 ```
 
-The optional wrapper `examples/driftlet.js` turns commands into named functions like `Driftlet.getCpuInfo()` (with `driftlet.d.ts` for editor autocomplete); the full command list and contracts are in `docs/skin-development-guide.md` chapter 5.
+The optional wrapper `demos/driftlet.js` turns commands into named functions like `Driftlet.getCpuInfo()` (with `driftlet.d.ts` for editor autocomplete); the full command list and contracts are in `docs/skin-development-guide.md` chapter 5.
 
 ### Custom Settings
 
@@ -249,7 +250,7 @@ document.addEventListener('desk-setting-changed', (e) => {
 });
 ```
 
-Reference example: `examples/controls-demo` (demo of all 22 control types; the UI language follows the manager).
+Reference example: `demos/controls-demo` (demo of all 23 control types; the UI language follows the manager).
 
 ### Installing Skins
 

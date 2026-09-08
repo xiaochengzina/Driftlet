@@ -201,7 +201,22 @@ fn parse_fs_query(query: Option<&str>) -> Option<PathBuf> {
             let decoded = percent_encoding::percent_decode_str(v)
                 .decode_utf8_lossy()
                 .into_owned();
+            // UNC 一律拒绝（与 skin_api any_absolute_path / open_external 同
+            // 口径）：`\\server\share` 的 is_file() 探测会向攻击者 SMB 服务器
+            // 发起 NTLMv2 质询应答（哈希外泄面）——权限声明语义是「本机」
+            // 任意路径，外发越界（审查发现）
+            let t = decoded.trim_start();
+            if t.starts_with("\\\\") || t.starts_with("//") {
+                return None;
+            }
             let p = PathBuf::from(&decoded);
+            #[cfg(target_os = "windows")]
+            if let Some(std::path::Component::Prefix(prefix)) = p.components().next() {
+                use std::path::Prefix;
+                if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..)) {
+                    return None;
+                }
+            }
             if p.is_absolute() && p.is_file() {
                 return p.canonicalize().ok();
             }
@@ -267,7 +282,7 @@ fn parse_opacity(query: Option<&str>) -> f64 {
             if let Some(value) = parts.next() {
                 if let Ok(v) = value.parse::<f64>() {
                     // 下限与 set_skin_opacity 一致：0.0 会让窗口彻底隐形
-                    return v.clamp(0.1, 1.0);
+                    return v.clamp(crate::skin::types::MIN_OPACITY, 1.0);
                 }
             }
         }
@@ -507,6 +522,11 @@ mod tests {
         assert!(parse_fs_query(Some(&dir_q)).is_none(), "目录不放行");
         assert!(parse_fs_query(None).is_none());
         assert!(parse_fs_query(Some("other=x")).is_none());
+        // UNC 路径一律拒（\\server\share 与 //server/share 双形态——
+        // is_file() 探测会外发 NTLM 认证，哈希外泄面）
+        assert!(parse_fs_query(Some("path=%5C%5Cattacker.tld%5Cs%5Cx.png")).is_none(), "UNC 双反杠不放行");
+        assert!(parse_fs_query(Some("path=%2F%2Fattacker.tld%2Fs%2Fx.png")).is_none(), "UNC 双斜杠不放行");
+        assert!(parse_fs_query(Some("path=%5C%5C%3F%5CUNC%5Cattacker.tld%5Cs%5Cx.png")).is_none(), "VerbatimUNC 不放行");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

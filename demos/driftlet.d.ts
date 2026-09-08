@@ -230,6 +230,16 @@ interface DriftletSkinListEntry {
 }
 
 /** 皮肤窗口配置项（skin_get_window_config 的返回结构；skin_set_window_config 的 patch 键子集） */
+/** 皮肤自定义右键菜单项（skin_set_menu_items）：id 小写字母/数字/连字符 ≤32 字符 */
+interface DriftletSkinMenuItem {
+  id: string;
+  /** 中文/英文文案各 ≤40 字符；至少给一个，缺的一边回退另一边 */
+  label_zh?: string;
+  label_en?: string;
+  /** 勾选态（menu 里显示为 ✓） */
+  checked?: boolean;
+}
+
 interface DriftletWindowConfigInfo {
   /** 目标皮肤是否已加载 */
   loaded: boolean;
@@ -306,6 +316,8 @@ declare const Driftlet: {
   showSkin(skinId?: string): Promise<void>;
   /** 皮肤间广播（免权限）：所有已加载皮肤（含自己）的 desk-skin-message 都会收到 */
   broadcast(channel: string, payload: unknown): Promise<void>;
+  /** 给自己的右键菜单注册自定义项（免权限；≤8 条，id 小写字母/数字/连字符 ≤32 字符、双语文案各 ≤40 字符） */
+  setMenuItems(items: DriftletSkinMenuItem[]): Promise<void>;
 
   /** 权限 registry */
   readRegistryValue(root: string, path: string, name: string): Promise<DriftletRegistryValue>;
@@ -388,4 +400,6 @@ declare const Driftlet: {
   /** 本皮肤的窗口配置被改时触发（管理器面板或 control 命令均可），fn(key, value)；返回解绑函数。
       拖拽/边框缩放引起的位置尺寸变化不派发（皮肤自己拖的） */
   onWindowConfigChanged(fn: (key: string, value: unknown) => void): () => void;
+  /** 用户点了本皮肤的自定义右键菜单项（setMenuItems 注册的 id）时触发；返回解绑函数 */
+  onMenuItem(fn: (id: string) => void): () => void;
 };

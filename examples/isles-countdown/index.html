@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="base.css" />
+<style>
+  .card { justify-content: space-between; }
+
+  /* 纸卡无背景层：.isles-bg 在 photo 卡外必须脱离流——在流的空层会参与
+     空间分推、改变内容落位（纸卡 vs 图片模式的布局分叉实机事故） */
+  .card:not(.isles-card--photo) > .isles-bg { display: none; }
+
+  /* 双模文字变量桥：皮肤自定义件一律用 fg 族变量——纸卡按文字色派生
+     （天气同款）；图片卡上映射到白族（base.css 的 on-photo 派生） */
+  .card {
+    --isles-fg-2: color-mix(in srgb, var(--isles-fg) 62%, transparent);
+    --isles-fg-3: color-mix(in srgb, var(--isles-fg) 45%, transparent);
+  }
+  .card.isles-card--photo {
+    --isles-fg: var(--isles-on-photo);
+    --isles-fg-2: var(--isles-on-photo-2);
+    --isles-fg-3: var(--isles-on-photo-3);
+  }
+
+  /* 眉题：名称 + 副题（倒数/已过）；长名称省略号防溢出（mini 档避让右上工具钮） */
+  .head { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  #title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* 底行：大数字（左）与目标日期（右）同一基线 */
+  .base {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6em;
+    margin-top: auto;
+  }
+  .count { display: flex; align-items: baseline; gap: 0.18em; }
+  .days-passed { font-weight: 400; }
+  /* 纸卡模式：大数字吃 accent（点缀色设置）；图片卡保持白族
+     （base.css 的 --photo 规则接管） */
+  .card:not(.isles-card--photo) #days { color: var(--isles-accent); }
+  /* 底部日期全亮主色（半透明在背景上发虚）；单位「天」与副题同档
+     （上下对称的视觉平衡）——两者字重 500 */
+  #date { font-weight: 500; color: var(--isles-fg); }
+  #unit { font-weight: 500; color: var(--isles-fg-2); }
+  /* 「今天/Today」文字态：比数字态小一档（文字在大字号下视觉面积远超
+     数字）、加重、字距再开一点 */
+  #days.days-word {
+    font-size: clamp(24px, min(20cqw, 34cqh), 76px);
+    font-weight: 400;
+    letter-spacing: 0.05em;
+  }
+
+  /* 右上 hover 工具区（button 不受桥拖动接管影响；pointer-events 挡误点、
+     opacity 留键盘可聚焦性——visibility:hidden 会把它们移出 Tab 序） */
+  .tools {
+    position: absolute;
+    top: clamp(10px, min(4cqw, 8cqh), 16px);
+    right: clamp(10px, min(4cqw, 8cqh), 16px);
+    display: flex;
+    gap: 8px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+    z-index: 4;   /* 必须高于内容层 z3——head 通栏盒会盖住按钮中心区域 */
+  }
+  .card:hover .tools, .card:focus-within .tools { opacity: 1; pointer-events: auto; }
+  /* 单按钮双态：无自定义背景 = 选图图标；有 = 恢复卡面图标 */
+  #btn-bg .icon-restore { display: none; }
+  .card.isles-card--custom #btn-bg .icon-image { display: none; }
+  .card.isles-card--custom #btn-bg .icon-restore { display: block; }
+
+  /* ── 布局只有两套（无尺寸设置项）：≤240px 宽 = M 小方，其余 = P 横条 ── */
+  /* 横条（P，出厂 420×200）：左文右数——左列名称+副题**顶对齐**、右列大数字+单位
+     沉底、目标日期收右下角（与族横条左区「眉题顶 + 主内容底」同节奏——
+     此前 align-items:center 垂直居中让眉题下移，实机反馈） */
+  @container (min-width: 241px) {
+    .card { flex-direction: row; align-items: stretch; justify-content: space-between; }
+    .head { gap: 1px; }
+    .base { margin-top: 0; flex-direction: column; align-items: flex-end; justify-content: flex-end; gap: 0; }
+    #days { font-weight: 400; }   /* 数字在横条档加重（350 偏飘） */
+    #date { margin-top: 0.4em; }
+  }
+  /* 小卡（M 200×200）：天数钉死卡面几何中心（垂直水平双居中）——名称/副题
+     悬浮顶部居中、目标日期悬浮底部居中，全部脱离文档流、不参与居中计算；
+     单位「天」省略 */
+  @container (max-width: 240px) {
+    .head { position: absolute; top: 12px; left: 12px; right: 12px; align-items: center; text-align: center; z-index: 1; }
+    #date { position: absolute; bottom: 12px; left: 12px; right: 12px; text-align: center; z-index: 1; }
+    #unit { display: none; }
+    /* 小尺寸数字加重到 500——350/400 在小字号渐变上偏单薄 */
+    #days { font-weight: 500; }
+    /* 文字态在小卡随数字同比例放大（约 0.79×，与横条档同比例） */
+    #days.days-word { font-size: clamp(24px, min(27cqw, 34cqh), 76px); }
+    .base { position: absolute; inset: 0; margin-top: 0; display: flex; align-items: center; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+  <div class="isles-card drag-region card" id="card">
+    <div class="isles-bg"></div>
+    <div class="tools">
+      <button type="button" class="isles-toolbtn" id="btn-bg">
+        <svg class="icon-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+        <svg class="icon-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+      </button>
+    </div>
+    <div class="head">
+      <span class="isles-title" id="title"></span>
+      <span class="isles-caption" id="state"></span>
+    </div>
+    <div class="base">
+      <span class="count">
+        <span class="isles-display" id="days"></span>
+        <span class="isles-unit" id="unit"></span>
+      </span>
+      <span class="isles-caption" id="date"></span>
+    </div>
+    <input type="file" id="file" accept="image/*" hidden />
+  </div>
+  <script src="base.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
