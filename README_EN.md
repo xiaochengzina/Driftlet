@@ -284,6 +284,17 @@ A third-party skin is **networked local code** (a full Chromium web page + backe
 
 ---
 
+## Code signing policy
+
+Installers published to GitHub Releases are code-signed through SignPath (effective from the first release after it is enabled; verify via the installer's "Properties → Digital Signatures" — the publisher is shown as SignPath Foundation).
+
+- Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)
+- Verifiable builds: signing happens only inside the public repository's GitHub Actions workflow (`.github/workflows/release.yml`); every signed artifact maps to a public commit, so anyone can compare source and binary.
+- Team roles (currently a solo project): Committers and reviewers: [@xiaochengzina](https://github.com/xiaochengzina); Approvers (manual approval of each signing request): [@xiaochengzina](https://github.com/xiaochengzina).
+- Privacy policy: see [PRIVACY.md](PRIVACY.md).
+
+---
+
 ## Runtime Data Locations
 
 All data lives alongside the install directory (portable mode):

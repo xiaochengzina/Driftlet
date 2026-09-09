@@ -1,0 +1,183 @@
+name: Release
+
+# 发布候选构建 + 可选代码签名（SignPath Foundation）。与 ci.yml 同一约定：
+# 同一文件两仓库通用（开发仓库 master / 公开仓库 main）。
+#
+# 触发方式：仅手动（workflow_dispatch）。流程：
+#   1. 四处版本号一致性闸门（AGENTS.md 硬性约定 #3）
+#   2. 前端构建 + 后端测试 + tauri build 出 NSIS 安装包
+#   3. 上传未签名安装包为 workflow artifact（SignPath 可验证来源的前提）
+#   4. 满足两个条件才提交签名请求（否则跳过，产物即未签名包）：
+#      - 运行在公开仓库 xiaochengzina/Driftlet（SignPath 签名绑定公开仓库的
+#        可验证构建；在开发仓库/镜像上跑只能构建，不会也不应签名）
+#      - 仓库变量 SIGNPATH_ENABLED = true（SignPath 审批通过、后台配置完成后开启）
+#   5. 签名完成（后台人工审批，最长等 1 小时）→ 计算已签名包 SHA-256 → 上传
+#
+# 发布动作（gh release create / 上传资产）不在本工作流内——见
+# docs/公开发布流程.md（仅开发仓库留存）：下载已签名产物、实机过清单后手动发 release。
+#
+# SignPath 侧一次性配置（后台 UI，非本文件）：
+#   Organization 接入 Trusted Build System "GitHub.com" 并 link 到 Project；
+#   Artifact Configuration 根元素为单文件 <file> + <authenticode-sign>
+#   （本工作流以 archive: false 上传原始 exe，配合 skip-decompress: true）；
+#   元数据限制：product name = "Driftlet"（NSIS 模板已写 VIAddVersionKey）。
+#
+# 需要在公开仓库设置的机密/变量（GitHub Settings，不落任何文件）：
+#   secrets.SIGNPATH_API_TOKEN        —— SignPath 用户的 API token（submitter 权限）
+#   vars.SIGNPATH_ORGANIZATION_ID     —— SignPath 组织 ID
+#   vars.SIGNPATH_PROJECT_SLUG        —— SignPath 项目 slug
+#   vars.SIGNPATH_SIGNING_POLICY_SLUG —— 如 release-signing
+#   vars.SIGNPATH_ENABLED             —— 上述就绪后置 "true"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read   # SignPath connector 校验 workflow run 来源元数据用
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest  # build.rs 嵌 Windows 清单资源；且 OSS 签名要求 GitHub 托管 runner
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Version consistency gate (package.json / package-lock.json / tauri.conf.json / Cargo.toml)
+        shell: pwsh
+        id: version
+        # 用 node 解析 JSON：pwsh 的 ConvertFrom-Json 对 package-lock.json 里
+        # packages 的空字符串键（""）会直接报错（真机实测）。脚本先落临时文件
+        # 再执行，避免 YAML→pwsh→node 三层引号转义。
+        run: |
+          @'
+          const fs = require('fs');
+          const pkg  = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')).version;
+          const m = fs.readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version = "(.+)"$/m);
+          const versions = {
+            'package.json': pkg,
+            'package-lock.json': lock.version,
+            'package-lock.json packages[""]': lock.packages[''].version,
+            'tauri.conf.json': conf,
+            'Cargo.toml': m && m[1],
+          };
+          for (const [k, v] of Object.entries(versions)) console.log(`${k}: ${v}`);
+          if (new Set(Object.values(versions)).size !== 1) {
+            console.error('version mismatch');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg}\n`);
+          '@ | Out-File -Encoding utf8 "$env:TEMP\driftlet-version-gate.js"
+          node "$env:TEMP\driftlet-version-gate.js"
+
+      - name: Frontend build
+        run: npm ci && npm run build
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build NSIS installer
+        run: npm run tauri build
+
+      - name: Locate installer and compute SHA-256 (unsigned)
+        shell: pwsh
+        id: locate
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = '${{ steps.version.outputs.version }}'
+          $exe = "src-tauri/target/release/bundle/nsis/Driftlet_${v}_x64-setup.exe"
+          if (-not (Test-Path $exe)) {
+            Get-ChildItem -Recurse src-tauri/target/release/bundle/ | Format-Table FullName
+            Write-Error "installer not found at expected path: $exe"
+            exit 1
+          }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          Write-Host "unsigned exe: $exe"
+          Write-Host "unsigned sha256: $hash"
+          "exe_path=$exe" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha256_unsigned=$hash" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      # SignPath 可验证来源的硬性前提：待签名产物必须先作为 workflow artifact 落在
+      # GitHub 服务器上，签名请求凭 artifact-id 引用它。archive: false = 原始 exe
+      # 直传（不打 zip），对应 SignPath 侧 <file> 型 artifact configuration。
+      - name: Upload unsigned installer artifact
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: driftlet-setup-unsigned
+          path: ${{ steps.locate.outputs.exe_path }}
+          archive: false
+          retention-days: 14
+
+      - name: Submit signing request (SignPath)
+        id: signpath
+        if: github.repository == 'xiaochengzina/Driftlet' && vars.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          # 签名请求需人工在 SignPath 后台批准（条款强制的 Approver 闸门），
+          # 默认 600s 对人工操作太紧，放宽到 1 小时；超时仅工作流失败，
+          # 请求仍在 SignPath 后台，可批准后从其 UI / PowerShell 取回已签名包。
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed
+          skip-decompress: true
+
+      - name: Compute SHA-256 of signed installer and upload
+        if: github.repository == 'xiaochengzina/Driftlet' && vars.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        id: signed
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $signedExe = Get-ChildItem signed -Filter *.exe -Recurse | Select-Object -First 1
+          if (-not $signedExe) { Write-Error "signed artifact not found under signed/"; exit 1 }
+          $hash = (Get-FileHash $signedExe.FullName -Algorithm SHA256).Hash.ToLower()
+          Write-Host "signed exe: $($signedExe.FullName)"
+          Write-Host "signed sha256: $hash"
+          "exe_path=$($signedExe.FullName)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha256_signed=$hash" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload signed installer artifact
+        if: github.repository == 'xiaochengzina/Driftlet' && vars.SIGNPATH_ENABLED == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: driftlet-setup-signed
+          path: ${{ steps.signed.outputs.exe_path }}
+          archive: false
+          retention-days: 14
+
+      - name: Release summary
+        if: always()
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          $unsigned = '${{ steps.locate.outputs.sha256_unsigned }}'
+          $signed = '${{ steps.signed.outputs.sha256_signed }}'
+          $md = @()
+          $md += "## Driftlet $v 发布候选"
+          $md += ""
+          $md += "- 未签名包 SHA-256：``$unsigned``（artifact ``driftlet-setup-unsigned``）"
+          if ($signed) {
+            $md += "- **已签名包 SHA-256：``$signed``（artifact ``driftlet-setup-signed``）**"
+            $md += ""
+            $md += "release notes 末尾的 ``SHA256:`` 一行必须填**已签名包**的哈希——应用内更新下载的就是它。"
+          } else {
+            $md += "- 签名未执行（非公开仓库，或 ``vars.SIGNPATH_ENABLED`` 未开启）：发布只能用未签名包，notes 的 ``SHA256:`` 填未签名哈希。"
+          }
+          $md += ""
+          $md += "下一步（手动）：下载产物 → 实机过测试清单 → ``gh release create``（见 docs/公开发布流程.md，仅开发仓库留存）。"
+          $md -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8

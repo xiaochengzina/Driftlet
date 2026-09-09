@@ -284,6 +284,17 @@ tools\pack-skin.exe <皮肤文件夹> [输出目录]
 
 ---
 
+## Code signing policy（代码签名政策）
+
+本项目通过 SignPath 对发布到 GitHub Releases 的安装包进行代码签名（自启用后的首个发布版起生效；可通过安装包「属性 → 数字签名」验证，发布者显示为 SignPath Foundation）。
+
+- Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)
+- 可验证构建：签名只发生在公开仓库的 GitHub Actions 工作流内（`.github/workflows/release.yml`），每个签名产物都对应一次公开提交，任何人可比对源码与产物。
+- 团队角色（当前为单人项目）：Committers and reviewers: [@xiaochengzina](https://github.com/xiaochengzina)；Approvers（每个签名请求的人工审批）: [@xiaochengzina](https://github.com/xiaochengzina)。
+- 隐私政策：见 [PRIVACY.md](PRIVACY.md)。
+
+---
+
 ## 运行时数据位置
 
 所有数据都随安装目录走（便携模式）：
