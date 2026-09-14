@@ -90,16 +90,23 @@ console.log("[3/5] 双版文档结构对拍（## 章节数 / 代码块数）");
   }
 }
 
-// ─── 4. CHANGELOG 顶部形态 ───
-console.log("[4/5] CHANGELOG 顶部形态");
+// ─── 4. CHANGELOG 顶部形态（仅开发仓库——CHANGELOG.md 不同步公开仓库，缺失即跳过）───
+console.log("[4/5] CHANGELOG 顶部形态（公开仓库无此文件则跳过）");
 {
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-  const cl = await readFile(join(root, "CHANGELOG.md"), "utf8");
+  let cl;
+  try {
+    cl = await readFile(join(root, "CHANGELOG.md"), "utf8");
+  } catch {
+    ok("CHANGELOG.md 不存在（公开仓库形态）——跳过本项");
+  }
+  if (cl) {
   const top = cl.match(/^## \[(.+)\]\s*(?:-\s*(\d{4}-\d{2}-\d{2}))?/m);
   if (!top) bad("找不到版本节标题（## […]）");
   else if (top[1] === "Unreleased") ok("顶部为 [Unreleased]（开发中形态）");
   else if (top[1] === pkg.version && top[2]) ok("顶部 [" + top[1] + "] - " + top[2] + "，与 package.json 一致");
   else bad("顶部节 [" + top[1] + "] 与 package.json 版本 " + pkg.version + " 不符（或缺日期）");
+  }
 }
 
 // ─── 5. AGENTS.md 约定 #1 点名文件存在 ───
