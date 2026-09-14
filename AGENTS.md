@@ -11,7 +11,7 @@ Driftlet —— Windows 桌面挂件平台（Tauri v2 + WebView2 + 原生 JS 管
 
 ## 硬性约定
 
-1. **文档双版同步**：`docs/皮肤开发指南.md` ↔ `skin-development-guide.md`、`docs/关键机制.md` ↔ `critical-mechanisms.md` 必须成对更新；CHANGELOG.md 仅中文版。
+1. **文档双版同步**：三对必须成对更新——`docs/皮肤开发指南.md` ↔ `skin-development-guide.md`、`docs/关键机制.md` ↔ `critical-mechanisms.md`、`docs/架构与机制总览.md` ↔ `architecture-and-mechanisms.md`；CHANGELOG.md 仅中文版，且不同步公开仓库（公开仓库的变更记录由 releases 页承载：发布时摘对应版本节 + 英文现译）。
 2. **pack-skin 镜像同步**：`src-tauri/src/skin/types.rs`（SkinManifest / SkinSettingKind / SkinSettingDef / WindowDefaults）、`loader.rs` 的校验函数与 window 默认值钳制、`package.rs` 的安全上限，在 `tools/pack-skin/src/main.rs` 有手工镜像——改动必须同步并重建 exe（exe 入库，供创作者免环境使用）。
 3. **版本号四处一致**：`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json`。
 4. **命令闸门**：`skin_api/` 新增敏感命令必须过 `require_perm`；管理器命令必须首行 `require_manager`；日志缓冲读取必须过 `require_log_window`。自定义命令对任何窗口开放，身份只认窗口 label。**任何新命令（不论有无闸）必须在 `src-tauri/src/policy.rs` 的 `COMMAND_POLICIES` 策略表登记档位**——完备性测试核对 generate_handler! 清单 ↔ 策略表双向一致、且函数体出现对应闸门标记，漏登记即测试红。
@@ -23,5 +23,5 @@ Driftlet —— Windows 桌面挂件平台（Tauri v2 + WebView2 + 原生 JS 管
 ## 提交与文档
 
 - 提交信息：详细中文 conventional 风格（`feat:` / `fix:` / `refactor:` / `chore:` / `docs:`），涉及关键机制的变更把事故依据写进提交信息或 `docs/关键机制.md`（该文件是「勿回归」清单，不是可选读物）。
-- **CHANGELOG 面向公开仓库读者（1.2.1 起，维护者定案）**：不写仅开发仓库的内容——内部文档引用（实机测试清单/审查要求/交互动画/设计系统/已知问题/proposals 等）、内部工具链名（.agents 技能）、开发流程叙述（子代理审查/主控亲验/维护者定案/双版同步/⭑ 回归条目）、簿记数字（策略表 N/M）；技术细节以公开代码与公开文档（关键机制/皮肤开发指南/README）为准。开发中又拆除、未随任何公开发行版落地的功能不写进 CHANGELOG（同版又增又删是内部过程）。
+- **CHANGELOG 面向公开仓库读者（1.2.1 起，维护者定案）**：不写仅开发仓库的内容——内部文档引用（实机测试清单/审查要求/设计规范/已知问题/proposals 等）、内部工具链名（.agents 技能）、开发流程叙述（子代理审查/主控亲验/维护者定案/双版同步/⭑ 回归条目）、簿记数字（策略表 N/M）；技术细节以公开代码与公开文档（关键机制/皮肤开发指南/README）为准。开发中又拆除、未随任何公开发行版落地的功能不写进 CHANGELOG（同版又增又删是内部过程）；本次发布周期内未发布的功能在周期内被修改/迭代也不另写说明（它本来就没发布过——只写最终落地形态）。**更新说明要精简**：写用户能感知的变化，不写实现细节清单。
 - 前端无框架：`src/js/` 原生 JS 模块；转义/弹窗等公共件在 `src/js/dom.js`，不要再复制第三份。

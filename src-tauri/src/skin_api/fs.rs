@@ -9,10 +9,10 @@
 //! (skin.json / settings.json*) stay readable but can never be written or
 //! deleted by the skin.
 
-use std::path::{Component, Path, PathBuf};
-use serde::Serialize;
+use crate::i18n::{Key, tr, trf};
 use base64::Engine;
-use crate::i18n::{tr, trf, Key};
+use serde::Serialize;
+use std::path::{Component, Path, PathBuf};
 
 /// Files managed by the app — a skin may read but never write/delete them.
 const PROTECTED: [&str; 4] = [
@@ -116,11 +116,7 @@ pub fn resolve(base: &Path, rel: &str, for_write: bool, lang: &str) -> Result<Pa
             // Windows 里 "CON.txt" 同样是控制台）：读 CON 会无限阻塞主线程
             // 冻结整个应用，写 COM1/LPT1 数据直达物理串并口。一律拒绝。
             // 必须在下方 catch-all Normal 分支之前（match 按序匹配）。
-            Component::Normal(s)
-                if s.to_str()
-                    .map(|s| is_dos_device_name(s))
-                    .unwrap_or(true) =>
-            {
+            Component::Normal(s) if s.to_str().map(is_dos_device_name).unwrap_or(true) => {
                 return Err(trf(lang, Key::InvalidPath, &[rel]));
             }
             Component::Normal(_) => {}
@@ -163,7 +159,12 @@ pub fn resolve(base: &Path, rel: &str, for_write: bool, lang: &str) -> Result<Pa
 }
 
 /// Resolve a write/delete target and reject app-managed files.
-fn resolve_protected(base: &Path, rel: &str, for_write: bool, lang: &str) -> Result<PathBuf, String> {
+fn resolve_protected(
+    base: &Path,
+    rel: &str,
+    for_write: bool,
+    lang: &str,
+) -> Result<PathBuf, String> {
     let p = resolve(base, rel, for_write, lang)?;
     if is_protected(&p) {
         // 受保护文件只认皮肤根目录直下（skin.json、settings.json*）；子目录
@@ -208,7 +209,13 @@ pub fn read_file(base: &Path, rel: &str, binary: bool, lang: &str) -> Result<Str
     }
 }
 
-pub fn write_file(base: &Path, rel: &str, data: &str, binary: bool, lang: &str) -> Result<(), String> {
+pub fn write_file(
+    base: &Path,
+    rel: &str,
+    data: &str,
+    binary: bool,
+    lang: &str,
+) -> Result<(), String> {
     // 二进制：先按 base64 展开上界拦超长输入再解码——先解码后限会把宿主
     // 内存放大到输入串级别（复审 B-F4；界 = 解码后恰超 MAX 的最小输入长，
     // 外加少量 padding 余量）
@@ -236,7 +243,9 @@ pub fn write_file(base: &Path, rel: &str, data: &str, binary: bool, lang: &str) 
     //（审查发现：直写崩一次整文件损坏）
     let tmp = p.with_file_name(format!(
         "{}.tmp",
-        p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
     ));
     std::fs::write(&tmp, &bytes).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
     std::fs::rename(&tmp, &p).map_err(|_| trf(lang, Key::InvalidPath, &[rel]))?;
@@ -307,7 +316,10 @@ mod tests {
     fn roundtrip_and_subdirectory_creation() {
         let base = temp_base("rw");
         write_file(&base, "data/notes/todo.txt", "你好", false, "zh-CN").unwrap();
-        assert_eq!(read_file(&base, "data/notes/todo.txt", false, "zh-CN").unwrap(), "你好");
+        assert_eq!(
+            read_file(&base, "data/notes/todo.txt", false, "zh-CN").unwrap(),
+            "你好"
+        );
 
         // binary roundtrip (0xFF/0xFE/0xFD is not valid UTF-8)
         write_file(&base, "bin.dat", "/v79", true, "zh-CN").unwrap();
@@ -377,8 +389,14 @@ mod tests {
         std::fs::write(base.join("f.bin"), b"123456").unwrap();
         // 上限内直读 OK；恰好超限被拒——防线不依赖 metadata 预检（TOCTOU）
         assert_eq!(read_capped(&base.join("f.bin"), 6).unwrap(), b"123456");
-        assert!(matches!(read_capped(&base.join("f.bin"), 5), Err(CapReadError::TooLarge)));
-        assert!(matches!(read_capped(&base.join("nope.bin"), 5), Err(CapReadError::Io(_))));
+        assert!(matches!(
+            read_capped(&base.join("f.bin"), 5),
+            Err(CapReadError::TooLarge)
+        ));
+        assert!(matches!(
+            read_capped(&base.join("nope.bin"), 5),
+            Err(CapReadError::Io(_))
+        ));
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -388,7 +406,10 @@ mod tests {
         std::fs::write(base.join("a.txt"), "1").unwrap();
         // CON/NUL/COM1/LPT1 及带扩展名形式一律拒绝（读 CON 会挂死主线程）
         for bad in ["con", "CON", "nul.txt", "com1", "LPT9.log"] {
-            assert!(resolve(&base, bad, false, "zh-CN").is_err(), "{bad} must be rejected");
+            assert!(
+                resolve(&base, bad, false, "zh-CN").is_err(),
+                "{bad} must be rejected"
+            );
         }
         // 正常名字不误伤（a.txt 存在直读；console.log 走写路径——读路径
         // canonicalize 要求存在）

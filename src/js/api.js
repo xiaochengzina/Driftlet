@@ -110,8 +110,39 @@ const API = {
   },
 
   // 双击 .dskin 冷启动时后端暂存的待安装包路径（消费型，只取到一次）
+  // 待安装包 / 待打开皮肤配置 / 启动自动更新检测闸门（管理器销毁重建期间的
+  // 事件暂存与每进程一次约定，详见后端同名命令）
   takePendingPackageInstall() {
     return invoke('take_pending_package_install');
+  },
+
+  takePendingOpenConfig() {
+    return invoke('take_pending_open_config');
+  },
+
+  takeUpdateAutoChecked() {
+    return invoke('take_update_auto_checked');
+  },
+
+  // 专注模式（面板读态 / 切换 / 白名单 / 动作档 / 全屏自动）
+  getFocusModeState() {
+    return invoke('get_focus_mode_state');
+  },
+
+  toggleFocusMode() {
+    return invoke('toggle_focus_mode');
+  },
+
+  setFocusExempt(skinId, on) {
+    return invoke('set_focus_exempt', { skinId, on });
+  },
+
+  setFocusModeAction(action) {
+    return invoke('set_focus_mode_action', { action });
+  },
+
+  setFocusModeAutoFullscreen(on) {
+    return invoke('set_focus_mode_auto_fullscreen', { on });
   },
 
   removeSkin(skinId) {
@@ -244,6 +275,16 @@ const API = {
 
   openReleasePage() {
     return invoke('open_release_page');
+  },
+
+  // 打开公开仓库主页（关于页；URL 后端固定）
+  openRepoPage() {
+    return invoke('open_repo_page');
+  },
+
+  // 最终用户协议全文（关于页「查看」；与安装器许可页同一份文件）
+  getUserAgreement() {
+    return invoke('get_user_agreement');
   },
 
   // 自动下载新版安装包（多源竞速 + 分段并行提速；sha256 = check_update

@@ -124,7 +124,10 @@ export default class InstallWizard {
         ${renderPermsHTML(info.permissions, { withTitle: true })}
         ${info.requires_host_version ? `<p class="wizard-note warn">${t('wizard.hostTooOld', { version: esc(info.requires_host_version) })}</p>` : ''}
         <div class="wizard-statusline ${danger ? 'danger' : ''}">
-          <strong>${heading}</strong> · ${statusLine}
+          <span class="wsl-ico">${danger
+            ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+            : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>'}</span>
+          <span><strong>${heading}</strong> · ${statusLine}</span>
         </div>
         ${note}
         <div class="wizard-actions">

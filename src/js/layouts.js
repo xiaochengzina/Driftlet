@@ -2,18 +2,15 @@
  * layouts.js — 布局方案面板（保存/应用/覆盖/重命名/删除命名布局）
  *
  * 布局 = 加载集 + 各皮肤几何（位置/尺寸）+ 显隐（语义边界：皮肤行为配置
- * 不归布局管，仍归各皮肤 skin_settings 自管）。浮层复用 confirm 系弹层
- * 骨架（bindEsc / closeOnMaskClick 小工具 + confirm-overlay /
- * confirm-dialog 视觉类——dom.js 注释指明的特殊弹窗模式，与分组编辑
- * 对话框同款）。
+ * 不归布局管，仍归各皮肤 skin_settings 自管）。骨架 = 功能面板模板
+ * （docs/设计规范.md §3.3：panel-head/副题/右上角 × + panel-body）；
+ * 遮罩/Esc 小工具与 confirm 系同源（dom.js）。
  *
- * 面板结构：页眉（display 字体 h2 眉题 + 一句话布局语义副题——页眉/页脚
- * 贴近设置页语言，中间保存区与清单块维持原语言）→ 保存区（名称输入 +
- * 存档主钮，无分区标签——按钮自带说明，评审定案多余）→ 方案清单（名称 + 皮肤数弱签 + 应用主钮 + 覆盖/
- * 重命名/删除幽灵图标钮）→ 尾注（计数 + 托盘菜单提示）+ 全宽关闭钮
- * （settings-close 同款）。图标统一官方 Feather 细线条语系（与组菜单 /
- * 管理器工具栏同族，路径逐字照抄勿手绘改动）。关闭出口 = 底部「关闭」/
- * 点遮罩/Esc。
+ * 面板结构：panel-head（标题 + 副题 + ×）→ 保存区（名称输入 + 存档主钮，
+ * 全板唯一 primary）→ 方案清单（名称 + 皮肤数弱签 + 应用普通钮 + 覆盖/
+ * 重命名/删除幽灵图标钮）→ 尾注（计数 + 托盘菜单提示）。图标统一官方
+ * Feather 细线条语系（路径逐字照抄勿手绘改动）。关闭出口 = 右上角 × /
+ * 点遮罩 / Esc。
  */
 import API from './api.js';
 import showToast from './toast.js';
@@ -89,23 +86,31 @@ export default class LayoutPanel {
       ? t('layout.footerCount', { count: this.layouts.length }) + ' · '
       : '') + t('layout.footerHint');
     overlay.innerHTML = `
-      <div class="confirm-dialog wide layout-panel">
-        <h2>${t('layout.title')}</h2>
-        <div class="layout-sub">${t('layout.subtitle')}</div>
-        <div class="layout-save">
-          <input class="group-edit-name" id="layout-name-input" maxlength="64"
-                 placeholder="${t('layout.namePlaceholder')}" spellcheck="false" autocomplete="off">
-          <button class="confirm-btn primary" id="layout-save-btn">${ICON_SAVE}<span>${t('layout.saveCurrent')}</span></button>
+      <div class="panel wide layout-panel">
+        <div class="panel-head">
+          <div>
+            <h2>${t('layout.title')}</h2>
+            <div class="panel-sub">${t('layout.subtitle')}</div>
+          </div>
+          <button class="panel-close" title="${t('common.close')}">
+            <svg width="11" height="11" viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
         </div>
-        <div class="layout-list">${rows}</div>
-        <div class="layout-foot-hint">${footHint}</div>
-        <button class="settings-close">${t('common.close')}</button>
+        <div class="panel-body">
+          <div class="layout-save">
+            <input class="group-edit-name" id="layout-name-input" maxlength="64"
+                   placeholder="${t('layout.namePlaceholder')}" spellcheck="false" autocomplete="off">
+            <button class="confirm-btn primary" id="layout-save-btn">${ICON_SAVE}<span>${t('layout.saveCurrent')}</span></button>
+          </div>
+          <div class="layout-list">${rows}</div>
+          <div class="layout-foot-hint">${footHint}</div>
+        </div>
       </div>`;
     document.body.appendChild(overlay);
     this.overlay = overlay;
     this._unbindEsc = bindEsc(() => this.close());
     closeOnMaskClick(overlay, () => this.close());
-    overlay.querySelector('.settings-close').onclick = () => this.close();
+    overlay.querySelector('.panel-close').onclick = () => this.close();
 
     const nameInput = overlay.querySelector('#layout-name-input');
     const saveBtn = overlay.querySelector('#layout-save-btn');
@@ -124,7 +129,7 @@ export default class LayoutPanel {
       const id = btn.closest('.layout-row')?.dataset.layoutId;
       if (!id) return;
       if (btn.dataset.act === 'apply') this.apply(id, btn);
-      else if (btn.dataset.act === 'overwrite') this.overwrite(id, btn);
+      else if (btn.dataset.act === 'overwrite') this.confirmOverwrite(id, btn);
       else if (btn.dataset.act === 'rename') this.startRename(id);
       else if (btn.dataset.act === 'delete') this.confirmDelete(id);
       else if (btn.dataset.act === 'rename-save') {
@@ -165,12 +170,13 @@ export default class LayoutPanel {
       </div>`;
     }
     // 覆盖/重命名/删除收敛为幽灵图标钮——四枚文字钮会把行宽吃光，
-    // 弱操作不该与「应用」主钮同形同级
+    // 弱操作不该与主钮同形同级；「应用」是普通钮（全板唯一 primary
+    // 是「保存当前」，规范 §4.1 同屏单 primary）
     return `<div class="layout-row" data-layout-id="${escAttr(l.id)}">
       <span class="layout-row-name" title="${escAttr(l.name)}">${esc(l.name)}</span>
       <span class="layout-row-count">${t('layout.skinCount', { count: Object.keys(l.skins || {}).length })}</span>
       <span class="layout-row-actions">
-        <button class="action-btn primary layout-act" data-act="apply">${t('layout.apply')}</button>
+        <button class="action-btn layout-act" data-act="apply">${t('layout.apply')}</button>
         <button class="layout-icon-btn" data-act="overwrite" title="${t('layout.overwriteTip')}">${ICON_REFRESH}</button>
         <button class="layout-icon-btn" data-act="rename" title="${t('layout.rename')}">${ICON_PENCIL}</button>
         <button class="layout-icon-btn danger" data-act="delete" title="${t('common.delete')}">${ICON_TRASH}</button>
@@ -237,6 +243,22 @@ export default class LayoutPanel {
     } finally {
       this._restoreBtn(btn);
     }
+  }
+
+  // 覆盖方案（不可逆替换已有布置 → 单次确认弹窗：覆盖是行内幽灵图标钮，
+  // 误触易发，确认后才执行）。蓝色警示（primary）而非红色危险（danger）
+  // ——覆盖不删任何文件，红留给真删除
+  confirmOverwrite(id, btn) {
+    const layout = this.layouts.find(l => l.id === id);
+    if (!layout) return;
+    const count = Object.keys(layout.skins || {}).length;
+    confirmDialog({
+      title: t('layout.overwriteTitle'),
+      bodyHtml: t('layout.overwriteBody', { name: `<strong>"${esc(layout.name)}"</strong>`, count }),
+      hint: t('layout.overwriteHint'),
+      confirmText: t('layout.overwriteConfirm'),
+      onConfirm: () => this.overwrite(id, btn),
+    });
   }
 
   async overwrite(id, btn) {

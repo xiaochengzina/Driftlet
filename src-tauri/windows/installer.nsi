@@ -191,11 +191,13 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 ; profile/arch/machine independent. An upgraded cli that changes the bundler
 ; layout must re-verify it (same re-sync checkpoint as the other template
 ; customizations in docs/关键机制.md).
+;
+; Per-language agreement: the license text is a LangString resolved at page
+; display time, so Chinese installers get the pure-Chinese text and everyone
+; else the English text (LicenseLangString definitions live right after the
+; MUI_LANGUAGE inserts below — forward references resolve fine).
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-; NOTE: forward slashes on purpose - the bundler renders this template with
-; handlebars, and backslash-heavy literals are escape-minefields at every
-; layer (JS string -> handlebars -> NSIS). NSIS/Windows accept "/" fine.
-!insertmacro MUI_PAGE_LICENSE "../../../../windows/installer-license.txt"
+!insertmacro MUI_PAGE_LICENSE $(driftletLicenseData)
 
 ; 3. Install mode (if it is set to `both`)
 !if "${INSTALLMODE}" == "both"
@@ -532,6 +534,18 @@ FunctionEnd
   !include "{{this}}"
 {{/each}}
 
+; Driftlet customization: per-language user agreement for the license page
+; (referenced as $(driftletLicenseData) by MUI_PAGE_LICENSE above; the
+; forward reference resolves at compile time). Chinese -> pure Chinese text,
+; every other language -> English text. NOTE: forward slashes on purpose -
+; the bundler renders this template with handlebars, and backslash-heavy
+; literals are escape-minefields at every layer (JS string -> handlebars ->
+; NSIS). NSIS/Windows accept "/" fine. Both files MUST be UTF-8 with BOM
+; (without it makensis compiles silently but the runtime decodes as ANSI,
+; garbling all Chinese on the license page).
+LicenseLangString driftletLicenseData ${LANG_SIMPCHINESE} "../../../../windows/installer-license-zh.txt"
+LicenseLangString driftletLicenseData ${LANG_ENGLISH} "../../../../windows/installer-license-en.txt"
+
 ; Driftlet customization: finish-page autostart checkbox label (used by
 ; FinishPageShow above). Worded exactly like the settings-panel toggle
 ; (i18n.js settings.autostart) so the two never drift apart.
@@ -708,6 +722,24 @@ Section WebView2
     !if "${MINIMUMWEBVIEW2VERSION}" != ""
       ${VersionCompare} "${MINIMUMWEBVIEW2VERSION}" "$4" $R0
       ${If} $R0 = 1
+        !if "${INSTALLWEBVIEW2MODE}" == "offlineInstaller"
+          ; NOTE(driftlet) 自定义⑤：离线包升级旧运行时也必须用内嵌的离线运行时——
+          ; 上游模板的 EdgeUpdate 在线升级在无网络机器上必然失败（实机反馈：
+          ; 离线包却尝试在线更新 WebView2）。载荷与参数与安装段同款；失败可
+          ; 重试/忽略（忽略 = 旧运行时装机，皮肤降级 + 启动提醒兜着）。
+          update_webview_offline:
+            DetailPrint "$(installingWebview2)"
+            Delete "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
+            File "/oname=$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" "${WEBVIEW2INSTALLERPATH}"
+            ExecWait '"$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" ${WEBVIEW2INSTALLERARGS} /install' $1
+            ${If} $1 = 0
+              DetailPrint "$(webview2InstallSuccess)"
+            ${Else}
+              MessageBox MB_ICONEXCLAMATION|MB_ABORTRETRYIGNORE "$(webview2InstallError)" IDIGNORE ignore_offline IDRETRY update_webview_offline
+              Quit
+              ignore_offline:
+            ${EndIf}
+        !else
         update_webview:
           DetailPrint "$(installingWebview2)"
           ${If} ${RunningX64}
@@ -730,6 +762,7 @@ Section WebView2
               ignore:
             ${EndIf}
           ${EndIf}
+        !endif
       ${EndIf}
     !endif
   ${EndIf}

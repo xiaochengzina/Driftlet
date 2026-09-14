@@ -2,7 +2,7 @@
   "id": "isles-weather",
   "name_zh": "天气",
   "name_en": "Weather",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "author": "Driftlet",
   "description_zh": "屿族天气卡：当下温度与五日预报一瞥（数据源 Open-Meteo，免密钥）",
   "description_en": "Isles weather card: current temperature and a five-day outlook at a glance (Open-Meteo, no key)",

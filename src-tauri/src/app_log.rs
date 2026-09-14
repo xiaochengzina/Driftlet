@@ -54,8 +54,7 @@ pub struct LogEntry {
     pub message: String,
 }
 
-static BUF: LazyLock<Mutex<VecDeque<LogEntry>>> =
-    LazyLock::new(|| Mutex::new(VecDeque::new()));
+static BUF: LazyLock<Mutex<VecDeque<LogEntry>>> = LazyLock::new(|| Mutex::new(VecDeque::new()));
 static SEQ: AtomicU64 = AtomicU64::new(0);
 /// setup 时注入的 AppHandle：push 时向日志窗口（若开着）定向 emit。
 static APP: OnceLock<AppHandle> = OnceLock::new();
@@ -142,9 +141,7 @@ pub fn entries() -> Vec<LogEntry> {
 }
 
 pub fn clear() {
-    BUF.lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
+    BUF.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 // ─── log crate 对接 ───
@@ -153,8 +150,7 @@ struct DriftletLogger;
 
 impl log::Log for DriftletLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
-            && metadata.target().starts_with("driftlet_lib")
+        metadata.level() <= log::Level::Info && metadata.target().starts_with("driftlet_lib")
     }
 
     fn log(&self, record: &log::Record) {
@@ -201,7 +197,10 @@ mod tests {
         let list = entries();
         assert_eq!(list.len(), MAX_ENTRIES);
         assert_eq!(list.first().unwrap().message, "msg-10");
-        assert_eq!(list.last().unwrap().message, format!("msg-{}", MAX_ENTRIES + 9));
+        assert_eq!(
+            list.last().unwrap().message,
+            format!("msg-{}", MAX_ENTRIES + 9)
+        );
         // seq 单调递增
         assert!(list.windows(2).all(|w| w[0].seq < w[1].seq));
 

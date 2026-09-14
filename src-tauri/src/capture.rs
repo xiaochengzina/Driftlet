@@ -5,32 +5,31 @@
 /// 不受窗口遮挡 / 贴桌面 / 最小化影响。
 ///
 /// 落盘前降采样到 PREVIEW_MAX_DIMENSION：管理器皮肤卡片的显示高度只有
-/// 112px（style.css .skin-preview），而 CapturePreview 按窗口原始分辨率
+/// 96px（style.css .skin-preview），而 CapturePreview 按窗口原始分辨率
 /// 出图——大屏皮肤可达 1920×1080+，解码后 ~8MB RGBA 整张驻留管理器渲染
 /// 进程（列表里每张预览都如此）。压到 640px（显示尺寸的数倍，含高分屏
 /// 余量）后单张解码内存 ~0.6MB。降采样失败不阻断截图：原图落盘，大不了
 /// 偏大，不能没有。
-
 #[cfg(target_os = "windows")]
 pub fn capture_webview_to_png(
     window: &tauri::WebviewWindow,
     output_path: &std::path::Path,
     lang: &'static str,
 ) -> Result<(), String> {
+    use crate::i18n::{Key, tr, trf};
     use std::sync::mpsc;
     use std::time::Duration;
-    use windows::Win32::Foundation::HGLOBAL;
-    use windows::Win32::System::Com::{
-        IStream, STATSTG, STATFLAG_DEFAULT, STREAM_SEEK_SET,
-        StructuredStorage::CreateStreamOnHGlobal,
-    };
     use webview2_com::{
         CapturePreviewCompletedHandler,
         Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
     };
-    use crate::i18n::{tr, trf, Key};
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::Com::{
+        IStream, STATFLAG_DEFAULT, STATSTG, STREAM_SEEK_SET,
+        StructuredStorage::CreateStreamOnHGlobal,
+    };
 
-    /// 预览图降采样上限（像素）。管理器卡片显示高度 112px，640 已含
+    /// 预览图降采样上限（像素）。管理器卡片显示高度 96px，640 已含
     /// 高分屏与宽预览余量；创作者自带的 preview.png 上限见 package.rs
     /// 的安装校验（1280），两边口径不同是刻意的：截图服务的是列表缩略，
     /// 创作者预览允许更精细的原图。
@@ -72,7 +71,11 @@ pub fn capture_webview_to_png(
     }
 
     /// 读出 IStream 全部内容并写进文件（在截图完成回调里调用）。
-    fn drain_stream_to_file(stream: &IStream, path: &std::path::Path, lang: &str) -> Result<(), String> {
+    fn drain_stream_to_file(
+        stream: &IStream,
+        path: &std::path::Path,
+        lang: &str,
+    ) -> Result<(), String> {
         unsafe {
             let mut stat = STATSTG::default();
             stream
@@ -104,11 +107,15 @@ pub fn capture_webview_to_png(
             // 零字节截图不得当成功落盘（Stat/Read 得 0 时静默写空文件，
             // 失败截图被当成功——预览图变成空白文件还当最新）
             if filled == 0 {
-                return Err(format!("capture produced 0 bytes (source: {} bytes declared)", size));
+                return Err(format!(
+                    "capture produced 0 bytes (source: {} bytes declared)",
+                    size
+                ));
             }
             // 降采样后再落盘：列表缩略用不到全尺寸位图（见文件头注释）
             let buf = downscale_preview_png(buf);
-            std::fs::write(path, &buf).map_err(|e| trf(lang, Key::WritePreviewFailed, &[&e.to_string()]))?;
+            std::fs::write(path, &buf)
+                .map_err(|e| trf(lang, Key::WritePreviewFailed, &[&e.to_string()]))?;
         }
         Ok(())
     }
@@ -149,7 +156,11 @@ pub fn capture_webview_to_png(
                 &stream,
                 &handler,
             ) {
-                send_err(trf(lang, Key::CapturePreviewCallFailed, &[&format!("{e:?}")]));
+                send_err(trf(
+                    lang,
+                    Key::CapturePreviewCallFailed,
+                    &[&format!("{e:?}")],
+                ));
             }
         })
         .map_err(|e| trf(lang, Key::AccessWebViewFailed, &[&e.to_string()]))?;

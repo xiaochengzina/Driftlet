@@ -1,0 +1,10 @@
+{
+  // 离线版产物的打包覆盖（与 tauri.conf.json 深合并）：内嵌 WebView2 完整
+  // 离线运行时（~+127MB），安装全程零网络。仅 release 工作流的离线版构建
+  // 步骤与本地验证使用；日常构建/更新通道产物不受影响。
+  "bundle": {
+    "windows": {
+      "webviewInstallMode": { "type": "offlineInstaller", "silent": true }
+    }
+  }
+}

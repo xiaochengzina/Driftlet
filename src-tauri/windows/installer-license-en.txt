@@ -1,0 +1,100 @@
+﻿DRIFTLET END USER AGREEMENT
+
+Last updated: September 13, 2026
+
+This agreement is a legal agreement between you (the "User") and the Driftlet project team ("we", "us") concerning the downloading, installation and use of the Driftlet software (the "Software", including its skin manager, desktop widget host, bundled tools and documentation).
+
+Please read this agreement carefully before using the Software.
+
+
+1. ACCEPTANCE
+
+1.1 By downloading, installing or using the Software, you confirm that you have read, understood and agreed to all of the terms of this agreement. If you do not agree to any part of it, do not download, install or use the Software; if it is already installed, uninstall it via the system "Apps" settings.
+
+1.2 This agreement applies to all uses of the Software, including first-time installation, overwrite installation, update installation and downgrade installation. The text of this agreement shown in the installer and the text shown inside the Software are equally binding.
+
+1.3 If you are a minor or otherwise lack full legal capacity, please read and accept this agreement together with your parent or guardian before using the Software.
+
+
+2. LICENSE
+
+2.1 The Software is free and open-source. Its source code is published in a public repository (github.com/xiaochengzina/Driftlet) under the GNU General Public License, version 3 (GPL-3.0). You may download, install, copy and use the Software free of charge.
+
+2.2 No reselling: the Software is not sold through any paid channel. If you obtained the Software through a paid purchase or similar channel, the seller is likely committing fraud — please report the seller to the project and request a refund from the sales platform.
+
+2.3 You may freely redistribute the Software's original, unmodified installer packages, subject to GPL-3.0. When redistributing, you must not misrepresent any relationship between the Software and the project team (including claiming official endorsement, partnership or authorization).
+
+2.4 The name, icons and "Driftlet" marks of the Software belong to the project team and must not be used in ways that confuse origin without permission.
+
+
+3. DERIVATIVE WORKS
+
+3.1 You are welcome to create skins (.dskin), widgets and other derivative works based on the Software, and to publish and share them freely. No additional authorization is required.
+
+3.2 Derivative works must be published non-commercially: no paid downloads, no advertising, tipping or sponsorship monetization, and no bundled paid content or services.
+
+3.3 Derivative works you publish must truthfully declare the permissions they require (see Section 4); you must not hide, downplay or misrepresent their actual behavior. You are solely responsible for the code and content of your derivative works; we are not involved.
+
+3.4 Derivative works must not contain malicious code, illegal content, or content that infringes the lawful rights of others, and must not use the Software for any illegal or non-compliant activity.
+
+
+4. THIRD-PARTY SKINS AND PERMISSION DECLARATIONS
+
+4.1 The Software is a runtime platform: in addition to the bundled official skins, you may install skins created by third parties. Third-party skins are independently created and maintained by their authors.
+
+4.2 Before installing a third-party skin, the Software shows the list of permissions the skin declares (such as system commands, file system, network access). Please note: permission declarations are the skin author's self-report. We do not guarantee their completeness or accuracy, and behavior beyond the declarations may still exist. Only install skins from sources you trust, and read the permission declarations carefully before installing.
+
+4.3 Any problem, loss or dispute arising from installing or using a third-party skin (including but not limited to data leakage, system malfunction or property damage) is the responsibility of that skin's author, not ours.
+
+4.4 You may report third-party skins that violate this agreement via the Issues page of the public repository.
+
+
+5. NETWORK ACCESS AND SOFTWARE UPDATES
+
+5.1 By default, the Software checks for updates at startup: it reads release information from the public repository and downloads the installer package when a new version is found. You can turn off automatic checks in "Settings → General". Update checks and installer downloads carry none of your personal information.
+
+5.2 Some skins need network access to fetch data (for example weather or balance queries). Such network requests are the responsibility of the skin's author — their content, destination and frequency depend on the skin itself, not on us.
+
+
+6. PRIVACY AND DATA
+
+6.1 The Software itself does not collect, upload or sell any of your personal data in the background. All of your configuration, layouts and skin data are stored on your own device (inside the Software's installation directory).
+
+6.2 Uninstalling the Software deletes all data inside the installation directory (including your skins and configuration). If you want to keep your data, export a backup first via "Settings → Advanced" before uninstalling.
+
+
+7. DISCLAIMER OF WARRANTIES
+
+7.1 The Software is provided "as is", without warranties of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, freedom from defects, or uninterrupted operation.
+
+7.2 We do not warrant that the Software is fully compatible with all of your hardware and software environments, nor the availability or safety of any third-party skin.
+
+7.3 You use the Software (including third-party skins) at your own risk. Please make regular backups of important data.
+
+
+8. LIMITATION OF LIABILITY
+
+8.1 To the maximum extent permitted by applicable law, we are not liable for any indirect, incidental, special or consequential damages arising from the use of or inability to use the Software, including but not limited to loss of data, loss of profits, business interruption or equipment damage — even if we have been advised of the possibility of such damages.
+
+8.2 Where applicable law does not allow a full exclusion of liability, and given that the Software is provided free of charge, our aggregate liability is limited to zero (0).
+
+
+9. CHANGES AND TERMINATION
+
+9.1 We may revise this agreement with new releases of the Software; the revised agreement is published with the new version's installer and inside the Software. Installing or continuing to use the new version means you accept the revised agreement; if you do not agree to the changes, stop using and uninstall the Software.
+
+9.2 If you breach any term of this agreement, the license granted to you under this agreement terminates automatically, and you must uninstall and delete all copies of the Software.
+
+9.3 You may terminate this agreement at any time by uninstalling the Software.
+
+
+10. MISCELLANEOUS
+
+10.1 If any provision of this agreement is held invalid or unenforceable, the remaining provisions remain in full force.
+
+10.2 This agreement is available in Chinese and English. In case of any discrepancy or inconsistency between the two texts, the Chinese version prevails.
+
+10.3 For questions, reports or feedback about this agreement, please use the Issues page of the public repository (github.com/xiaochengzina/Driftlet/issues).
+
+
+By installing or using this software, you confirm that you have read and agree to all of the terms above.

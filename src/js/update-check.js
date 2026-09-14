@@ -24,6 +24,10 @@ export async function initUpdateCheck() {
   try {
     const config = await API.getAppConfig();
     if (config.update_check === false) return;
+    // 启动自动检测每进程只做一次：管理器关窗即销毁后，每次重建都会重跑
+    // init——没有这道闸门，挂着更新时每次打开管理器都会重查重弹
+    // （手动「检查更新」走关于页 checkUpdatesManual，不受此限）
+    if (await API.takeUpdateAutoChecked()) return;
     const result = await API.checkUpdate();
     if (!result?.has_update) return;
 
@@ -36,6 +40,20 @@ export async function initUpdateCheck() {
   } catch (err) {
     console.error('update check failed:', err);
   }
+}
+
+/**
+ * 手动检查更新（关于页「检查更新」）：发现新版本弹同款更新对话框并返回
+ * true（调用方自行决定关不关闭自家面板）；无更新返回 false；网络失败
+ * reject 由调用方提示（不像启动检测那样静默）
+ */
+export async function checkUpdatesManual() {
+  const result = await API.checkUpdate();
+  if (result?.has_update) {
+    showUpdateDialog(result);
+    return true;
+  }
+  return false;
 }
 
 function showUpdateDialog(result) {

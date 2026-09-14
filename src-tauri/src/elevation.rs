@@ -22,14 +22,14 @@
 //! 提示）；「否」= 退出。`DRIFTLET_ALLOW_ELEVATED=1` 与该标记同样跳过提醒。
 //! debug 构建默认不提醒（dev loop 免打扰），`DRIFTLET_FORCE_DEMOTE=1` 可测。
 
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
 use windows::Win32::Security::{
-    AdjustTokenPrivileges, GetTokenInformation, LookupPrivilegeValueW, TokenElevation,
-    LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_ELEVATION,
-    TOKEN_PRIVILEGES, TOKEN_QUERY,
+    AdjustTokenPrivileges, GetTokenInformation, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW,
+    SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_ELEVATION, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    TokenElevation,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows::core::PCWSTR;
 
 /// 启用本进程令牌上的一个特权（AdjustTokenPrivileges）。提权令牌里
 /// SeShutdown 等默认「持有但禁用」，SetSuspendState / ExitWindowsEx 等
@@ -49,8 +49,7 @@ pub(crate) fn enable_privilege(name: PCWSTR) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
         let result = (|| {
             let mut luid = LUID::default();
-            LookupPrivilegeValueW(PCWSTR::null(), name, &mut luid)
-                .map_err(|e| e.to_string())?;
+            LookupPrivilegeValueW(PCWSTR::null(), name, &mut luid).map_err(|e| e.to_string())?;
             let tp = TOKEN_PRIVILEGES {
                 PrivilegeCount: 1,
                 Privileges: [LUID_AND_ATTRIBUTES {
@@ -134,7 +133,9 @@ fn persisted_allow_elevated() -> bool {
 /// 字段缺失而判「损坏重置」——标记随 .bak 一起被丢，下次启动照弹
 ///（真机实测：选「是」后每次启动都弹窗 + 日志 Config corrupt backed up）。
 fn persist_allow_elevated() {
-    let Some(path) = config_json_path() else { return };
+    let Some(path) = config_json_path() else {
+        return;
+    };
     let existing = std::fs::read_to_string(&path)
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
@@ -162,35 +163,6 @@ fn config_base_for_flag(existing: Option<serde_json::Value>) -> serde_json::Valu
         })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::config_base_for_flag;
-
-    /// 打底产物必须能被 AppConfig 解析（之前写极简 JSON 被 load_config 判
-    /// 损坏重置、标记全丢的事故）——文件缺失、形状不全、形状完整三种形态
-    #[test]
-    fn config_base_is_always_full_shaped() {
-        for (name, existing) in [
-            ("缺失", None),
-            ("极简 JSON（事故形态）", Some(serde_json::json!({"allow_elevated": true}))),
-            ("形状不完整", Some(serde_json::json!({"version": 2}))),
-            ("形状完整", Some(serde_json::json!({
-                "version": 2, "loaded_skins": ["clock"], "skin_settings": {},
-                "theme": "dark",
-            }))),
-        ] {
-            let base = config_base_for_flag(existing.clone());
-            let parsed: Result<crate::skin::types::AppConfig, _> = serde_json::from_value(base.clone());
-            assert!(parsed.is_ok(), "{name}：打底必须能被 AppConfig 解析");
-            // 形状完整的原值必须保留（只补标记，不重置用户配置）
-            if name == "形状完整" {
-                assert_eq!(base["theme"], "dark");
-                assert_eq!(base["loaded_skins"], serde_json::json!(["clock"]));
-            }
-        }
-    }
-}
-
 /// 启动提权提醒入口（run() 最前、Builder/single-instance 初始化之前调用）：
 /// 检测到提权运行 → 弹原生消息框说明影响，「是」= 写 allow_elevated 持久
 /// 放行并继续（以后不再提示）；「否」= 退出。不做任何降级尝试（任务计划 /
@@ -208,7 +180,7 @@ pub fn startup_elevation_notice() {
 
 /// AppState 建立前的轻量语言判定：<exe>/config/config.json 的 language
 /// 字段，读不到回退 OS UI 语言（与 AppConfig 首启默认同函数）。
-fn early_language() -> String {
+pub(crate) fn early_language() -> String {
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|p| p.join("config").join("config.json")))
@@ -222,9 +194,10 @@ fn early_language() -> String {
 /// 此刻窗口系统尚未建立，用 MessageBoxW（与 lib.rs 的 fatal_startup_error
 /// 同一手法）。返回是否继续。
 fn show_elevated_notice() -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, IDYES, MB_ICONWARNING, MB_YESNO};
+    use windows::Win32::UI::WindowsAndMessaging::{IDYES, MB_ICONWARNING, MB_YESNO, MessageBoxW};
     let lang = early_language();
-    let text = windows::core::HSTRING::from(crate::i18n::tr(&lang, crate::i18n::Key::ElevatedNotice));
+    let text =
+        windows::core::HSTRING::from(crate::i18n::tr(&lang, crate::i18n::Key::ElevatedNotice));
     let yes = unsafe {
         MessageBoxW(
             None,
@@ -237,4 +210,40 @@ fn show_elevated_notice() -> bool {
         persist_allow_elevated();
     }
     yes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_base_for_flag;
+
+    /// 打底产物必须能被 AppConfig 解析（之前写极简 JSON 被 load_config 判
+    /// 损坏重置、标记全丢的事故）——文件缺失、形状不全、形状完整三种形态
+    #[test]
+    fn config_base_is_always_full_shaped() {
+        for (name, existing) in [
+            ("缺失", None),
+            (
+                "极简 JSON（事故形态）",
+                Some(serde_json::json!({"allow_elevated": true})),
+            ),
+            ("形状不完整", Some(serde_json::json!({"version": 2}))),
+            (
+                "形状完整",
+                Some(serde_json::json!({
+                    "version": 2, "loaded_skins": ["clock"], "skin_settings": {},
+                    "theme": "dark",
+                })),
+            ),
+        ] {
+            let base = config_base_for_flag(existing.clone());
+            let parsed: Result<crate::skin::types::AppConfig, _> =
+                serde_json::from_value(base.clone());
+            assert!(parsed.is_ok(), "{name}：打底必须能被 AppConfig 解析");
+            // 形状完整的原值必须保留（只补标记，不重置用户配置）
+            if name == "形状完整" {
+                assert_eq!(base["theme"], "dark");
+                assert_eq!(base["loaded_skins"], serde_json::json!(["clock"]));
+            }
+        }
+    }
 }

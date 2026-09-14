@@ -167,20 +167,27 @@ export default class SkinList {
     const overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
     overlay.innerHTML = `
-      <div class="confirm-dialog wide group-edit-dialog">
-        <h3>${g ? t('list.groupEditTitle') : t('list.groupNewTitle')}</h3>
-        <div class="group-edit-field">
-          <label class="group-edit-label">${t('list.groupName')}</label>
-          <input class="group-edit-name" maxlength="64" spellcheck="false" autocomplete="off"
-                 placeholder="${t('list.groupNamePlaceholder')}" value="${escAttr(g?.name || '')}">
-          <div class="group-edit-error" hidden>${t('list.groupNameRequired')}</div>
+      <div class="panel wide group-edit-dialog">
+        <div class="panel-head">
+          <h2>${g ? t('list.groupEditTitle') : t('list.groupNewTitle')}</h2>
+          <button class="panel-close" title="${t('common.close')}">
+            <svg width="11" height="11" viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
         </div>
-        <div class="group-edit-field">
-          <label class="group-edit-label">${t('list.groupSkins')}</label>
-          <div class="group-edit-hint">${t('list.groupSkinsHint')}</div>
-          <div class="group-edit-skins">${rows || `<div class="group-edit-empty">${t('list.empty')}</div>`}</div>
+        <div class="panel-body">
+          <div class="group-edit-field">
+            <label class="group-edit-label">${t('list.groupName')}</label>
+            <input class="group-edit-name" maxlength="64" spellcheck="false" autocomplete="off"
+                   placeholder="${t('list.groupNamePlaceholder')}" value="${escAttr(g?.name || '')}">
+            <div class="group-edit-error" hidden>${t('list.groupNameRequired')}</div>
+          </div>
+          <div class="group-edit-field">
+            <label class="group-edit-label">${t('list.groupSkins')}</label>
+            <div class="group-edit-hint">${t('list.groupSkinsHint')}</div>
+            <div class="group-edit-skins">${rows || `<div class="group-edit-empty">${t('list.empty')}</div>`}</div>
+          </div>
         </div>
-        <div class="confirm-buttons">
+        <div class="panel-foot">
           <button class="confirm-btn cancel">${t('common.cancel')}</button>
           <button class="confirm-btn primary">${t('common.save')}</button>
         </div>
@@ -191,6 +198,7 @@ export default class SkinList {
     const close = () => this.closeGroupEditor();
     this._groupEditorUnbind = bindEsc(close);
     closeOnMaskClick(overlay, close);
+    overlay.querySelector('.panel-close').onclick = close;
     overlay.querySelector('.confirm-btn.cancel').onclick = close;
 
     const nameInput = overlay.querySelector('.group-edit-name');
@@ -339,13 +347,15 @@ export default class SkinList {
       </button>`;
     menu.innerHTML =
       item('edit', '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>', t('list.groupEdit')) +
-      item('delete', '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>', t('list.groupDelete'), 'danger') +
-      item('delete-all', '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>', t('list.groupDeleteAll'), 'danger') +
       '<div class="menu-sep"></div>' +
       item('load', '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>', t('list.groupLoadAll')) +
       item('unload', '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>', t('list.groupUnloadAll')) +
       item('hide', '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>', t('list.groupHideAll')) +
-      item('show', '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', t('list.groupShowAll'));
+      item('show', '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', t('list.groupShowAll')) +
+      // 危险项沉底 + 分隔线（规范 §3.5）：两块红不再叠在菜单顶部
+      '<div class="menu-sep"></div>' +
+      item('delete', '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>', t('list.groupDelete'), 'danger') +
+      item('delete-all', '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>', t('list.groupDeleteAll'), 'danger');
     document.body.appendChild(menu);
     const r = anchor.getBoundingClientRect();
     const mw = menu.offsetWidth;

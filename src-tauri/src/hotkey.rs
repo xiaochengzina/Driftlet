@@ -14,8 +14,8 @@
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
-use crate::i18n::{tr, trf, Key};
 use crate::AppState;
+use crate::i18n::{Key, tr, trf};
 
 /// 当前「实际注册成功」的组合键——**一律存 Shortcut Display 规范化串**
 ///（crate 的 Display 产出小写修饰词 + keyboard-types Code 名，如
@@ -43,44 +43,14 @@ fn set_registered_combo(combo: Option<String>) {
     *REGISTERED_COMBO.lock().unwrap_or_else(|e| e.into_inner()) = combo;
 }
 
-/// True when at least one skin is loaded and every skin window is hidden.
-pub fn all_skins_hidden(app: &AppHandle) -> bool {
-    let state = app.state::<AppState>();
-    let ids = state.registry.loaded_ids();
-    !ids.is_empty()
-        && ids.iter().all(|id| {
-            state
-                .registry
-                .get(id)
-                .map(|w| !w.is_visible().unwrap_or(true))
-                .unwrap_or(true)
-        })
-}
-
-/// Hide all skin windows if any is visible; otherwise show them all.
-pub fn toggle_all_skins(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let ids = state.registry.loaded_ids();
-    if ids.is_empty() {
-        return;
-    }
-    let hide = !all_skins_hidden(app);
-    for id in &ids {
-        if let Some(window) = state.registry.get(id) {
-            let result = if hide { window.hide() } else { window.show() };
-            if let Err(e) = result {
-                log::warn!("Failed to {} skin '{}': {}", if hide { "hide" } else { "show" }, id, e);
-            }
-        }
-    }
-    // Keep the tray check item in sync with reality.
-    sync_tray_toggle_item(app);
-}
+// 全局热键动作 = 专注模式开关（focus.rs；原「显隐全部皮肤」已升级——
+// 见 docs/proposals/专注模式方案-2026-09.md §3）。皮肤显隐子菜单与
+// 皮肤专属热键仍走逐窗 toggle_one_skin 不动。
 
 /// Keep the tray "all skins hidden" check item in sync with reality.
 /// Clone the handle out of the guard so the MutexGuard drops before we
 /// call back into tauri.
-/// 本函数是全部皮肤可见性变化的漏斗（全局热键 toggle_all_skins、托盘
+/// 本函数是全部皮肤可见性变化的漏斗（全局热键（focus::toggle 专注模式开关）、托盘
 /// 勾选项、皮肤窗 Alt+F4 降级隐藏都经这里同步托盘），故同时向管理器
 /// 发 skins-visibility-changed——列表/配置面板的「已隐藏」徽标按
 /// 真实窗口状态刷新，不靠热键簿记。
@@ -95,7 +65,10 @@ pub fn sync_tray_toggle_item(app: &AppHandle) {
     let loaded: std::collections::HashSet<String> =
         state.registry.loaded_ids().into_iter().collect();
     let menu_ids: std::collections::HashSet<String> = {
-        let items = state.skin_vis_items.lock().unwrap_or_else(|e| e.into_inner());
+        let items = state
+            .skin_vis_items
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         items.keys().cloned().collect()
     };
     if loaded != menu_ids {
@@ -104,7 +77,10 @@ pub fn sync_tray_toggle_item(app: &AppHandle) {
 
     // ② 勾选态同步（重建后句柄是最新的；克隆出锁再回调 tauri）
     let items: Vec<(String, tauri::menu::CheckMenuItem<tauri::Wry>)> = {
-        let items = state.skin_vis_items.lock().unwrap_or_else(|e| e.into_inner());
+        let items = state
+            .skin_vis_items
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         items.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     };
     for (id, item) in items {
@@ -116,9 +92,14 @@ pub fn sync_tray_toggle_item(app: &AppHandle) {
         let _ = item.set_checked(visible);
     }
 
-    let item = state.toggle_item.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let item = state
+        .toggle_item
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     if let Some(item) = item {
-        let _ = item.set_checked(all_skins_hidden(app));
+        // 托盘勾选项 = 专注模式（升级后不再是「全部隐藏」簿记）
+        let _ = item.set_checked(crate::focus::is_active(app));
     }
     let _ = app.emit_to("main", "skins-visibility-changed", ());
 }
@@ -145,7 +126,10 @@ pub fn register_from_config(app: &AppHandle) {
             if let Err(e) = app.global_shortcut().register(shortcut) {
                 log::warn!("Failed to register hotkey '{}': {}", combo, e);
                 set_registered_combo(None);
-                *app.state::<AppState>().hotkey_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(combo);
+                *app.state::<AppState>()
+                    .hotkey_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(combo);
             } else {
                 // 簿记存 Display 规范化串（见 REGISTERED_COMBO 注释）
                 set_registered_combo(Some(shortcut.to_string()));
@@ -280,7 +264,8 @@ pub fn dispatch_hotkey(app: &AppHandle, shortcut: &Shortcut) {
     }
     if registered_combo().as_deref() == Some(key.as_str()) {
         log::info!("Global hotkey triggered");
-        toggle_all_skins(app);
+        // 全局热键 = 专注模式开关（方案 §3 定案；隐藏/卸载动作随设置档分流）
+        crate::focus::toggle(app);
     }
 }
 
@@ -321,7 +306,9 @@ pub fn set_skin_hotkey(app: &AppHandle, skin_id: &str, combo: &str) -> Result<()
         }
         let taken_by_other = {
             let map = SKIN_HOTKEYS.lock().unwrap_or_else(|e| e.into_inner());
-            map.get(k).filter(|other| other.as_str() != skin_id).is_some()
+            map.get(k)
+                .filter(|other| other.as_str() != skin_id)
+                .is_some()
         };
         if taken_by_other {
             return Err(trf(&lang, Key::HotkeyConflict, &[k]));
@@ -331,7 +318,10 @@ pub fn set_skin_hotkey(app: &AppHandle, skin_id: &str, combo: &str) -> Result<()
     let mut map = SKIN_HOTKEYS.lock().unwrap_or_else(|e| e.into_inner());
     // 摘除该皮肤的旧组合（注销失败仅告警留痕——旧注册若真泄漏，后续
     // register 会以 OS 占用报错自然暴露）
-    let old_key = map.iter().find(|(_, v)| v.as_str() == skin_id).map(|(k, _)| k.clone());
+    let old_key = map
+        .iter()
+        .find(|(_, v)| v.as_str() == skin_id)
+        .map(|(k, _)| k.clone());
     let mut old_alive = false;
     if let Some(old) = &old_key {
         if let Ok(sc) = old.parse::<Shortcut>() {
@@ -393,7 +383,12 @@ pub fn sync_skin_hotkeys_from_config(app: &AppHandle) {
     };
     for (skin_id, combo) in combos {
         if let Err(e) = set_skin_hotkey(app, &skin_id, &combo) {
-            log::warn!("skin hotkey '{}' for '{}' not registered: {}", combo, skin_id, e);
+            log::warn!(
+                "skin hotkey '{}' for '{}' not registered: {}",
+                combo,
+                skin_id,
+                e
+            );
         }
     }
 }

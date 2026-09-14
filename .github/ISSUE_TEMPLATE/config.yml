@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📚 皮肤开发文档 / Skin development guide
+    url: https://github.com/xiaochengzina/Driftlet/blob/main/docs/skin-development-guide.md
+    about: 开发皮肤的接口问题请先查文档 / Skin API questions are usually answered here
+  - name: 🔒 安全漏洞 / Security vulnerabilities
+    url: https://github.com/xiaochengzina/Driftlet/security/advisories/new
+    about: 请勿公开报告安全问题 / Never report security issues publicly

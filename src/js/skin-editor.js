@@ -176,6 +176,23 @@ export default class SkinEditor {
       if (gen !== this._gen) { unlistenSetting(); return; }
       this.unlistenSetting = unlistenSetting;
     }
+
+    // 窗口属性变更广播（window-config-changed）：右键菜单快捷开关、皮肤自控
+    // （skin_set_window_config）、面板回显同走后端单一汇聚点——打开中的编辑器
+    // 实时同步，避免「实际状态 vs 面板显示」脱节。拖拽/边框缩放的位置尺寸走
+    // 上面的 skin-moved/skin-resized，不经此通道。
+    let unlistenWinCfg = null;
+    try {
+      unlistenWinCfg = await listen('window-config-changed', (event) => {
+        const { skinId, key, value } = event.payload || {};
+        if (skinId !== this.skinId || !this.detail) return;
+        this._syncWindowControl(key, value);
+      });
+    } catch { /* 监听注册失败不阻断 */ }
+    if (unlistenWinCfg) {
+      if (gen !== this._gen) { unlistenWinCfg(); return; }
+      this.unlistenWinCfg = unlistenWinCfg;
+    }
   }
 
   clear() {
@@ -194,6 +211,10 @@ export default class SkinEditor {
     if (this.unlistenSetting) {
       this.unlistenSetting();
       this.unlistenSetting = null;
+    }
+    if (this.unlistenWinCfg) {
+      this.unlistenWinCfg();
+      this.unlistenWinCfg = null;
     }
     this.container.innerHTML = `
       <div class="panel-empty">
@@ -225,6 +246,86 @@ export default class SkinEditor {
     const elH = this.container.querySelector('#cfg-height');
     if (elW && document.activeElement !== elW) elW.value = width;
     if (elH && document.activeElement !== elH) elH.value = height;
+  }
+
+  // Reflect a window-property change (context menu / skin self-control
+  // skin_set_window_config / panel echo — all funnel through the backend's
+  // single "window-config-changed" broadcast) in the open editor, in place.
+  // detail.config is always updated so a later full re-render shows the fresh
+  // state; controls the user is currently editing keep their local content
+  // (focus protection, same idiom as _updatePositionDisplay).
+  _syncWindowControl(key, value) {
+    const cfg = this.detail.config;
+    const q = (sel) => this.container.querySelector(sel);
+    const unfocused = (el) => el && document.activeElement !== el;
+    const setCheck = (sel, on) => { const el = q(sel); if (el) el.checked = !!on; };
+    switch (key) {
+      case 'opacity': {
+        cfg.opacity = value;
+        const pct = Math.round(value * 100);
+        const slider = q('#cfg-opacity');
+        if (unfocused(slider)) slider.value = pct;
+        const label = q('#opacity-val');
+        if (label) label.textContent = pct + '%';
+        break;
+      }
+      case 'placement': {
+        cfg.always_on_top = value === 'top';
+        cfg.on_desktop = value === 'desktop';
+        const top = q('#cfg-place-top');
+        if (top) top.classList.toggle('active', value === 'top');
+        const desk = q('#cfg-place-desktop');
+        if (desk) desk.classList.toggle('active', value === 'desktop');
+        break;
+      }
+      case 'click_through':
+        cfg.click_through = value;
+        setCheck('#cfg-clickthrough', value);
+        break;
+      case 'position_locked':
+        cfg.position_locked = value;
+        setCheck('#cfg-locked', value);
+        break;
+      case 'resizable':
+        cfg.resizable = value;
+        setCheck('#cfg-resizable', value);
+        break;
+      case 'zoom': {
+        cfg.zoom = value;
+        const pct = Math.round(value * 100);
+        const slider = q('#cfg-zoom');
+        if (unfocused(slider)) slider.value = pct;
+        const label = q('#zoom-val');
+        if (label) label.textContent = pct + '%';
+        break;
+      }
+      case 'edge_snap': {
+        cfg.edge_snap = value;
+        setCheck('#cfg-edgesnap', value);
+        // 间距输入框的可用态跟随开关（与渲染期口径一致：未加载或关 = 禁用）
+        const gap = q('#cfg-snapgap');
+        if (gap) gap.disabled = !this.detail.loaded || !value;
+        break;
+      }
+      case 'snap_gap': {
+        cfg.snap_gap = value;
+        const el = q('#cfg-snapgap');
+        if (unfocused(el)) el.value = value;
+        break;
+      }
+      case 'position':
+        cfg.x = value.x;
+        cfg.y = value.y;
+        this._updatePositionDisplay(value.x, value.y);
+        break;
+      case 'size':
+        cfg.width = value.width;
+        cfg.height = value.height;
+        this._updateSizeDisplay(value.width, value.height);
+        break;
+      default:
+        break; // 未知键：detail 已是最新数据源的事实在下次整灌时生效
+    }
   }
 
   // Reflect a skin-originated setting write (skin_set_setting → backend
@@ -388,8 +489,8 @@ export default class SkinEditor {
               <label>${t('editor.hotkeyLabel')}</label>
               <span class="hint">${t('editor.hotkeyHint')}</span>
             </div>
-            <div class="theme-options">
-              <button class="theme-btn hotkey-btn" id="cfg-skin-hotkey" ${!d.loaded ? 'disabled' : ''}>${esc(cfg.hotkey || '') || t('settings.hotkeyNone')}</button>
+            <div class="btn-cluster">
+              <button class="action-btn hotkey-btn" id="cfg-skin-hotkey" ${!d.loaded ? 'disabled' : ''}>${esc(cfg.hotkey || '') || t('settings.hotkeyNone')}</button>
             </div>
           </div>
         </div>
@@ -462,33 +563,41 @@ export default class SkinEditor {
               <span class="hint">${t('editor.snapGapHint')}</span>
             </div>
             <div class="num-inputs">
-              <label>px <input type="number" id="cfg-snapgap"
+              <!-- 单位后缀内嵌输入框右缘（与输入框是一个控件整体） -->
+              <span class="num-suffix"><input type="number" id="cfg-snapgap"
                 value="${cfg.snap_gap ?? 0}" min="0" max="${SNAP_GAP_MAX}"
-                ${!d.loaded || !cfg.edge_snap ? 'disabled' : ''}></label>
+                ${!d.loaded || !cfg.edge_snap ? 'disabled' : ''}><span class="suffix">px</span></span>
             </div>
           </div>
         </div>
 
-        <!-- 操作 -->
+        <!-- 操作：按语义分行——状态 / 维护 / 危险（docs/设计规范.md §2.5；
+             旧版按钮平铺堆叠问题见重构方案 P2-3） -->
         <div class="config-section">
           <h3>${t('editor.actions')}<span class="sec-en">ACTIONS</span></h3>
           <div class="action-group">
-            ${d.loaded
-              ? `<button class="action-btn" id="btn-unload">${t('editor.unloadSkin')}</button>`
-              : `<button class="action-btn primary" id="btn-load">${t('editor.loadSkin')}</button>`
-            }
-            <!-- 显隐切换钮：与卸载同一坑位逻辑（当前状态取反），
-                 skins-visibility-changed 事件路径重灌编辑器后标签自翻 -->
-            ${d.loaded ? `<button class="action-btn" id="btn-toggle-visibility">${d.hidden ? t('editor.showSkin') : t('editor.hideSkin')}</button>` : ''}
-            ${d.loaded ? `<button class="action-btn" id="btn-reload">${t('editor.reload')}</button>` : ''}
-            ${d.loaded ? `<button class="action-btn" id="btn-capture">${t('editor.capture')}</button>` : ''}
-            ${d.loaded ? `<button class="action-btn" id="btn-onscreen">${t('editor.bringOnscreen')}</button>` : ''}
-            <button class="action-btn" id="btn-openfolder">${t('editor.openFolder')}</button>
-            <button class="action-btn" id="btn-package">${t('editor.packageSkin')}</button>
-            ${!d.loaded ? `<button class="action-btn" id="btn-duplicate">${t('editor.duplicate')}</button>` : ''}
-            ${d.origin ? `<span class="sync-btn-wrap" title="${!d.origin_update ? t('editor.syncSourceUpToDate') : d.loaded ? t('list.unloadBeforeDelete') : ''}"><button class="action-btn" id="btn-sync-source" ${!d.origin_update || d.loaded ? 'disabled' : ''}>${t('editor.syncSource')}</button></span>` : ''}
-            <button class="action-btn danger" id="btn-reset">${t('editor.resetData')}</button>
-            ${!d.loaded ? `<button class="action-btn danger" id="btn-delete">${t('common.deleteSkin')}</button>` : ''}
+            <div class="action-row">
+              ${d.loaded
+                ? `<button class="action-btn" id="btn-unload">${t('editor.unloadSkin')}</button>`
+                : `<button class="action-btn primary" id="btn-load">${t('editor.loadSkin')}</button>`
+              }
+              <!-- 显隐切换钮：与卸载同一坑位逻辑（当前状态取反），
+                   skins-visibility-changed 事件路径重灌编辑器后标签自翻 -->
+              ${d.loaded ? `<button class="action-btn" id="btn-toggle-visibility">${d.hidden ? t('editor.showSkin') : t('editor.hideSkin')}</button>` : ''}
+            </div>
+            <div class="action-row">
+              ${d.loaded ? `<button class="action-btn" id="btn-reload">${t('editor.reload')}</button>` : ''}
+              ${d.loaded ? `<button class="action-btn" id="btn-capture">${t('editor.capture')}</button>` : ''}
+              ${d.loaded ? `<button class="action-btn" id="btn-onscreen">${t('editor.bringOnscreen')}</button>` : ''}
+              <button class="action-btn" id="btn-openfolder">${t('editor.openFolder')}</button>
+              <button class="action-btn" id="btn-package">${t('editor.packageSkin')}</button>
+              ${!d.loaded ? `<button class="action-btn" id="btn-duplicate">${t('editor.duplicate')}</button>` : ''}
+              ${d.origin ? `<span class="sync-btn-wrap" title="${!d.origin_update ? t('editor.syncSourceUpToDate') : d.loaded ? t('list.unloadBeforeDelete') : ''}"><button class="action-btn" id="btn-sync-source" ${!d.origin_update || d.loaded ? 'disabled' : ''}>${t('editor.syncSource')}</button></span>` : ''}
+            </div>
+            <div class="action-row danger-row">
+              <button class="action-btn danger" id="btn-reset">${t('editor.resetData')}</button>
+              ${!d.loaded ? `<button class="action-btn danger" id="btn-delete">${t('common.deleteSkin')}</button>` : ''}
+            </div>
           </div>
         </div>
         </div>
@@ -501,6 +610,10 @@ export default class SkinEditor {
           </fieldset>
         </div>` : ''}
       </div>`;
+
+    // 换皮回顶（不停留在上一皮肤的滚动深度）；同皮肤数据回灌时滚动容器
+    // （.main-panel）未被替换，滚动位置天然保持
+    if (animate) this.container.scrollTop = 0;
 
     this.bindEvents();
   }

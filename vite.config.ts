@@ -13,7 +13,9 @@ export default defineConfig(async () => ({
       ? { protocol: "ws", host, port: 1421 }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // 编辑器原子写（临时目录 + rename）会在源码目录留下 .*.tmpdir/*.tmp
+      // 瞬时文件，chokidar 对它们 watch 即 EBUSY 崩溃（实机踩过）——排除之
+      ignored: ["**/src-tauri/**", "**/.*.tmpdir/**", "**/*.tmp"],
     },
   },
   build: {

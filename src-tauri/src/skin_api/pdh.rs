@@ -6,8 +6,8 @@
 //! baseline and returns an empty Vec (same convention as the sysinfo
 //! samplers: first reading is 0).
 
-use windows::core::PCWSTR;
 use windows::Win32::System::Performance::*;
+use windows::core::PCWSTR;
 
 pub struct PdhMultiCounter {
     query: PDH_HQUERY,
@@ -98,7 +98,8 @@ impl PdhMultiCounter {
             //（需对齐 8）是书面 UB——按元素类型分配（对齐天然正确），条目数
             // 按字节数换算
             let item_size = std::mem::size_of::<PDH_FMT_COUNTERVALUE_ITEM_W>();
-            let mut buf = vec![PDH_FMT_COUNTERVALUE_ITEM_W::default(); size as usize / item_size + 1];
+            let mut buf =
+                vec![PDH_FMT_COUNTERVALUE_ITEM_W::default(); size as usize / item_size + 1];
             let mut byte_size = (buf.len() * item_size) as u32;
             if PdhGetFormattedCounterArrayW(
                 self.counter,
@@ -116,7 +117,11 @@ impl PdhMultiCounter {
             }
             for item in &buf[..count as usize] {
                 let name = String::from_utf16_lossy(item.szName.as_wide());
-                out.push((name, item.FmtValue.Anonymous.doubleValue, item.FmtValue.CStatus));
+                out.push((
+                    name,
+                    item.FmtValue.Anonymous.doubleValue,
+                    item.FmtValue.CStatus,
+                ));
             }
         }
         out

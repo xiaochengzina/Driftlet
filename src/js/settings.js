@@ -5,7 +5,7 @@
 import API from './api.js';
 import showToast from './toast.js';
 import { t, getLang, applyLang } from './i18n.js';
-import { esc, escAttr, confirmDialog, dispName, bindHotkeyCapture } from './dom.js';
+import { esc, escAttr, confirmDialog, dispName } from './dom.js';
 import { renderPermChipsHTML } from './perms.js';
 
 // 当前打开的设置面板实例（供语言切换后原地重绘；关闭时清空）
@@ -14,9 +14,7 @@ let openSettings = null;
 /** 语言切换后重绘已打开的设置面板（未打开则无操作） */
 export function refreshOpenSettings() {
   if (!openSettings) return;
-  // 重绘直接丢弃旧 DOM、不经过 close() 的清理：先摘除可能仍在录制的
-  // 热键监听，否则 window 级 capture keydown 残留，持续劫持键盘
-  openSettings._unbindHotkey();
+  // 重绘直接丢弃旧 DOM、不经过 close() 的清理
   document.getElementById('settings-overlay')?.remove();
   openSettings.render();
 }
@@ -25,11 +23,9 @@ export default class Settings {
   constructor() {
     this.autostart = false;
     this.theme = 'auto';
-    this.hotkey = '';
     this.hotReload = false;
     this.updateCheck = true;
     this.activeTab = 'general';
-    this._hotkeyListener = null;
   }
 
   async open() {
@@ -37,7 +33,6 @@ export default class Settings {
     this.autostart = await API.getAutostart().catch(() => false);
     const config = await API.getAppConfig().catch(() => ({ theme: 'auto' }));
     this.theme = config.theme || 'auto';
-    this.hotkey = config.hotkey_toggle_skins || '';
     this.hotReload = config.hot_reload === true;
     // 默认开：仅显式存了 false 才视为关闭（与后端 serde default 一致）
     this.updateCheck = config.update_check !== false;
@@ -46,9 +41,8 @@ export default class Settings {
   }
 
   render() {
-    // 防叠开：已有面板（可能来自另一实例）先摘除其热键监听再移除
+    // 防叠开：已有面板（可能来自另一实例）先移除
     if (document.getElementById('settings-overlay')) {
-      openSettings?._unbindHotkey();
       document.getElementById('settings-overlay').remove();
     }
     openSettings = this;
@@ -59,15 +53,21 @@ export default class Settings {
 
     const tab = this.activeTab;
     overlay.innerHTML = `
-      <div class="settings-panel">
-        <h2>${t('settings.title')}</h2>
+      <div class="panel settings-panel">
+        <div class="panel-head">
+          <h2>${t('settings.title')}</h2>
+          <button class="panel-close" title="${t('common.close')}">
+            <svg width="11" height="11" viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
 
-        <div class="cfg-tabs">
+        <div class="cfg-tabs panel-tabs">
           <button class="cfg-tab ${tab === 'general' ? 'active' : ''}" data-tab="general">${t('settings.tabGeneral')}</button>
           <button class="cfg-tab ${tab === 'appearance' ? 'active' : ''}" data-tab="appearance">${t('settings.tabAppearance')}</button>
           <button class="cfg-tab ${tab === 'advanced' ? 'active' : ''}" data-tab="advanced">${t('settings.tabAdvanced')}</button>
         </div>
 
+        <div class="panel-body">
         <div class="settings-page" data-page="general" ${tab !== 'general' ? 'style="display:none"' : ''}>
           <div class="settings-row">
             <div>
@@ -88,15 +88,6 @@ export default class Settings {
               <input type="checkbox" id="cfg-updatecheck" ${this.updateCheck ? 'checked' : ''}>
               <span class="slider"></span>
             </label>
-          </div>
-          <div class="settings-row">
-            <div>
-              <label>${t('settings.hotkey')}</label>
-              <div class="hint">${t('settings.hotkeyHint')}</div>
-            </div>
-            <div class="theme-options">
-              <button class="theme-btn hotkey-btn" id="cfg-hotkey">${esc(this.hotkey) || t('settings.hotkeyNone')}</button>
-            </div>
           </div>
         </div>
 
@@ -130,9 +121,9 @@ export default class Settings {
               <label>${t('settings.backup')}</label>
               <div class="hint">${t('settings.backupHint')}</div>
             </div>
-            <div class="theme-options">
-              <button class="theme-btn" id="cfg-export">${t('settings.backupExport')}</button>
-              <button class="theme-btn" id="cfg-import">${t('settings.backupImport')}</button>
+            <div class="btn-cluster">
+              <button class="action-btn" id="cfg-export">${t('settings.backupExport')}</button>
+              <button class="action-btn" id="cfg-import">${t('settings.backupImport')}</button>
             </div>
           </div>
           <div class="settings-row">
@@ -140,8 +131,8 @@ export default class Settings {
               <label>${t('settings.log')}</label>
               <div class="hint">${t('settings.logHint')}</div>
             </div>
-            <div class="theme-options">
-              <button class="theme-btn" id="cfg-open-log">${t('settings.logOpen')}</button>
+            <div class="btn-cluster">
+              <button class="action-btn" id="cfg-open-log">${t('settings.logOpen')}</button>
             </div>
           </div>
           <div class="settings-row">
@@ -155,8 +146,7 @@ export default class Settings {
             </label>
           </div>
         </div>
-
-        <button class="settings-close">${t('common.close')}</button>
+        </div>
       </div>
     `;
 
@@ -231,11 +221,6 @@ export default class Settings {
       };
     });
 
-    // Hotkey capture：录制交互收编为 dom.js 共享件（编辑器皮肤专属热键
-    // 同件，单一事实源）。注意录制期间按下当前热键仍会触发一次全局显隐
-    // 切换（全局热键无法局部屏蔽，已知小怪癖）。
-    const hotkeyBtn = overlay.querySelector('#cfg-hotkey');
-
     // 打开日志窗口（已开着则后端把它提到前台）；成功后设置页自动关闭
     overlay.querySelector('#cfg-open-log').onclick = async () => {
       try {
@@ -245,26 +230,6 @@ export default class Settings {
         showToast(t('common.setFailed') + String(err), 'error');
       }
     };
-    const renderHotkey = () => {
-      hotkeyBtn.textContent = this.hotkey || t('settings.hotkeyNone');
-    };
-    const saveHotkey = async (combo) => {
-      try {
-        await API.setHotkey(combo);
-        this.hotkey = combo;
-        showToast(t('settings.hotkeySaved'), 'success');
-      } catch (err) {
-        showToast(t('common.setFailed') + String(err), 'error');
-      }
-      renderHotkey();
-    };
-    // 防叠开/重绘：本面板每次 render 都换新按钮，旧按钮的监听随元素
-    // 销毁，但录制中的 window 级监听必须显式摘除（共享件的 unbind）
-    this._unbindHotkey();
-    this._hotkeyListener = bindHotkeyCapture(hotkeyBtn, {
-      recordingText: t('settings.hotkeyRecording'),
-      onSave: saveHotkey,
-    });
 
     // 开发模式开关（热重载仅 debug 构建的 watcher 读取该标志；DevTools 解锁
     // 由 open_skin_devtools 实时读同一标志，全构建生效）
@@ -407,27 +372,17 @@ export default class Settings {
     };
 
     const close = () => {
-      this._unbindHotkey();
       overlay.remove();
       if (openSettings === this) openSettings = null;
     };
 
-    // Close
-    overlay.querySelector('.settings-close').onclick = close;
+    // Close（右上角 ×；Esc 未绑——设置页历史约定走 ×/点遮罩）
+    overlay.querySelector('.panel-close').onclick = close;
 
     // Click outside to close
     overlay.onclick = (e) => {
       if (e.target === overlay) close();
     };
-  }
-
-  // 摘除热键录制的全局键监听。任何绕过 close() 的销毁/重绘路径
-  // （refreshOpenSettings、防叠开移除）都必须先调它
-  _unbindHotkey() {
-    // 句柄是 dom.js 共享录制器（bindHotkeyCapture 返回的 { unbind }），
-    // 历史上是裸 listener 函数——?./?. 双保险兼容两种形态
-    this._hotkeyListener?.unbind?.();
-    this._hotkeyListener = null;
   }
 }
 

@@ -175,7 +175,7 @@ enum SkinSettingKind {
     File,
     Directory,
     /// 对应安装端 GpuAdapter（GPU 适配器选择器，管理器运行时枚举生成选项）
-    #[serde(rename = "gpu_adapter")]   // 同安装端：显式 rename 保下划线名
+    #[serde(rename = "gpu_adapter")] // 同安装端：显式 rename 保下划线名
     GpuAdapter,
 }
 
@@ -245,21 +245,30 @@ struct WindowDefaults {
     snap_gap: u32,
 }
 
+// 以下六个 default_* 是镜像占位：types.rs 的 serde 默认值经 check-pack-skin-mirror.py
+// 逐字对拍；pack-skin 的 manifest 结构未接线调用它们（serde default 用字面量），
+// 故逐条标 allow(dead_code)——勿删，对拍脚本按名取件
+#[allow(dead_code)]
 fn default_entry() -> String {
     "index.html".to_string()
 }
+#[allow(dead_code)]
 fn default_width() -> u32 {
     300
 }
+#[allow(dead_code)]
 fn default_height() -> u32 {
     200
 }
+#[allow(dead_code)]
 fn default_opacity() -> f64 {
     1.0
 }
+#[allow(dead_code)]
 fn default_zoom() -> f64 {
     1.0
 }
+#[allow(dead_code)]
 fn default_true() -> bool {
     true
 }
@@ -274,8 +283,10 @@ fn fail(msg: &str) -> ! {
 fn validate_skin_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
-        && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && id.chars().next().map_or(false, |c| c.is_ascii_alphanumeric())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
         && !is_reserved_device_name(id)
 }
 
@@ -285,9 +296,28 @@ fn is_reserved_device_name(id: &str) -> bool {
     let base = id.split('.').next().unwrap_or(id).to_ascii_lowercase();
     matches!(
         base.as_str(),
-        "con" | "prn" | "aux" | "nul"
-            | "com1" | "com2" | "com3" | "com4" | "com5" | "com6" | "com7" | "com8" | "com9"
-            | "lpt1" | "lpt2" | "lpt3" | "lpt4" | "lpt5" | "lpt6" | "lpt7" | "lpt8" | "lpt9"
+        "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "com2"
+            | "com3"
+            | "com4"
+            | "com5"
+            | "com6"
+            | "com7"
+            | "com8"
+            | "com9"
+            | "lpt1"
+            | "lpt2"
+            | "lpt3"
+            | "lpt4"
+            | "lpt5"
+            | "lpt6"
+            | "lpt7"
+            | "lpt8"
+            | "lpt9"
     )
 }
 
@@ -452,11 +482,14 @@ fn main() {
     let version = manifest.version.as_deref();
     match version {
         // 指南 §8 要求声明 version（更新包据此判断升级/降级），缺了只警告不拦
-        None => eprintln!("警告：skin.json 未声明 version —— 发布检查清单（指南 §8）要求声明版本号"),
-        // version 会拼进输出文件名，路径分隔符会让文件写到意外位置
-        Some(v) if v.contains('/') || v.contains('\\') => {
-            fail(&format!("version 不能包含 '/' 或 '\\\\'（用于输出文件名）：\"{}\"", v))
+        None => {
+            eprintln!("警告：skin.json 未声明 version —— 发布检查清单（指南 §8）要求声明版本号")
         }
+        // version 会拼进输出文件名，路径分隔符会让文件写到意外位置
+        Some(v) if v.contains('/') || v.contains('\\') => fail(&format!(
+            "version 不能包含 '/' 或 '\\\\'（用于输出文件名）：\"{}\"",
+            v
+        )),
         _ => {}
     }
     if let Some(v) = manifest.min_host_version.as_deref() {
@@ -485,8 +518,16 @@ fn main() {
         let w = &manifest.window;
         let cw = w.width.clamp(1, 10000);
         let ch = w.height.clamp(1, 10000);
-        let cop = if w.opacity.is_finite() { w.opacity.clamp(0.1, 1.0) } else { 1.0 };
-        let czoom = if w.zoom.is_finite() { w.zoom.clamp(0.5, 2.0) } else { 1.0 };
+        let cop = if w.opacity.is_finite() {
+            w.opacity.clamp(0.1, 1.0)
+        } else {
+            1.0
+        };
+        let czoom = if w.zoom.is_finite() {
+            w.zoom.clamp(0.5, 2.0)
+        } else {
+            1.0
+        };
         let crs = w.refresh_seconds.map(|s| s.min(86400));
         let cgap = w.snap_gap.min(200);
         let mut notes = Vec::new();
@@ -503,13 +544,19 @@ fn main() {
             notes.push(format!("zoom {} → {}", w.zoom, czoom));
         }
         if crs != w.refresh_seconds {
-            notes.push(format!("refresh_seconds {:?} → {:?}", w.refresh_seconds, crs));
+            notes.push(format!(
+                "refresh_seconds {:?} → {:?}",
+                w.refresh_seconds, crs
+            ));
         }
         if cgap != w.snap_gap {
             notes.push(format!("snap_gap {} → {}", w.snap_gap, cgap));
         }
         if !notes.is_empty() {
-            eprintln!("提示：window 默认值超出范围，安装端加载时将归一化为：{}", notes.join("、"));
+            eprintln!(
+                "提示：window 默认值超出范围，安装端加载时将归一化为：{}",
+                notes.join("、")
+            );
         }
     }
 
@@ -562,11 +609,10 @@ fn main() {
     let out_path = out_dir.join(format!("{}.dskin", base));
 
     // 写 zip（deflate 压缩；非 ASCII 文件名自动置 UTF-8 标志）
-    let file = fs::File::create(&out_path)
-        .unwrap_or_else(|e| fail(&format!("无法创建输出文件：{}", e)));
+    let file =
+        fs::File::create(&out_path).unwrap_or_else(|e| fail(&format!("无法创建输出文件：{}", e)));
     let mut zw = zip::ZipWriter::new(file);
-    let opts = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+    let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     for rel in &files {
         // zip 内路径统一用正斜杠
         let rel_unix = rel.to_string_lossy().replace('\\', "/");
@@ -577,7 +623,8 @@ fn main() {
         zw.write_all(&data)
             .unwrap_or_else(|e| fail(&format!("写入失败：{}", e)));
     }
-    zw.finish().unwrap_or_else(|e| fail(&format!("写入失败：{}", e)));
+    zw.finish()
+        .unwrap_or_else(|e| fail(&format!("写入失败：{}", e)));
 
     let size = fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
     if size > MAX_PACKAGE_BYTES {

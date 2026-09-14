@@ -86,6 +86,8 @@ export function renderPermsHTML(permissions, { withTitle = false } = {}) {
  * 权限名称胶囊行（配置页页眉卡内）：只列名称、颜色分级，无图标无说明——
  * 高危红 / 中危黄 / 低危蓝 / 未知名与「未申请敏感权限」中性灰。
  * 与 renderPermsHTML 同一张 KNOWN 表，分级口径不会漂移。
+ * 未声明权限时给中性说明行（实机评审：「未声明」也是用户要知道的状态，
+ * 静默反而像漏渲染——曾短暂改为不渲染，评审否决回退）
  */
 export function renderPermChipsHTML(permissions) {
   const list = sortByRisk((Array.isArray(permissions) ? permissions : []).filter(p => p !== 'files'));

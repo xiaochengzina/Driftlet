@@ -6,17 +6,15 @@
 //! 权限的 `run_command`，让用户对能力有正确预期。新增 system 命令时
 //! 不得引入可执行目标参数（见 docs/关键机制.md）。
 
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{GetLastError, LPARAM, WPARAM};
 use windows::Win32::System::Shutdown::{
-    ExitWindowsEx, LockWorkStation, EWX_LOGOFF, EWX_REBOOT, EWX_SHUTDOWN,
+    EWX_LOGOFF, EWX_REBOOT, EWX_SHUTDOWN, ExitWindowsEx, LockWorkStation,
 };
-use windows::Win32::UI::Shell::{
-    SHEmptyRecycleBinW, SHQueryRecycleBinW, SHQUERYRBINFO,
-};
+use windows::Win32::UI::Shell::{SHEmptyRecycleBinW, SHQUERYRBINFO, SHQueryRecycleBinW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    PostMessageW, HWND_BROADCAST, SC_MONITORPOWER, WM_SYSCOMMAND,
+    HWND_BROADCAST, PostMessageW, SC_MONITORPOWER, WM_SYSCOMMAND,
 };
+use windows::core::PCWSTR;
 
 /// 关机 / 重启 / 注销（power_control 的 action 参数）。
 #[derive(Debug, Clone, Copy)]
@@ -58,13 +56,13 @@ pub fn monitor_off() -> Result<(), String> {
 /// 或令牌拿不到 SE_SHUTDOWN_NAME 时报错。
 pub fn sleep() -> Result<(), String> {
     enable_shutdown_privilege()?;
-    let ok = unsafe {
-        windows::Win32::System::Power::SetSuspendState(false, false, false)
-    };
+    let ok = unsafe { windows::Win32::System::Power::SetSuspendState(false, false, false) };
     if ok {
         Ok(())
     } else {
-        Err(format!("SetSuspendState failed: {:?}", unsafe { GetLastError() }))
+        Err(format!("SetSuspendState failed: {:?}", unsafe {
+            GetLastError()
+        }))
     }
 }
 

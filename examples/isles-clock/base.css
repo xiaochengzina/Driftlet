@@ -3,6 +3,9 @@
    唯一事实源：examples/shared/base.css（须先于皮肤自身样式引入）
    缩放模型：卡壳 container-type: size，子元素一律用 cqw/cqh（双轴取小）
    随实际窗口尺寸缩放——满足宿主「布局必须自适应任意窗口尺寸」硬约定。
+   兼容写法（旧运行时降级，宿主要求 ≥111 但皮肤要兜住更低的实机）：
+   凡 cqw/cqh 与 color-mix() 声明都先写一条 vw/vh 或纯色后备（旧运行时
+   判后者无效自动用前者；新运行时后者覆盖前者，零行为变化）。勿删后备行。
    ========================================================================== */
 
 * { box-sizing: border-box; }
@@ -28,6 +31,7 @@ body {
   background: var(--isles-card-bg);
   /* 无外投影无描边：透明窗口圆角外不允许任何绘制（色晕事故） */
   container-type: size;
+  padding: clamp(16px, min(5.6vw, 11vh), 40px); /* 旧运行时后备（无容器查询） */
   padding: clamp(16px, min(5.6cqw, 11cqh), 40px);
   display: flex;
   flex-direction: column;
@@ -36,6 +40,7 @@ body {
 
 /* ── 字阶（一张卡只允许一个 .isles-display） ────────────────────── */
 .isles-display {
+  font-size: clamp(28px, min(34vw, 44vh), 96px);
   font-size: clamp(28px, min(34cqw, 44cqh), 96px);
   font-weight: 350;
   line-height: 1.04;
@@ -44,6 +49,7 @@ body {
   color: var(--isles-fg);
 }
 .isles-title {
+  font-size: clamp(13px, min(4.6vw, 9vh), 22px);
   font-size: clamp(13px, min(4.6cqw, 9cqh), 22px);
   font-weight: 600;
   line-height: 1.3;
@@ -51,18 +57,21 @@ body {
   color: var(--isles-fg);
 }
 .isles-body {
+  font-size: clamp(12px, min(4vw, 8vh), 18px);
   font-size: clamp(12px, min(4cqw, 8cqh), 18px);
   line-height: 1.5;
   letter-spacing: 0.05em;
   color: var(--isles-fg);
 }
 .isles-caption {
+  font-size: clamp(11px, min(3.6vw, 7vh), 15px);
   font-size: clamp(11px, min(3.6cqw, 7cqh), 15px);
   line-height: 1.45;
   letter-spacing: 0.1em;     /* 小字给足——杂志感字距 */
   color: var(--isles-fg-2);
 }
 .isles-unit {
+  font-size: clamp(11px, min(3.6vw, 7vh), 15px);
   font-size: clamp(11px, min(3.6cqw, 7cqh), 15px);
   font-weight: 500;
   letter-spacing: 0.08em;
@@ -74,9 +83,12 @@ body {
   flex: none;
   display: grid;
   place-items: center;
+  width: clamp(28px, min(11vw, 22vh), 44px);
   width: clamp(28px, min(11cqw, 22cqh), 44px);
+  height: clamp(28px, min(11vw, 22vh), 44px);
   height: clamp(28px, min(11cqw, 22cqh), 44px);
   border-radius: 30%;
+  background: var(--isles-card-bg); /* 旧运行时后备（无 color-mix）：不染淡 */
   background: color-mix(in srgb, var(--isles-accent) 12%, var(--isles-card-bg));
   color: var(--isles-accent);
 }
@@ -85,7 +97,9 @@ body {
 /* ── 列表行（4px accent 色条 + 文本） ───────────────────────────── */
 .isles-row {
   position: relative;
+  padding-left: clamp(10px, min(3.4vw, 6.8vh), 14px);
   padding-left: clamp(10px, min(3.4cqw, 6.8cqh), 14px);
+  font-size: clamp(12px, min(4vw, 8vh), 18px);
   font-size: clamp(12px, min(4cqw, 8cqh), 18px);
   line-height: 1.5;
   color: var(--isles-fg);
@@ -109,6 +123,7 @@ body {
 .isles-bar {
   height: 6px;
   border-radius: 3px;
+  background: var(--isles-card-bg);
   background: color-mix(in srgb, var(--isles-accent) 14%, var(--isles-card-bg));
   overflow: hidden;
 }
@@ -148,7 +163,9 @@ body {
   /* 深浅副色在卡壳上按本卡实际主色重新派生——自定义属性继承的是声明处
      的计算值，:root 里的 color-mix 不会跟随卡面覆盖（经典坑），必须在这里
      重新声明；皮肤经 Isles.setTextColor() 覆盖 --isles-on-photo 即全卡联动 */
+  --isles-on-photo-2: var(--isles-on-photo); /* 旧运行时后备：副色取主色 */
   --isles-on-photo-2: color-mix(in srgb, var(--isles-on-photo) 72%, transparent);
+  --isles-on-photo-3: var(--isles-on-photo);
   --isles-on-photo-3: color-mix(in srgb, var(--isles-on-photo) 52%, transparent);
 }
 /* 背景图层：inset 放大一圈吃掉 blur 边缘的透明流苏（卡壳 overflow:hidden 裁掉外溢）。
@@ -173,6 +190,7 @@ body {
   position: absolute;
   inset: 0;
   z-index: 1;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.28) 0%, rgba(0, 0, 0, 0.06) 34%, rgba(0, 0, 0, 0.1) 55%, rgba(0, 0, 0, 0.55) 100%); /* 旧运行时后备：普适黑纱 */
   background: linear-gradient(180deg,
     color-mix(in srgb, var(--isles-scrim-color) 28%, transparent) 0%,
     color-mix(in srgb, var(--isles-scrim-color) 6%, transparent) 34%,
@@ -206,17 +224,21 @@ body {
 .isles-toolbtn {
   display: grid;
   place-items: center;
+  width: clamp(22px, min(9vw, 18vh), 30px);
   width: clamp(22px, min(9cqw, 18cqh), 30px);
+  height: clamp(22px, min(9vw, 18vh), 30px);
   height: clamp(22px, min(9cqw, 18cqh), 30px);
   padding: 0;
   border: none;
   border-radius: 50%;
   cursor: pointer;
+  background: rgba(128, 128, 128, 0.12); /* 旧运行时后备：中性灰（深浅主题通用） */
   background: color-mix(in srgb, var(--isles-ink) 7%, transparent);
   color: var(--isles-fg-2);
   transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
 }
 .isles-toolbtn:hover {
+  background: rgba(128, 128, 128, 0.18);
   background: color-mix(in srgb, var(--isles-ink) 13%, transparent);
   color: var(--isles-fg);
 }

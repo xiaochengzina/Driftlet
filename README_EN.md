@@ -2,6 +2,8 @@
 
 > [中文版](README.md) | English
 
+[![CI](https://github.com/xiaochengzina/Driftlet/actions/workflows/ci.yml/badge.svg)](https://github.com/xiaochengzina/Driftlet/actions/workflows/ci.yml) [![License: GPL v3](https://img.shields.io/github/license/xiaochengzina/Driftlet)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/xiaochengzina/Driftlet)](https://github.com/xiaochengzina/Driftlet/releases) ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
+
 A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. It presents web pages as desktop widgets, offering transparent windows, frameless windows, always on top, and pin to desktop.
 
 ---
@@ -17,11 +19,11 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Always on top / pin to desktop (mutually exclusive, pin to desktop by default), disable dragging
 - Click-through (per-skin toggle on the "Window" tab, off by default): clicks and scrolls pass through to the window or desktop below — combined with pin-to-desktop the skin becomes a pure display widget
 - Capture preview images for skins
-- Tray icon management; closing the main window hides it to the tray
+- Tray icon management; closing the main window destroys it to reclaim the renderer process memory (~80 MB) — summoning it back from the tray rebuilds the window (page reload ~1 s)
 - Autostart, dark/light theme switching
 - Right-click a skin window to open the skin menu (open config / refresh / hide / unload, plus a window-behavior quick-toggle section: always-on-top / lock position / click-through / resize by dragging / edge snapping; skins can register custom menu items)
-- A global hotkey hides/shows all loaded skins with one keystroke (default Ctrl+Shift+Alt+D, changeable or disabled in Settings), with a synced checked item in the tray menu; Alt+F4 on a skin window only hides it — call it back via the hotkey or the tray
-- Tray "Skin Visibility" submenu: one checkable row per loaded skin, click to toggle that skin's visibility, with the check state synced in real time with the editor, the right-click menu, and the global hotkey
+- Focus Mode: one click (nav-bar panel / global hotkey / tray check) enters a do-not-disturb desktop — by the chosen action tier it hides (default; instant restore, state kept) or unloads (reclaims all memory) every non-whitelisted skin, and restores from the entry snapshot on exit; the whitelist exempts checked skins from both tiers; optionally auto-enters when a fullscreen app (game / fullscreen video) is detected and auto-exits 5 s after it ends; mode state and snapshot are persisted, so a crash or quit never loses the restore point. The hotkey defaults to Ctrl+Shift+Alt+D, changeable or disabled in the Focus Mode panel
+- Tray "Skin Visibility" submenu: one checkable row per loaded skin, click to toggle that skin's visibility, with the check state synced in real time with the editor, the right-click menu, and the global hotkey; Alt+F4 on a skin window only hides it (never destroys) — call it back via this check or the editor button
 - Per-skin visibility shortcut: each skin can record a combo in the editor to toggle just that skin's visibility (saving is refused when it duplicates the global hotkey / another skin's combo or is taken by another program)
 - Browser refresh/navigation shortcuts like F5 are blocked in both the manager and skin windows — pages cannot be refreshed by keystroke; the window lifecycle belongs entirely to the manager
 - Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing; the import review shows the permission declarations of the skins inside, same conventions as the install wizard; selective import supported — checking skins in the review list switches to merge mode, replacing only the checked skins and merging their config and layouts, everything else untouched)
@@ -29,6 +31,7 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Skin groups: custom grouping with fold/unfold, rename and checkbox-based member editing; batch load/unload/hide/show for all members of a group, or delete a whole group together with its skins (two-step confirmation)
 - Skin duplication: create an independent copy of a skin (separate settings/preview/permissions), and pull the source's latest content into the copy with one click after the source is updated
 - Startup update check (on by default, can be turned off in Settings): once a new GitHub release is found it prompts immediately and downloads the installer in the background — direct connection and acceleration mirrors race in parallel with segmented downloading (slow/failed direct downloads no longer force a manual trip to the web page; the official SHA-256 of the installer is verified throughout), a progress bar shows during the download, and the primary button turns into "Install now" when done; only on download failure does it fall back to the "Go to download page" flow
+- About panel (pinned at the bottom of the nav bar): app version, the public repository link (one click to open in the system browser), the full user agreement (same source as the installer's license page, shown in Chinese or English following the UI language), and a manual "Check for updates" entry
 
 ---
 
@@ -37,7 +40,7 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Windows 10/11 (some features rely on the Win32 API)
 - Node.js
 - Rust / Cargo (required by Tauri 2)
-- WebView2 Runtime (bundled with Win11)
+- WebView2 Runtime (bundled with Win11; must be ≥ 111 — an evergreen build from March 2023 or later, the container-queries/color-mix baseline for the bundled skins. The installer auto-upgrades an older runtime on install/update; if it somehow went stale afterwards, a startup notice offers a one-click update; **fully offline machines**: the Releases page also carries a `-offline` installer with the full runtime embedded — zero network needed throughout, and an already-installed older runtime is upgraded in place from it, never touching the online updater)
 
 ---
 
@@ -74,14 +77,14 @@ npm run tauri build
 │   ├── window/snap.rs    # Edge snapping (rewrites coordinates in place during WM_MOVING)
 │   ├── skin/             # Skin scanning, loading, config, .dskin package installation
 │   └── skin_api/         # System info and sensitive-capability commands callable by skins (require_perm authorization)
-├── src-tauri/capabilities/ # Window permissions: default.json (main window) / skin.json (skin windows, empty permissions)
+├── src-tauri/capabilities/ # Window permissions: default.json (main window) / log.json (log window) / skin.json (skin windows, empty permissions)
 ├── examples/             # Official skin family "Isles" sources (design spec / shared base / isles-* skins, bundled into the installer as the "Default Skins" group)
 ├── demos/                # Demo skin sources (reference; shipped as standalone .dskin, not bundled)
 │   ├── controls-demo/        # Demo of all settings controls (bilingual; UI language follows the manager)
 │   ├── sys-monitor/          # System monitor (the read-only system-info API set)
 │   ├── media-hub/            # Media console (volume / media / spectrum / notifications)
 │   ├── toolbox/              # Local toolbox (clipboard / files / registry / commands / links / power / settings read-write)
-│   ├── deepseek-balance/     # DeepSeek balance auto-query (networked-skin reference; low-balance alert + notification + top-up)
+│   ├── deepseek-balance/     # DeepSeek balance auto-query (networked-skin reference; low-balance alert + notification + top-up; API key stored via a password field)
 │   ├── power-tools/          # Permission-capability demo (arbitrary-path file access file_system high-risk / cross-skin window-config control control medium-risk)
 │   ├── web-view/             # Web view (generic skin embedding any site page in an iframe: local shell + full bridge, zero permissions)
 │   ├── driftlet.js           # Optional wrapper: named command functions + event helpers (copy into a skin folder)
@@ -90,12 +93,13 @@ npm run tauri build
 │   ├── pack-skin.exe     # Skin packaging tool (standalone, generates .dskin)
 │   ├── pack-skin/        # Packaging tool source (Rust)
 │   └── win32-probes/     # Windows window probing scripts (for debugging)
-├── CHANGELOG.md          # Version change log
 └── docs/                 # Development docs
     ├── 皮肤开发指南.md    # Interface docs and specs for skin creators
     ├── skin-development-guide.md   # Skin development guide (English)
     ├── 关键机制.md        # Window / desktop layer implementation details (do not regress)
-    └── critical-mechanisms.md      # Critical mechanisms (English counterpart)
+    ├── critical-mechanisms.md      # Critical mechanisms (English counterpart)
+    ├── 架构与机制总览.md  # Developer overview (architecture / runtime mechanisms / design decisions, merging critical mechanisms)
+    └── architecture-and-mechanisms.md  # Architecture & mechanisms overview (English)
 ```
 
 ---
@@ -208,13 +212,17 @@ Supported `type` values and value formats:
 | `weekdays` | Weekday picker | `["mon","wed"]` | Multi-select Mon–Sun, fixed options |
 | `select` | Dropdown select | `"a"` | Requires `options` |
 | `font` | Font picker | `"Microsoft YaHei UI"` | Enumerates installed system fonts; empty string = default |
-| `palette` | Palette | `"#rrggbb"` or `"#rrggbbaa"` | `options` as preset colors (optional; includes a screen eyedropper and an opacity slider) |
+| `palette` | Palette | `"#rrggbb"` or `"#rrggbbaa"` | `options` as preset colors (optional; includes custom color picking and an opacity slider) |
 | `number` | Number input | `number` | Optional `min` / `max` / `step` |
 | `slider` | Slider | `number` | Optional `min` / `max` / `step`, defaults 0/100/1 |
+| `stepper` | Number stepper | `number` | −/+ buttons step by `step` (default 1); optional `min` / `max` (buttons disable at the bounds) |
 | `timerange` | Time range (second precision) | `{ "start": "YYYY-MM-DD HH:MM:SS", "end": "..." }` | Empty string means unset |
 | `tasklist` | Task list (add/delete/edit) | `["Item 1","Item 2"]` | |
 | `todolist` | Todo list (checkable) | `[{ "text": "...", "done": true }]` | Skins can write back via `skin_set_setting` |
 | `datetasklist` | Dated task list | `[{ "time": "YYYY-MM-DD HH:MM:SS", "text": "..." }]` | Each task carries a date-time; time may be empty |
+| `file` | File picker | `"D:\\pics\\cat.png"` | The manager opens the system dialog; the value is an absolute path (≤1024 chars), empty string = unset; `filters` restrict extensions |
+| `directory` | Folder picker | `"D:\\data"` | Same, for folders; `filters` ignored |
+| `gpu_adapter` | GPU adapter picker | `"0x0001A2B3_0x0000F0E1"` | The manager enumerates the machine's GPUs at render time to build the dropdown; value = LUID (stable identifier), empty string = first entry (auto) |
 
 Values of type `password` are **not baked into the page with the bridge's `settings`** (all skins share the same origin under skin://, so anything injected into the page could be scraped by other skins); instead, read them on demand inside the skin with the `skin_get_setting` command — `await driftlet.invoke('skin_get_setting', { key: 'my_key' })`. Identity is taken from the calling window, so a skin can only read its own values.
 
@@ -310,7 +318,7 @@ Note: configs stored by older versions under `%APPDATA%\com.driftlet.app\` are m
 ## Notes
 
 - "Always on top" and "pin to desktop" are mutually exclusive — one of them is always active, defaulting to "pin to desktop".
-- Skin windows stay frameless via a custom Win32 subclass; read `docs/关键机制.md` (Chinese) before touching any window / desktop layer code.
+- Skin windows stay frameless via a custom Win32 subclass; read `docs/critical-mechanisms.md` (English counterpart of the Chinese `docs/关键机制.md`) before touching any window / desktop layer code.
 - Skin resources are all loaded through the custom `skin://` protocol; put any external file references inside the skin folder.
 
 ---
@@ -322,11 +330,12 @@ npm run dev           # Start the Vite frontend only
 npm run build         # Build the frontend to dist/
 npm run tauri dev     # Development mode (frontend + Tauri)
 npm run tauri build   # Production installer build
+npm run build:offline # Offline installer (full WebView2 runtime embedded; needs network once at build time; preserves any existing standard build and renames the output with a <-offline> suffix — the two never overwrite each other)
 ```
 
 Installer artifacts (NSIS only, `bundle.targets = ["nsis"]`; the installer is Chinese-English bilingual and automatically follows the system UI language):
 
-- NSIS: `src-tauri/target/release/bundle/nsis/Driftlet_<version>_x64-setup.exe`
+- NSIS: `src-tauri/target/release/bundle/nsis/Driftlet_<version>_x64-setup.exe` (the offline variant is `..._x64-setup-offline.exe`)
 
 Note: `nsis.languages = ["English", "SimpChinese"]` — at runtime the installer matches the system language automatically, falling back to the **first** entry in the array when there is no match, so English must come first (Chinese systems → Simplified Chinese, everything else → English). An MSI used to be produced as well; it is no longer generated.
 

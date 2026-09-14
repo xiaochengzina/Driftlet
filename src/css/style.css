@@ -76,7 +76,7 @@
   --shadow-card: 0 1px 2px rgba(15, 60, 80, 0.05), 0 10px 28px rgba(15, 60, 80, 0.07);
   --shadow-chip: 0 1px 3px rgba(15, 60, 80, 0.14);
   --shadow-pop: 0 18px 50px rgba(15, 60, 80, 0.16);
-  /* 缓动令牌（规范见 docs/交互动画.md）：
+  /* 缓动令牌（规范见 docs/设计规范.md §7）：
      --ease      颜色/悬停过渡用（软曲线，hover/color 场景）；
      --ease-out  入场/出场/按压用（强 ease-out，起步快、显响应） */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -396,20 +396,21 @@ body.hover-ok .win-btn-close:hover {
   text-align: center;
 }
 
-/* 侧栏头部右侧工具行：数量徽标 + 搜索放大镜钮（收起态的搜索入口，
-   平时零占位）。行高与标题行盒一致（18px）——头部 flex-end 底对齐时，
-   徽标/按钮中心与标题文字中心重合；26px 放大镜在行内居中、上下均匀
-   探出行盒（允许按钮视觉超出文字边界）。两版对齐事故备查：行内 center
-   + 行高不定 = 徽标比按钮底边高 3~4px（曾显没对齐）；行内 flex-end =
-   三者底边共线但按钮下沿压到文字底线（用户评审后定为中心对齐） */
+/* 侧栏头部右侧工具行：数量徽标 + 刷新 / 打开文件夹 / 搜索三枚小图标钮
+   （列表级操作与列表同处）。行高与标题行盒一致（18px）——头部 flex-end
+   底对齐时，徽标/按钮中心与标题文字中心重合；26px 钮在行内居中、上下
+   均匀探出行盒（允许按钮视觉超出文字边界）。两版对齐事故备查：行内
+   center + 行高不定 = 徽标比按钮底边高 3~4px（曾显没对齐）；行内
+   flex-end = 三者底边共线但按钮下沿压到文字底线（评审后定为中心对齐） */
 .sidebar-tools {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   height: 18px;
 }
 
-.search-toggle {
+/* 侧栏工具钮（刷新/文件夹/搜索同族）：26px 幽灵图标钮 */
+.tool-btn {
   width: 26px;
   height: 26px;
   border: 1px solid transparent;
@@ -422,7 +423,7 @@ body.hover-ok .win-btn-close:hover {
   transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
-body.hover-ok .search-toggle:hover {
+body.hover-ok .tool-btn:hover {
   color: var(--text-primary);
   border-color: var(--border-strong);
   background: var(--bg-surface);
@@ -435,7 +436,7 @@ body.hover-ok .search-toggle:hover {
 }
 
 /* 搜索框：白面浮起（与皮肤卡同一材质），放大镜左置、清除钮右置；
-   默认收起（零占位），.open 展开（纯透明淡入，见交互动画规范） */
+   默认收起（零占位），.open 展开（纯透明淡入，见设计规范 §7） */
 .sidebar-search {
   position: relative;
   display: none;
@@ -517,24 +518,77 @@ body.hover-ok .search-clear:hover {
   mask-image: linear-gradient(to bottom, transparent, #000 26px);
 }
 
-/* ── 竖排图标栏（VS Code Activity Bar 式）：全局工具从上到下，设置钉底。
-   窗口总宽不变——44px 由主面板区吸收（config-panel 居中 640px 上限，
+/* ── 导航栏（Nav Rail）：全局功能入口，图标 + 文字标签（标签必有——
+   无标签图标入口的可发现性问题见重构方案 P1-1）。上段功能、下段钉底。
+   后续小功能的落位规则见 docs/设计规范.md §2.2（导航项 + 功能面板）。
+   宽度 = 内容自适应（实机事故定案）：四字标签「布局方案/专注模式」在
+   48px 内容宽（64px 定宽版）里只按 9px 字级装得下——一旦遇上文本度量
+   膨胀（CJK 最小字级钳制/字体替换），4×12px=48px 即顶格截成两字；而定宽
+   72px 在正常机器上又白宽一截。故 max-content 自适应 + min 64 / max 84：
+   正常机器保持 64px 窄版观感，膨胀机型自动撑开装下最坏形态（4×14px+边距
+   ≈73px 仍有富余），病态超宽才走 text-overflow 省略 + title 悬停兜底。
+   窗口总宽不变——增量由主面板区吸收（config-panel 居中 700px 上限，
    两侧的 auto 边距天然吃下） */
-.icon-rail {
-  width: 44px;
-  min-width: 44px;
+.nav-rail {
+  width: max-content;
+  min-width: 64px;
+  max-width: 84px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 0;
+  align-items: stretch;
+  gap: 4px;
+  padding: 10px 8px;
   background: var(--bg-app);
   border-right: 1px solid var(--border);
 }
 
-/* 钉底项（设置）：与顶部工具组拉开——margin-top:auto 把它压到栏底 */
-.icon-rail .rail-bottom {
+/* 钉底组（主题/设置）：margin-top:auto 把它压到栏底 */
+.nav-rail .nav-bottom {
   margin-top: auto;
+}
+
+/* 导航项：图标 + 9px 标签上下排，圆角块悬停浮起 */
+.nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
+}
+
+.nav-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nav-label {
+  max-width: 100%;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.hover-ok .nav-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border-color: var(--border-strong);
+}
+
+/* 专注模式信标：模式激活时导航项常亮（accent 软底 + accent 文字——
+   与选中语义同族）；与悬停共存 */
+.nav-item.focus-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
 }
 
 /* footer 只放主按钮（图标工具已迁竖排图标栏） */
@@ -567,25 +621,6 @@ body.hover-ok .search-clear:hover {
 body.hover-ok .btn-add:not(:disabled):hover {
   filter: brightness(1.07);
   box-shadow: 0 6px 18px var(--accent-glow);
-}
-
-.icon-btn {
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
-}
-
-body.hover-ok .icon-btn:hover {
-  color: var(--text-primary);
-  border-color: var(--border-strong);
-  background: var(--bg-surface);
 }
 
 /* ── 空状态（侧栏）── */
@@ -663,7 +698,7 @@ body.hover-ok .skin-card.selected:hover {
 .skin-preview {
   position: relative;
   width: 100%;
-  height: 112px;
+  height: 96px;
   border-radius: 6px;
   overflow: hidden;
   flex-shrink: 0;
@@ -686,7 +721,7 @@ body.hover-ok .skin-card.selected:hover {
   display: block;
 }
 
-/* 占位图标：着 accent 色 45% 不透明度（规格见设计系统文档），图标本体
+/* 占位图标：着 accent 色 45% 不透明度（规格见设计规范 §6），图标本体
    24px——112px 高画布上 20px 读感过小（无头截图复核上调） */
 .skin-preview-placeholder {
   position: absolute;
@@ -1124,11 +1159,8 @@ body.hover-ok .group-menu button.danger:hover {
    骨架复用 .confirm-overlay/.confirm-dialog.wide（弹入动画与遮罩同源），
    内容是左对齐表单（confirm-dialog 基类是居中确认语排版且定义在本文档
    后段——双类叠加提特异性，不依赖书写顺序） */
-.confirm-dialog.group-edit-dialog {
-  text-align: left;
-}
-
-.group-edit-field {
+/* ── 分组编辑对话框（功能面板模板 .panel.wide 实例） ── */
+.group-edit-field + .group-edit-field {
   margin-top: 14px;
 }
 
@@ -1243,39 +1275,11 @@ body.hover-ok .group-edit-skin:hover {
   color: var(--text-faint);
 }
 
-/* ── 布局方案面板（复用 confirm-dialog.wide 骨架，左对齐表单同分组对话框） ── */
-.confirm-dialog.layout-panel {
-  text-align: left;
-  /* 体量大内容面板与设置页同待遇（settings-panel 也不吃 popIn）：只随遮罩
-     淡入，不做位移——共享 popIn 的 8px 上移在 360px 小确认框上无感，放
-     大到整面板后被衬成约 1 秒的向上漂移（实机反馈，幅度明显；规则见
-     docs/交互动画.md §四「位移入场按体量分配」） */
-  animation: none;
-}
-
-/* 页眉：贴近设置页语言——display 字体 h2 眉题（数值同 .settings-panel h2），
-   撤图标徽章（设置页无此元素，评审定案两族合一）；副题一句话布局语义
-   保留为弱说明行。关闭沿用底部全宽钮/点遮罩/Esc */
-.confirm-dialog.layout-panel h2 {
-  margin-bottom: 4px;
-  font-size: 16px;
-  font-weight: 650;
-  font-family: var(--font-display);
-  letter-spacing: 0.02em;
-  color: var(--text-primary);
-}
-
-/* 副题：布局语义一句话（精简版，实机反馈原文太长）；下缘留白拉开
-   页眉与中间保存区的间距 */
-.layout-sub {
-  font-size: 11.5px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
+/* ── 布局方案面板（功能面板模板 .panel.wide 实例；骨架/标题/副题/关闭件
+   全部走模板规则，此处仅保留面板内容专属样式） ── */
 
 /* 保存区：名称输入 + 存档主钮（分区标签评审撤销——按钮自带图标与文字，
-   说明多余）。上缘 18px 接页眉。输入框恢复 bg-input 灰面（实机评审），
+   说明多余）。输入框恢复 bg-input 灰面（实机评审），
    边框彻底移除（border:none——透明边框占位与内嵌环之间仍夹一圈线，成
    双重描边）；聚焦只显内嵌 1px 环一条线（1.5px 太显明——实机反馈），
    环贴齐灰面边缘 */
@@ -1283,7 +1287,6 @@ body.hover-ok .group-edit-skin:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 18px;
 }
 
 /* 保存行只补布局占位；灰面/无边框/内嵌聚焦环已上移至 .group-edit-name 基类 */
@@ -1451,11 +1454,10 @@ body.hover-ok .layout-row.renaming:hover {
   background: transparent;
 }
 
-/* 页脚：左列元信息（方案计数 + 托盘菜单发现路径提示，窄窗省略号），
-   全宽 settings-close（设置页同款，零新增按钮样式）；上缘 18px 拉开
-   与中间清单块的间距 */
+/* 页脚尾注：方案计数 + 托盘菜单发现路径提示（窄窗省略号）；
+   上缘拉开与清单块的间距 */
 .layout-foot-hint {
-  margin-top: 18px;
+  margin-top: 14px;
   font-size: 10.5px;
   color: var(--text-faint);
   white-space: nowrap;
@@ -1464,7 +1466,8 @@ body.hover-ok .layout-row.renaming:hover {
 }
 
 /* 页眉卡内的权限名称胶囊：只列名称、颜色分级（高危红/中危黄/未知灰），
-   无图标无说明——详细描述留在安装引导页（perms.js 单一口源） */
+   无图标无说明——详细描述留在安装引导页（perms.js 单一口源）；
+   未声明权限时给中性说明行（「未声明」也是用户要知道的状态） */
 .perm-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1536,7 +1539,7 @@ body.hover-ok .layout-row.renaming:hover {
 /* 行间分隔 = 95% 宽的短线（伪元素实现——border-top 只能通栏）。
    用 --border（深色 9% 透明度）而非 --border-strong（20%）：维护者实机
    对比后定——更强的分隔在确认框里偏抢，quiet 的 9% 更贴合对话框语言。
-   列表项分隔 ≠ 材质分层（设计系统禁的是发丝描边给面板分层） */
+   列表项分隔 ≠ 材质分层（设计规范禁的是发丝描边给面板分层） */
 .backup-skin-row + .backup-skin-row::before {
   content: '';
   display: block;
@@ -1700,7 +1703,10 @@ body.hover-ok .backup-select-toggle:hover {
   margin-top: 6px;
 }
 
-/* ── 配置面板（航行日志）── */
+/* ── 配置面板（航行日志）──
+   整页单容器同滚（2026-09 曾试「粘性区吸顶 + 内容区独立滚动」，实机评审
+   否决回退——页眉页签随内容同滚、大 hero 卡保持大气感是维护者定案，
+   勿再引入吸顶结构） */
 .config-panel {
   max-width: 640px;
   margin: 0 auto;
@@ -1709,14 +1715,14 @@ body.hover-ok .backup-select-toggle:hover {
 }
 
 /* 内容区入场：纯透明渐变，不带位移——选皮肤/切页签是每天数十次的
-   列表导航，位移入场会拖慢感知（规范见 docs/交互动画.md 频率表） */
+   列表导航，位移入场会拖慢感知（规范见 docs/设计规范.md §7.1 频率表） */
 @keyframes contentFade {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
-/* 面板头部：hero 卡——淡蓝晕染底 + 软投影（去掉旧虚线海图尺，
-   页眉从此是「一张卡」而不是「一条分隔线」） */
+/* 面板头部：hero 卡——淡蓝晕染底 + 软投影（大标题 + SKIN LOG 眉批的
+   大气页眉是定案：2026-09 曾试紧凑小页眉，实机评审否决回退） */
 .cfg-header {
   display: flex;
   align-items: flex-start;
@@ -2047,6 +2053,40 @@ body.hover-ok .range-slider::-webkit-slider-thumb:hover {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* 单位后缀内嵌：输入框与单位是一个控件整体（吸附间距）。输入框本身
+   去掉边框底色（外壳承担），焦点环转移到外壳 :focus-within */
+.num-suffix {
+  display: flex;
+  align-items: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+.num-suffix input {
+  width: 64px;
+  border: none;
+  background: transparent;
+}
+
+.num-suffix input:focus {
+  border: none;
+  box-shadow: none;
+}
+
+.num-suffix:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.num-suffix .suffix {
+  padding-right: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 .cfg-input:disabled,
 .cfg-select:disabled,
 .cfg-textarea:disabled,
@@ -2092,7 +2132,9 @@ body.hover-ok .range-slider::-webkit-slider-thumb:hover {
   cursor: pointer;
 }
 
-/* 页签：现代分段控件——灰底容器 + 白色激活块浮起（--shadow-chip） */
+/* 页签：分段控件（灰底容器 + 白色激活块浮起）。「从有限选项中选一个」
+   的唯一写法（规范 §4.2）：编辑器页签 / 设置页签 / 显示层级 / 主题 /
+   语言 / 自定义单选全部同款 */
 .cfg-tabs {
   display: flex;
   gap: 4px;
@@ -2178,13 +2220,15 @@ body.hover-ok .cfg-chip:not(:disabled):hover {
   font-weight: 600;
 }
 
-/* 互斥开关组（segments） */
+/* 互斥开关组（segments）：与页签同一分段语言——灰轨道 + 激活块浮起
+   （旧版连体竖分条款已退役，规范 §4.2 segmented 唯一化） */
 .cfg-segments {
   display: flex;
-  gap: 0;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
+  border-radius: var(--radius-md);
 }
 
 .cfg-segment {
@@ -2192,16 +2236,12 @@ body.hover-ok .cfg-chip:not(:disabled):hover {
   padding: 6px 0;
   font-size: 12.5px;
   color: var(--text-secondary);
-  background: var(--bg-input);
+  background: transparent;
   border: none;
-  border-right: 1px solid var(--border);
-  transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
+  border-radius: var(--radius-sm);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease), transform 0.12s var(--ease-out);
   /* 长选项文本（或无空格长串）在段内换行，而不是被 overflow:hidden 裁掉 */
   overflow-wrap: anywhere;
-}
-
-.cfg-segment:last-child {
-  border-right: none;
 }
 
 body.hover-ok .cfg-segment:not(:disabled):hover {
@@ -2209,9 +2249,10 @@ body.hover-ok .cfg-segment:not(:disabled):hover {
 }
 
 .cfg-segment.active {
-  background: var(--accent-soft);
+  background: var(--bg-surface);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 650;
+  box-shadow: var(--shadow-chip);
 }
 
 /* 数字步进器（−/值/＋ 连体小组件，挂在 form-row 右侧） */
@@ -2540,11 +2581,25 @@ body.hover-ok .task-del:not(:disabled):hover {
   color: var(--text-secondary);
 }
 
-/* 按钮 */
+/* 按钮：操作节按语义分行（状态 / 维护 / 危险）——旧版 6–11 个按钮
+   平铺无分组的「按钮堆」问题见重构方案 P2-3 */
 .action-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.action-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+}
+
+/* 危险行：虚线上缘与常规操作隔开（海图尺语义的克制复用） */
+.action-row.danger-row {
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-strong);
 }
 
 /* 「从源同步」禁用态的原因提示挂点：disabled 按钮自身不触发 tooltip
@@ -2694,6 +2749,263 @@ body.hover-ok .action-btn.danger:not(:disabled):hover {
   to { transform: translateY(-16px); opacity: 0; }
 }
 
+/* ── 功能面板模板（modal sheet）──
+   所有「功能型弹层」共用骨架（设置页 / 布局方案 / 分组编辑）：
+   head（标题 + 可选副题 + 右上角 ×）/ 可选页签 / body（超高滚动）/
+   可选 foot（主操作区，右对齐）。关闭 = 右上角 × / Esc / 点遮罩——
+   全宽「关闭」底钮已退役（规范 §3.3）。面板不挂 popIn（体量规则
+   §7.4），只随遮罩淡入；同屏只有一个 primary 按钮 */
+.panel {
+  width: 440px;
+  max-width: 88vw;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  /* 安全居中：align-items:center 遇超高子级会裁顶部；margin:auto 在空间
+     够时居中、超高时归零从顶部起（与 confirm-dialog 同一手法） */
+  margin: auto;
+  text-align: left;
+}
+
+/* 宽档：清单/表单内容型面板（布局方案、分组编辑） */
+.panel.wide {
+  width: 520px;
+}
+
+.panel-head {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 22px 0;
+}
+
+.panel-head h2 {
+  font-size: 16px;
+  font-weight: 650;
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+}
+
+.panel-sub {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* 右上角 ×：面板标准关闭件 */
+.panel-close {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), transform 0.12s var(--ease-out);
+}
+
+body.hover-ok .panel-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+/* 面板内页签：接 panel-head 之下的分段控件（设置页）。提特异性压过
+   .cfg-tabs 的 margin（0,2,0 > 0,1,0），免得编辑器页签的下缘间距漏进面板 */
+.panel .panel-tabs {
+  flex: none;
+  margin: 14px 22px 0;
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 22px 16px;
+}
+
+.panel-foot {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 4px 22px 18px;
+}
+
+/* ── 关于面板（功能面板模板实例）── */
+.about-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.about-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.about-logo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.about-name {
+  margin-top: 10px;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+}
+
+.about-sub {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+/* 版本芯片：accent 软底 + mono（数据读数归 mono，契约见规范 §5） */
+.about-ver {
+  margin-top: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.about-rows {
+  margin-top: 12px;
+}
+
+/* 仓库地址的 mono 提示行（地址本体是数据） */
+.about-panel .hint.mono {
+  font-family: var(--font-mono);
+}
+
+/* 用户协议全文：可读长文（保留换行、可选中复制、超高随面板 body 滚动） */
+.about-agreement-text {
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.about-copy {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+/* ── 专注模式面板（功能面板模板实例）── */
+/* 状态卡：图标芯片 + 当前态 + 主按钮；激活时 accent 软底 + 描边环 */
+.focus-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 8px;
+}
+
+.focus-status.active {
+  border-color: var(--accent-select-ring);
+  background: var(--accent-soft);
+}
+
+/* 状态图标芯片：与导航项同图形（target 准星） */
+.focus-status-ico {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+}
+
+.focus-status.active .focus-status-ico {
+  background: var(--bg-surface);
+  border-color: var(--accent-select-ring);
+  color: var(--accent);
+}
+
+.focus-status-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.focus-state-line {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.focus-state-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.focus-status .confirm-btn {
+  flex-shrink: 0;
+  padding: 7px 18px;
+}
+
+/* 白名单小节标题（不是设置行——右侧无控件，纯小节头） */
+.focus-list-head {
+  padding: 11px 0 4px;
+}
+
+.focus-list-head label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.focus-list-head .hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  display: block;
+  margin-top: 2px;
+  line-height: 1.5;
+}
+
+/* 白名单清单与上方小节头的间距（复用分组编辑勾选清单样式） */
+.focus-whitelist {
+  margin-bottom: 4px;
+}
+
 /* ── 弹层（确认框 / 设置）── */
 .confirm-overlay,
 .settings-overlay {
@@ -2725,8 +3037,7 @@ body.hover-ok .action-btn.danger:not(:disabled):hover {
   animation: none;
 }
 
-.confirm-dialog,
-.settings-panel {
+.confirm-dialog {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -2899,31 +3210,19 @@ body.hover-ok .confirm-btn.primary:not(:disabled):hover {
   min-height: 14px;
 }
 
-/* 设置面板不加面板级入场动画：任何面板 transform 入场都会带动行内容
-   ——位移版（popIn 的 translateY）让整排按钮滑动 ~10px；缩放版绕面板
-   中心进行，偏离中心的按钮仍会被带几 px——反馈均为「按钮在动」。
-   仅随遮罩 fadeIn 整体淡入（确认框仍用 popIn） */
-.settings-panel {
-  padding: 22px 26px;
-  width: 440px;
-  max-width: 88vw;
-}
+/* 设置页骨架已迁入功能面板模板（.panel）——面板级入场动画全局取消：
+   任何面板 transform 入场都会带动行内容——位移版（popIn 的 translateY）
+   让整排按钮滑动 ~10px；缩放版绕面板中心进行，偏离中心的按钮仍会被带
+   几 px——反馈均为「按钮在动」。面板一律仅随遮罩 fadeIn 整体淡入
+   （确认框仍用 popIn；规范 §7.4） */
 
-/* 直接坐在面板上的独立 action-btn（检查更新等）：面板与按钮同为
-   bg-surface，暗色下描边近隐形、按钮整个融进面板（无头截图实锤）——
-   底沉一档 bg-input + 强描边，任何主题可辨；hover 仍走全局 action-btn
-   悬停（抬升到 bg-surface-hover） */
+/* 直接坐在面板上的独立 action-btn（备份导出/导入、打开日志窗口等）：
+   面板与按钮同为 bg-surface，暗色下描边近隐形、按钮整个融进面板
+   （无头截图实锤）——底沉一档 bg-input + 强描边，任何主题可辨；
+   hover 仍走全局 action-btn 悬停（抬升到 bg-surface-hover） */
 .settings-panel .action-btn {
   background: var(--bg-input);
   border-color: var(--border-strong);
-}
-
-.settings-panel h2 {
-  margin-bottom: 16px;
-  font-size: 16px;
-  font-weight: 650;
-  font-family: var(--font-display);
-  letter-spacing: 0.02em;
 }
 
 .settings-row {
@@ -2950,10 +3249,18 @@ body.hover-ok .confirm-btn.primary:not(:disabled):hover {
   animation: contentFade 0.15s var(--ease-out);
 }
 
-/* 主题选择：分段控件（与 .cfg-tabs 同一现代分段语言） */
+/* 行内并列动作钮群（备份导出/导入等——动作不是选择，不用 segmented） */
+.btn-cluster {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 主题/语言等行内单选：与页签同一分段语言（轨道 + 激活块浮起）。
+   segmented 唯一化（规范 §4.2）——分散药丸组已退役 */
 .theme-options {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   padding: 4px;
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -2979,12 +3286,13 @@ body.hover-ok .theme-btn:not(:disabled):hover {
   color: var(--text-primary);
 }
 
-/* 快捷键钮（设置页全局热键 + 编辑器皮肤热键两处共用）：包在 .theme-options
-   容器里与「打开日志窗口」同款 chip 语言（实机反馈：白面/图标款都不对，
-   锚定日志钮）——容器给描边底，本规则只留组合值的功能性样式（mono +
-   不换行 + 不被 flex 压缩）。规则必须在 .theme-btn.active 之前：录制中
-   的 active 渐变态靠后写生效，不被覆盖 */
-.theme-btn.hotkey-btn {
+/* 快捷键钮（设置页全局热键 + 编辑器皮肤热键两处共用）：是「动作」不是
+   「选择」——与设置页其他动作钮（导出/导入/日志）同一 .action-btn 语言，
+   字重自然一致（曾包在 theme-options 轨道里当选择控件，字重 400 与动作
+   钮 550 不一致，实机评审指出）。本规则只留组合值的功能性样式（mono +
+   不换行 + 不被 flex 压缩）；录制中的 active 态 = accent 软底 + accent
+   描边（「正在听键」的输入态信号） */
+.hotkey-btn {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   /* 组合值再长也不得折行或被 flex 行压缩溢出（实机反馈：设置页行内文字
@@ -2993,34 +3301,28 @@ body.hover-ok .theme-btn:not(:disabled):hover {
   flex-shrink: 0;
 }
 
+.hotkey-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* segmented 激活态：白面浮起 + accent 文字（与 .cfg-tab.active 同款）。
+   品牌渐变不再用于选择控件——它只属于真正的主操作按钮（规范 §4.1） */
 .theme-btn.active {
-  background-image: var(--accent-grad);
-  color: var(--accent-ink);
+  background: var(--bg-surface);
+  color: var(--accent);
   font-weight: 650;
-  box-shadow: 0 2px 8px var(--accent-glow);
-}
-
-.settings-close {
-  margin-top: 18px;
-  width: 100%;
-  padding: 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 13px;
-  transition: background-color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
-}
-
-body.hover-ok .settings-close:hover {
-  background: var(--bg-surface-hover);
-  border-color: var(--border-strong);
+  box-shadow: var(--shadow-chip);
 }
 
 /* 按压反馈：可按压按钮统一 scale(0.97)，120ms 强 ease-out（各自的
-   transition 已含 transform 项；规范见 docs/交互动画.md） */
+   transition 已含 transform 项；规范见 docs/设计规范.md §7.4）。
+   新增可按压按钮：transition 末尾加 transform 项并把选择器并入此处 */
 .win-btn:not(:disabled):active,
-.icon-btn:not(:disabled):active,
+.nav-item:not(:disabled):active,
+.tool-btn:not(:disabled):active,
+.panel-close:not(:disabled):active,
 .btn-add:not(:disabled):active,
 .load-btn:not(:disabled):active,
 .action-btn:not(:disabled):active,
@@ -3028,10 +3330,10 @@ body.hover-ok .settings-close:hover {
 .confirm-btn:not(:disabled):active,
 .cfg-chip:not(:disabled):active,
 .cfg-step-btn:not(:disabled):active,
+.cfg-segment:not(:disabled):active,
 .search-toggle:not(:disabled):active,
 .group-more:not(:disabled):active,
-.group-new:not(:disabled):active,
-.settings-close:not(:disabled):active {
+.group-new:not(:disabled):active {
   transform: scale(0.97);
 }
 
@@ -3151,14 +3453,23 @@ body.hover-ok .settings-close:hover {
   -webkit-user-select: text;
 }
 
+/* 状态行：图标 + 文字（不用通栏色条——色条像按钮却不是按钮，
+   见重构方案 P4-3）。语义色只落在图标与 heading 上 */
 .wizard-statusline {
-  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
   color: var(--text-secondary);
-  background: var(--accent-soft);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 9px 12px;
   line-height: 1.5;
+  margin: 2px 0 14px;
+}
+
+.wizard-statusline .wsl-ico {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--accent);
 }
 
 .wizard-statusline strong {
@@ -3166,10 +3477,7 @@ body.hover-ok .settings-close:hover {
   font-weight: 650;
 }
 
-.wizard-statusline.danger {
-  background: var(--danger-soft);
-}
-
+.wizard-statusline.danger .wsl-ico,
 .wizard-statusline.danger strong {
   color: var(--danger);
 }
@@ -3388,7 +3696,7 @@ body.hover-ok .settings-close:hover {
 
 /* ── 降低动态效果偏好 ──
    降级而非清零：颜色/透明度反馈与加载 spinner 保留（保可理解性），
-   位移/缩放类运动移除（规范见 docs/交互动画.md）。
+   位移/缩放类运动移除（规范见 docs/设计规范.md §7.6）。
    下列规则与原规则同特异性、位于文件末尾，靠层叠顺序覆盖 */
 @media (prefers-reduced-motion: reduce) {
   /* 位移/缩放类入场降级为纯透明渐变（contentFade/fadeIn 本就纯透明，无需覆盖） */
@@ -3411,7 +3719,9 @@ body.hover-ok .settings-close:hover {
   }
   /* 按压缩放关闭 */
   .win-btn:not(:disabled):active,
-  .icon-btn:not(:disabled):active,
+  .nav-item:not(:disabled):active,
+  .tool-btn:not(:disabled):active,
+  .panel-close:not(:disabled):active,
   .btn-add:not(:disabled):active,
   .load-btn:not(:disabled):active,
   .action-btn:not(:disabled):active,
@@ -3419,10 +3729,10 @@ body.hover-ok .settings-close:hover {
   .confirm-btn:not(:disabled):active,
   .cfg-chip:not(:disabled):active,
   .cfg-step-btn:not(:disabled):active,
+  .cfg-segment:not(:disabled):active,
   .search-toggle:not(:disabled):active,
   .group-more:not(:disabled):active,
-  .group-new:not(:disabled):active,
-  .settings-close:not(:disabled):active {
+  .group-new:not(:disabled):active {
     transform: none;
   }
   /* 更新进度条滑动降级（宽度突变是纯状态反馈，保留） */

@@ -2,6 +2,8 @@
 
 > 中文版 | [English](README_EN.md)
 
+[![CI](https://github.com/xiaochengzina/Driftlet/actions/workflows/ci.yml/badge.svg)](https://github.com/xiaochengzina/Driftlet/actions/workflows/ci.yml) [![License: GPL v3](https://img.shields.io/github/license/xiaochengzina/Driftlet)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/xiaochengzina/Driftlet)](https://github.com/xiaochengzina/Driftlet/releases) ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
+
 一款基于 Tauri 2 + Vite / 原生 JavaScript 构建的 Windows 桌面皮肤管理器。支持将网页以桌面小部件（Widget）形式呈现，提供透明窗口、无边框窗口、窗口置顶以及固定窗口至桌面。
 
 ---
@@ -17,11 +19,11 @@
 - 窗口放置双态：置顶 / 贴在桌面（默认贴在桌面）、禁止拖动
 - 鼠标穿透（皮肤「窗口」页开关，默认关）：点击/滚动穿透到下层窗口或桌面，配合贴桌面即成纯展示挂件
 - 为皮肤截取预览图
-- 托盘图标管理，主窗口关闭即隐藏到托盘
+- 托盘图标管理；主窗口关闭即销毁以回收渲染进程内存（约 80MB），从托盘唤回时重建（页面重载约 1 秒）
 - 开机自启、暗/亮主题切换
 - 右键皮肤窗口打开皮肤菜单（打开配置 / 刷新 / 隐藏 / 卸载，另有窗口行为快捷开关段：置顶/禁止拖动/鼠标穿透/拖拽调整大小/边缘吸附；皮肤可注册自定义菜单项）
-- 全局快捷键一键隐藏/显示已加载的皮肤（默认 Ctrl+Shift+Alt+D，可在设置中修改或禁用），托盘菜单同步勾选项；皮肤窗口按 Alt+F4 只会隐藏，可经快捷键/托盘唤回
-- 托盘「皮肤显隐」子菜单：每个已加载皮肤一行勾选，点击即切换该皮肤显隐，勾选态与编辑器、右键菜单、全局快捷键实时同步
+- 专注模式：一键（导航栏面板 / 全局热键 / 托盘勾选）进入免打扰桌面——按动作档隐藏（默认，秒回、状态不丢）或卸载（回收全部内存）所有非白名单皮肤，退出时按进入快照恢复；白名单按皮肤勾选豁免，两种动作档都不碰；可选全屏应用（游戏 / 全屏视频）自动进入、全屏结束 5 秒后自动退出；模式态与快照持久化，应用退出/崩溃后重启按快照恢复。热键默认 Ctrl+Shift+Alt+D，可在专注模式面板中修改或禁用
+- 托盘「皮肤显隐」子菜单：每个已加载皮肤一行勾选，点击即切换该皮肤显隐，勾选态与编辑器、右键菜单、全局快捷键实时同步；皮肤窗口按 Alt+F4 只是隐藏（不销毁），经此处勾选或编辑器按钮唤回
 - 皮肤专属显隐快捷键：每个皮肤可在编辑器配一个组合键，按下单独切换该皮肤显隐（与全局热键/其他皮肤重复或系统占用时拒绝保存）
 - 管理器与皮肤窗口已屏蔽 F5 等浏览器刷新/导航快捷键，页面不可经按键刷新，窗口生命周期完全归管理器
 - 布局备份：设置页一键导出/导入全部配置与皮肤（单个 zip 备份文件，适合换机与分享布局；导入前展示包内皮肤的权限声明，与安装引导页同口径；支持选择性导入——审查框勾选皮肤即转合并模式，只替换勾选皮肤并并入其配置与布局方案，其余数据不动）
@@ -29,6 +31,7 @@
 - 皮肤分组管理：自定义分组、折叠、改名与勾选式成员编辑；组内批量加载/卸载/隐藏/显示，可整组连同皮肤一并删除（两段式确认）
 - 皮肤多开：同一皮肤可创建副本独立运行（独立设置/预览/权限），源皮肤更新后「从源同步」一键追平
 - 启动更新检测（默认开，可在设置中关闭）：发现 GitHub 新版本后立即弹提示并后台自动下载安装包——直连与加速镜像多通道竞速 + 分段并行（国内直连慢/失败不再只能手动去网页下载，安装包官方 SHA-256 全程校验），下载期间显示进度条，完成主钮即转「立即安装」；下载失败才降级为「前往下载页面」
+- 「关于」面板（导航栏钉底）：应用版本、公开仓库地址（一键在系统浏览器打开）、用户协议全文（与安装器许可页同一来源，随界面语言切换中英版本），以及手动「检查更新」入口
 
 ---
 
@@ -37,7 +40,7 @@
 - Windows 10/11（部分功能依赖 Win32 API）
 - Node.js
 - Rust / Cargo（Tauri 2 需要）
-- WebView2 Runtime（Win11 已自带）
+- WebView2 Runtime（Win11 已自带；需 ≥ 111，即 2023 年 3 月后的常青版本——默认皮肤的容器查询/color-mix 基线。安装/更新时安装器会自动升级过旧运行时；装好之后又变旧的，启动时会弹提醒并给一键更新入口；**完全无网络的机器**：Release 页另提供文件名带 `-offline` 的离线安装包，内嵌完整运行时，安装全程零网络——已装的旧运行时也会用它就地升级，不碰在线更新）
 
 ---
 
@@ -74,7 +77,7 @@ npm run tauri build
 │   ├── window/snap.rs    # 边缘吸附（WM_MOVING 中就地改写坐标）
 │   ├── skin/             # 皮肤扫描、加载、配置、.dskin 包安装
 │   └── skin_api/         # 皮肤可调的系统信息与敏感能力命令（require_perm 鉴权）
-├── src-tauri/capabilities/ # 窗口权限：default.json（主窗口）/ skin.json（皮肤窗口，空权限）
+├── src-tauri/capabilities/ # 窗口权限：default.json（主窗口）/ log.json（日志窗口）/ skin.json（皮肤窗口，空权限）
 ├── examples/             # 官方皮肤族「屿 · Isles」开发源（设计规范 / shared 基座 / isles-* 皮肤，随安装包内置为「默认皮肤」组）
 ├── demos/                # 演示皮肤源（参考实现，以独立 .dskin 分发，不随安装包打包）
 │   ├── controls-demo/        # 全部设置控件演示（中英双语、界面语言跟随管理器）
@@ -90,12 +93,13 @@ npm run tauri build
 │   ├── pack-skin.exe     # 皮肤打包工具（免安装，生成 .dskin）
 │   ├── pack-skin/        # 打包工具源码（Rust）
 │   └── win32-probes/     # Windows 窗口探测脚本（调试用）
-├── CHANGELOG.md          # 版本变更记录
 └── docs/                 # 开发文档
     ├── 皮肤开发指南.md    # 皮肤创作者接口文档与规范
     ├── skin-development-guide.md   # 皮肤开发指南（英文对照）
     ├── 关键机制.md        # 窗口 / 桌面层级实现细节（勿回归）
-    └── critical-mechanisms.md      # 关键机制（英文对照）
+    ├── critical-mechanisms.md      # 关键机制（英文对照）
+    ├── 架构与机制总览.md  # 开发者全览（架构/运行机制/设计决策，合并关键机制内容）
+    └── architecture-and-mechanisms.md  # 架构与机制总览（英文对照）
 ```
 
 ---
@@ -208,13 +212,17 @@ if (window.driftlet?.invoke) {
 | `weekdays` | 星期选择 | `["mon","wed"]` | 周一至周日多选，固定选项 |
 | `select` | 下拉选择 | `"a"` | 需 `options` |
 | `font` | 字体选择 | `"Microsoft YaHei UI"` | 枚举系统已安装字体，空串 = 默认 |
-| `palette` | 调色板 | `"#rrggbb"` 或 `"#rrggbbaa"` | `options` 作预设色（可省略，含屏幕吸管取色与透明度滑块） |
+| `palette` | 调色板 | `"#rrggbb"` 或 `"#rrggbbaa"` | `options` 作预设色（可省略，含自定义取色与透明度滑块） |
 | `number` | 数字输入 | `数字` | 可选 `min` / `max` / `step` |
 | `slider` | 滑动条 | `数字` | 可选 `min` / `max` / `step`，缺省 0/100/1 |
+| `stepper` | 数字步进器 | `数字` | −/＋ 按钮按 `step` 增减（缺省 1），可选 `min` / `max`（到界禁用） |
 | `timerange` | 时间范围（精确到秒） | `{ "start": "YYYY-MM-DD HH:MM:SS", "end": "..." }` | 空串表示未设置 |
 | `tasklist` | 任务列表（增删改） | `["条目1","条目2"]` | |
 | `todolist` | 待办任务列表（勾选） | `[{ "text": "...", "done": true }]` | 皮肤可经 `skin_set_setting` 写回 |
 | `datetasklist` | 日期任务列表 | `[{ "time": "YYYY-MM-DD HH:MM:SS", "text": "..." }]` | 每条任务带日期时间，time 可空 |
+| `file` | 文件选择器 | `"D:\\pics\\cat.png"` | 管理器弹系统对话框，值为绝对路径（≤1024 字符），空串 = 未选；`filters` 限扩展名 |
+| `directory` | 文件夹选择器 | `"D:\\data"` | 同上，选文件夹；`filters` 忽略 |
+| `gpu_adapter` | GPU 适配器选择 | `"0x0001A2B3_0x0000F0E1"` | 管理器运行时枚举本机 GPU 生成下拉；值 = LUID 稳定标识，空串 = 首项（自动） |
 
 `password` 类型的值**不随桥的 `settings` 烘焙进页面**（skin:// 全皮肤同源，注入页面会被其他皮肤抓取）；皮肤内改用 `skin_get_setting` 命令按需读取——`await driftlet.invoke('skin_get_setting', { key: 'my_key' })`，身份取自调用窗口，只能读到自己的值。
 
@@ -226,7 +234,7 @@ if (window.driftlet?.invoke) {
 
 ### 分组
 
-设置项可用 `group_zh` 指定分组名（旧字段名 `group` 仍被接受），「皮肤设置」页会把同组控件归到一张卡片里（与「窗口」页的分节样式一致）。组按首次出现的顺序排列，未指定分组名的控件归入最前面的无标题卡片：
+设置项可用 `group_zh` / `group_en` 指定分组名（旧字段名 `group` 仍被接受），「皮肤设置」页会把同组控件归到一张卡片里（与「窗口」页的分节样式一致）。组按首次出现的顺序排列，未指定分组名的控件归入最前面的无标题卡片：
 
 ```json
 "settings": [
@@ -322,11 +330,12 @@ npm run dev           # 仅启动 Vite 前端
 npm run build         # 构建前端到 dist/
 npm run tauri dev     # 开发模式（前端 + Tauri）
 npm run tauri build   # 生产构建安装包
+npm run build:offline # 离线版安装包（内嵌 WebView2 完整运行时，构建时需联网拉取一次；自动保护既有标准包、产物改名 <-offline> 后缀，两版本互不覆盖）
 ```
 
 安装包产物（仅 NSIS，`bundle.targets = ["nsis"]`；安装器中英双语自动跟随系统 UI 语言）：
 
-- NSIS：`src-tauri/target/release/bundle/nsis/Driftlet_<版本>_x64-setup.exe`
+- NSIS：`src-tauri/target/release/bundle/nsis/Driftlet_<版本>_x64-setup.exe`（离线版为 `..._x64-setup-offline.exe`）
 
 说明：`nsis.languages = ["English", "SimpChinese"]`——运行时按系统语言自动匹配，无匹配回退数组**首位**，故 English 必须在前（中文系统 → 简体中文，其余 → English）。曾同时产出 MSI，现已不再生成。
 

@@ -1,7 +1,7 @@
+use crate::i18n::{Key, trf};
+use crate::skin::types::{Skin, SkinInfo, SkinManifest, SkinSettingKind};
 use std::fs;
 use std::path::Path;
-use crate::i18n::{trf, Key};
-use crate::skin::types::{Skin, SkinManifest, SkinInfo, SkinSettingKind};
 
 /// Scan a directory for skin subdirectories containing valid skin.json files
 pub fn scan_skins_directory(skins_dir: &Path) -> Vec<Skin> {
@@ -33,7 +33,8 @@ pub fn scan_skins_directory(skins_dir: &Path) -> Vec<Skin> {
 
         // 跳过点开头的目录：.staging-<id> / .<id>.old 是安装过程的暂存目录
         //（见 package.rs::install_package），不是皮肤
-        let folder_name = path.file_name()
+        let folder_name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
         if folder_name.starts_with('.') {
@@ -50,7 +51,11 @@ pub fn scan_skins_directory(skins_dir: &Path) -> Vec<Skin> {
                 // 皮肤 ID 以 skin.json 的 id 为准；缺省（旧皮肤）按文件夹名派生
                 let id = resolve_skin_id(&manifest, folder_name);
                 if skins.iter().any(|s: &Skin| s.id == id) {
-                    log::warn!("Duplicate skin id '{}' in {:?} — keeping the first", id, path);
+                    log::warn!(
+                        "Duplicate skin id '{}' in {:?} — keeping the first",
+                        id,
+                        path
+                    );
                     continue;
                 }
                 skins.push(Skin {
@@ -69,7 +74,9 @@ pub fn scan_skins_directory(skins_dir: &Path) -> Vec<Skin> {
     // Sort by display name for consistent ordering（按当前默认语言的解析名排，
     // 单语言皮肤回退后的名字也参与排序，不会沉底/乱序）
     skins.sort_by(|a, b| {
-        a.manifest.display_name(crate::i18n::DEFAULT_LANG).cmp(&b.manifest.display_name(crate::i18n::DEFAULT_LANG))
+        a.manifest
+            .display_name(crate::i18n::DEFAULT_LANG)
+            .cmp(&b.manifest.display_name(crate::i18n::DEFAULT_LANG))
     });
     skins
 }
@@ -82,7 +89,8 @@ pub(crate) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024; // 1 MB
 /// 读失败/字段缺失/非字符串一律 None（宽容：手写的皮肤没有它）。
 fn read_origin_marker(skin_dir: &Path) -> Option<String> {
     let text = fs::read_to_string(skin_dir.join("skin.json")).ok()?;
-    let value: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    let value: serde_json::Value =
+        serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
     value.get("x-driftlet-origin")?.as_str().map(str::to_string)
 }
 
@@ -95,11 +103,14 @@ pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
         .map_err(|e| format!("Cannot read skin.json: {}", e))?
         .len();
     if size > MAX_MANIFEST_BYTES {
-        return Err(format!("skin.json too large ({} bytes, limit {} bytes)", size, MAX_MANIFEST_BYTES));
+        return Err(format!(
+            "skin.json too large ({} bytes, limit {} bytes)",
+            size, MAX_MANIFEST_BYTES
+        ));
     }
 
-    let content = fs::read_to_string(&skin_json_path)
-        .map_err(|e| format!("Cannot read skin.json: {}", e))?;
+    let content =
+        fs::read_to_string(&skin_json_path).map_err(|e| format!("Cannot read skin.json: {}", e))?;
 
     // Strip a UTF-8 BOM if present — skin.json is often hand-edited and
     // Windows editors save UTF-8 with a BOM, which serde_json rejects.
@@ -125,12 +136,25 @@ pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
     // 镜像（声明值会被钳时打印提示，不改包内容、不拦截——给创作者
     // 「所见即所得」，无「打包放行、安装拒载」分歧）。
     // 改动必须同步镜像到 tools/pack-skin 并重建 exe。
-    manifest.window.width = manifest.window.width.clamp(1, crate::skin::types::MAX_DIMENSION);
-    manifest.window.height = manifest.window.height.clamp(1, crate::skin::types::MAX_DIMENSION);
+    manifest.window.width = manifest
+        .window
+        .width
+        .clamp(1, crate::skin::types::MAX_DIMENSION);
+    manifest.window.height = manifest
+        .window
+        .height
+        .clamp(1, crate::skin::types::MAX_DIMENSION);
     let op = manifest.window.opacity;
-    manifest.window.opacity = if op.is_finite() { op.clamp(crate::skin::types::MIN_OPACITY, 1.0) } else { 1.0 };
+    manifest.window.opacity = if op.is_finite() {
+        op.clamp(crate::skin::types::MIN_OPACITY, 1.0)
+    } else {
+        1.0
+    };
     manifest.window.zoom = crate::commands::clamp_zoom(manifest.window.zoom);
-    manifest.window.snap_gap = manifest.window.snap_gap.min(crate::window::snap::MAX_SNAP_GAP);
+    manifest.window.snap_gap = manifest
+        .window
+        .snap_gap
+        .min(crate::window::snap::MAX_SNAP_GAP);
     // 网页皮肤自动刷新间隔钳到 ≤24h（作者手滑写大值的兜底）
     manifest.window.refresh_seconds = manifest.window.refresh_seconds.map(|s| s.min(86400));
 
@@ -185,8 +209,10 @@ pub fn resolve_skin_id(manifest: &SkinManifest, folder_name: &str) -> String {
 pub fn validate_skin_id(id: &str, lang: &str) -> Result<(), String> {
     let ok = !id.is_empty()
         && id.len() <= 64
-        && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && id.chars().next().map_or(false, |c| c.is_ascii_alphanumeric())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
         && !is_reserved_device_name(id);
     if ok {
         Ok(())
@@ -201,9 +227,28 @@ fn is_reserved_device_name(id: &str) -> bool {
     let base = id.split('.').next().unwrap_or(id).to_ascii_lowercase();
     matches!(
         base.as_str(),
-        "con" | "prn" | "aux" | "nul"
-            | "com1" | "com2" | "com3" | "com4" | "com5" | "com6" | "com7" | "com8" | "com9"
-            | "lpt1" | "lpt2" | "lpt3" | "lpt4" | "lpt5" | "lpt6" | "lpt7" | "lpt8" | "lpt9"
+        "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "com2"
+            | "com3"
+            | "com4"
+            | "com5"
+            | "com6"
+            | "com7"
+            | "com8"
+            | "com9"
+            | "lpt1"
+            | "lpt2"
+            | "lpt3"
+            | "lpt4"
+            | "lpt5"
+            | "lpt6"
+            | "lpt7"
+            | "lpt8"
+            | "lpt9"
     )
 }
 
@@ -253,7 +298,11 @@ pub fn effective_settings(
             .filter(|v| setting_value_matches(def.kind, v));
         let value = persisted
             .cloned()
-            .or_else(|| def.default.clone().filter(|v| setting_value_matches(def.kind, v)))
+            .or_else(|| {
+                def.default
+                    .clone()
+                    .filter(|v| setting_value_matches(def.kind, v))
+            })
             .unwrap_or_else(|| type_fallback(def));
         out.insert(def.key.clone(), value);
     }
@@ -265,7 +314,9 @@ fn type_fallback(def: &crate::skin::types::SkinSettingDef) -> serde_json::Value 
     use serde_json::Value;
     match def.kind {
         SkinSettingKind::Boolean => Value::Bool(false),
-        SkinSettingKind::Number | SkinSettingKind::Slider | SkinSettingKind::Stepper => Value::from(0),
+        SkinSettingKind::Number | SkinSettingKind::Slider | SkinSettingKind::Stepper => {
+            Value::from(0)
+        }
         SkinSettingKind::Palette => Value::from("#ffffff"),
         SkinSettingKind::Text
         | SkinSettingKind::LongText
@@ -297,7 +348,9 @@ fn type_fallback(def: &crate::skin::types::SkinSettingDef) -> serde_json::Value 
 fn setting_value_matches(kind: SkinSettingKind, v: &serde_json::Value) -> bool {
     match kind {
         SkinSettingKind::Boolean => v.is_boolean(),
-        SkinSettingKind::Number | SkinSettingKind::Slider | SkinSettingKind::Stepper => v.is_number(),
+        SkinSettingKind::Number | SkinSettingKind::Slider | SkinSettingKind::Stepper => {
+            v.is_number()
+        }
         SkinSettingKind::Text
         | SkinSettingKind::LongText
         | SkinSettingKind::Time
@@ -321,27 +374,34 @@ fn setting_value_matches(kind: SkinSettingKind, v: &serde_json::Value) -> bool {
 }
 
 /// Build SkinInfo list for frontend display
-pub fn build_skin_info_list(skins: &[Skin], loaded_ids: &[String], hidden_ids: &[String]) -> Vec<SkinInfo> {
-    skins.iter().map(|skin| {
-        let loaded = loaded_ids.contains(&skin.id);
-        let hidden = hidden_ids.contains(&skin.id);
+pub fn build_skin_info_list(
+    skins: &[Skin],
+    loaded_ids: &[String],
+    hidden_ids: &[String],
+) -> Vec<SkinInfo> {
+    skins
+        .iter()
+        .map(|skin| {
+            let loaded = loaded_ids.contains(&skin.id);
+            let hidden = hidden_ids.contains(&skin.id);
 
-        // Auto-detect preview image in skin folder
-        let preview = find_preview_image(&skin.directory);
+            // Auto-detect preview image in skin folder
+            let preview = find_preview_image(&skin.directory);
 
-        SkinInfo {
-            id: skin.id.clone(),
-            name_zh: skin.manifest.name_zh.clone().unwrap_or_default(),
-            name_en: skin.manifest.name_en.clone(),
-            author: skin.manifest.author.clone(),
-            version: skin.manifest.version.clone(),
-            description_zh: skin.manifest.description_zh.clone(),
-            description_en: skin.manifest.description_en.clone(),
-            loaded,
-            hidden,
-            preview,
-        }
-    }).collect()
+            SkinInfo {
+                id: skin.id.clone(),
+                name_zh: skin.manifest.name_zh.clone().unwrap_or_default(),
+                name_en: skin.manifest.name_en.clone(),
+                author: skin.manifest.author.clone(),
+                version: skin.manifest.version.clone(),
+                description_zh: skin.manifest.description_zh.clone(),
+                description_en: skin.manifest.description_en.clone(),
+                loaded,
+                hidden,
+                preview,
+            }
+        })
+        .collect()
 }
 
 /// Look for preview.png or preview.jpg in the skin directory.
@@ -423,11 +483,20 @@ mod tests {
         // 显示回退矩阵：单语言皮肤在中/英界面都显示创作者提供的那种语言
         assert_eq!(en.display_name("en"), "EN Only Skin");
         assert_eq!(en.display_name("zh-CN"), "EN Only Skin");
-        assert_eq!(en.display_description("en").as_deref(), Some("English-only test skin"));
-        assert_eq!(en.display_description("zh-CN").as_deref(), Some("English-only test skin"));
+        assert_eq!(
+            en.display_description("en").as_deref(),
+            Some("English-only test skin")
+        );
+        assert_eq!(
+            en.display_description("zh-CN").as_deref(),
+            Some("English-only test skin")
+        );
         assert_eq!(zh.display_name("en"), "中文单语测试");
         assert_eq!(zh.display_name("zh-CN"), "中文单语测试");
-        assert_eq!(zh.display_description("en").as_deref(), Some("只填中文的单语测试皮肤"));
+        assert_eq!(
+            zh.display_description("en").as_deref(),
+            Some("只填中文的单语测试皮肤")
+        );
 
         // 旧字段名 alias：存量皮肤（name/description/label/group 无后缀写法）
         // 必须零迁移解析进新字段
@@ -451,19 +520,26 @@ mod tests {
         assert_eq!(both.display_name("en"), "Bilingual Skin");
         assert_eq!(both.display_name("zh-CN"), "双语皮肤");
         assert_eq!(both.display_description("en").as_deref(), Some("EN desc"));
-        assert_eq!(both.display_description("zh-CN").as_deref(), Some("中文简介"));
+        assert_eq!(
+            both.display_description("zh-CN").as_deref(),
+            Some("中文简介")
+        );
 
         // 半翻译：字段留空回退另一种语言
-        let half: SkinManifest = serde_json::from_str(
-            r#"{"name_zh":"双语皮肤","name_en":""}"#,
-        )
-        .unwrap();
-        assert_eq!(half.display_name("en"), "双语皮肤", "空串 name_en 必须回退 name_zh");
-        let half_zh: SkinManifest = serde_json::from_str(
-            r#"{"name_zh":"","name_en":"EN Only"}"#,
-        )
-        .unwrap();
-        assert_eq!(half_zh.display_name("zh-CN"), "EN Only", "空串 name_zh 必须回退 name_en");
+        let half: SkinManifest =
+            serde_json::from_str(r#"{"name_zh":"双语皮肤","name_en":""}"#).unwrap();
+        assert_eq!(
+            half.display_name("en"),
+            "双语皮肤",
+            "空串 name_en 必须回退 name_zh"
+        );
+        let half_zh: SkinManifest =
+            serde_json::from_str(r#"{"name_zh":"","name_en":"EN Only"}"#).unwrap();
+        assert_eq!(
+            half_zh.display_name("zh-CN"),
+            "EN Only",
+            "空串 name_zh 必须回退 name_en"
+        );
 
         let _ = fs::remove_dir_all(&base);
     }
@@ -474,8 +550,14 @@ mod tests {
         // validate_skin_id
         for name in ["con", "CON", "nul", "com1", "LPT9"] {
             let id = slugify_skin_id(name);
-            assert!(!is_reserved_device_name(&id), "{name} slugged to reserved {id}");
-            assert!(validate_skin_id(&id, "zh-CN").is_ok(), "{id} must be a valid id");
+            assert!(
+                !is_reserved_device_name(&id),
+                "{name} slugged to reserved {id}"
+            );
+            assert!(
+                validate_skin_id(&id, "zh-CN").is_ok(),
+                "{id} must be a valid id"
+            );
         }
         // 正常名字照旧走 slug
         assert_eq!(slugify_skin_id("My Clock"), "my-clock");
@@ -483,14 +565,17 @@ mod tests {
 
     #[test]
     fn effective_settings_merges_defaults_and_overrides() {
-        let manifest: SkinManifest = serde_json::from_str(r##"{
+        let manifest: SkinManifest = serde_json::from_str(
+            r##"{
             "name": "T",
             "settings": [
                 { "key": "accent", "type": "palette", "default": "#ff3333" },
                 { "key": "count", "type": "number", "default": 3 },
                 { "key": "flag", "type": "boolean" }
             ]
-        }"##).unwrap();
+        }"##,
+        )
+        .unwrap();
 
         // No persisted config → declared defaults (missing default → type fallback)
         let values = effective_settings(&manifest, None);
@@ -511,17 +596,26 @@ mod tests {
     fn shipped_example_skins_parse() {
         let skins_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../demos");
         let skins = scan_skins_directory(&skins_dir);
-        assert!(skins.len() >= 1, "example skins failed to parse in {}", skins_dir.display());
+        assert!(
+            !skins.is_empty(),
+            "example skins failed to parse in {}",
+            skins_dir.display()
+        );
 
         // controls-demo declares every supported setting kind; each must get
         // an effective value (declared default or type fallback)
-        let demo = skins.iter()
+        let demo = skins
+            .iter()
             .find(|s| s.id == "controls-demo")
             .expect("controls-demo must parse");
         assert!(demo.manifest.settings.len() >= 11);
         let values = effective_settings(&demo.manifest, None);
         for def in &demo.manifest.settings {
-            assert!(values.contains_key(&def.key), "missing value for {}", def.key);
+            assert!(
+                values.contains_key(&def.key),
+                "missing value for {}",
+                def.key
+            );
         }
     }
 
@@ -562,14 +656,28 @@ mod tests {
 
     #[test]
     fn manifest_rejects_unsafe_entry() {
-        for entry in ["../outside.html", "sub/index.html", "sub\\index.html", "index.html:$DATA", ""] {
+        for entry in [
+            "../outside.html",
+            "sub/index.html",
+            "sub\\index.html",
+            "index.html:$DATA",
+            "",
+        ] {
             let dir = unique_dir("badentry");
             fs::write(dir.join("index.html"), "<html></html>").unwrap();
-            let json = format!(r#"{{"name":"T","entry":"{}"}}"#, entry.replace('\\', "\\\\"));
+            let json = format!(
+                r#"{{"name":"T","entry":"{}"}}"#,
+                entry.replace('\\', "\\\\")
+            );
             fs::write(dir.join("skin.json"), json).unwrap();
 
             let err = load_skin_manifest(&dir).unwrap_err();
-            assert!(err.contains("Invalid entry"), "entry {:?}: unexpected error: {}", entry, err);
+            assert!(
+                err.contains("Invalid entry"),
+                "entry {:?}: unexpected error: {}",
+                entry,
+                err
+            );
 
             let _ = fs::remove_dir_all(&dir);
         }
@@ -593,11 +701,21 @@ mod tests {
 
     #[test]
     fn skin_id_rejects_reserved_device_names() {
-        for id in ["con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9", "con.txt", "CON"] {
-            assert!(validate_skin_id(id, "zh-CN").is_err(), "reserved id {:?} must be rejected", id);
+        for id in [
+            "con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9", "con.txt", "CON",
+        ] {
+            assert!(
+                validate_skin_id(id, "zh-CN").is_err(),
+                "reserved id {:?} must be rejected",
+                id
+            );
         }
         for id in ["console", "com10", "con-host", "my-skin"] {
-            assert!(validate_skin_id(id, "zh-CN").is_ok(), "id {:?} must be accepted", id);
+            assert!(
+                validate_skin_id(id, "zh-CN").is_ok(),
+                "id {:?} must be accepted",
+                id
+            );
         }
     }
 }

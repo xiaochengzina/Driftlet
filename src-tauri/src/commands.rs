@@ -1,13 +1,15 @@
-use tauri::{AppHandle, Emitter, Manager};
 use crate::AppState;
 use crate::backup;
-use crate::i18n::{tr, trf, Key};
-use crate::skin::types::{SkinInfo, SkinDetail, SkinRuntimeConfig, SkinGroup, LayoutPreset, LayoutSkin, AppConfig};
-use crate::skin::loader;
+use crate::i18n::{Key, tr, trf};
 use crate::skin::config;
+use crate::skin::loader;
 use crate::skin::package;
 use crate::skin::settings;
+use crate::skin::types::{
+    AppConfig, LayoutPreset, LayoutSkin, SkinDetail, SkinGroup, SkinInfo, SkinRuntimeConfig,
+};
 use crate::window::factory;
+use tauri::{AppHandle, Emitter, Manager};
 
 // ─── Capture Preview ───
 
@@ -40,9 +42,8 @@ pub fn start_skin_resize(window: tauri::WebviewWindow, direction: String) -> Res
         use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
         use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetCursorPos, PostMessageW, HTBOTTOM, HTBOTTOMLEFT,
-            HTBOTTOMRIGHT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
-            WM_NCLBUTTONDOWN,
+            GetCursorPos, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT,
+            HTTOPRIGHT, PostMessageW, WM_NCLBUTTONDOWN,
         };
 
         let lang = window.app_handle().state::<AppState>().lang();
@@ -93,13 +94,19 @@ fn find_skin_dir(state: &AppState, skin_id: &str) -> Option<std::path::PathBuf> 
 }
 
 #[tauri::command]
-pub async fn capture_skin_preview(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<(), String> {
+pub async fn capture_skin_preview(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     // 注意别遮蔽：window 参数是管理器窗，这里取出的是皮肤窗
     let (skin_window, preview_path, lang) = {
         let state = app.state::<AppState>();
         let lang = state.lang();
-        let skin_window = state.registry.get(&skin_id)
+        let skin_window = state
+            .registry
+            .get(&skin_id)
             .ok_or_else(|| tr(&lang, Key::PreviewNeedsLoadedSkin).to_string())?;
         let skin_dir = find_skin_dir(&state, &skin_id)
             .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
@@ -117,7 +124,11 @@ pub async fn capture_skin_preview(window: tauri::WebviewWindow, app: AppHandle, 
         })
         .await
         .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))??;
-        log::info!("Preview captured for skin '{}' → {:?}", skin_id, preview_path);
+        log::info!(
+            "Preview captured for skin '{}' → {:?}",
+            skin_id,
+            preview_path
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -139,35 +150,68 @@ pub fn list_skins(window: tauri::WebviewWindow, app: AppHandle) -> Result<Vec<Sk
     let loaded_ids: Vec<String> = state.registry.loaded_ids();
     // 已加载但窗口当前不可见 = 隐藏态（真实窗口状态 is_visible()，
     // 不是热键簿记——Alt+F4 降级隐藏、托盘切换同样落在真实状态上）
-    let hidden_ids: Vec<String> = loaded_ids.iter()
-        .filter(|id| state.registry.get(id).map(|w| !w.is_visible().unwrap_or(true)).unwrap_or(false))
+    let hidden_ids: Vec<String> = loaded_ids
+        .iter()
+        .filter(|id| {
+            state
+                .registry
+                .get(id)
+                .map(|w| !w.is_visible().unwrap_or(true))
+                .unwrap_or(false)
+        })
         .cloned()
         .collect();
-    Ok(loader::build_skin_info_list(&skins, &loaded_ids, &hidden_ids))
+    Ok(loader::build_skin_info_list(
+        &skins,
+        &loaded_ids,
+        &hidden_ids,
+    ))
 }
 
 #[tauri::command]
-pub fn get_skin_detail(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<SkinDetail, String> {
+pub fn get_skin_detail(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<SkinDetail, String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
     let skins = loader::scan_skins_directory(&state.skins_dir);
-    let skin = skins.iter()
+    let skin = skins
+        .iter()
         .find(|s| s.id == skin_id)
         .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
 
     let loaded = state.registry.is_loaded(&skin_id);
     // 同 list_skins：隐藏 = 已加载但窗口当前不可见（真实窗口状态）
-    let hidden = loaded && state.registry.get(&skin_id)
-        .map(|w| !w.is_visible().unwrap_or(true))
-        .unwrap_or(false);
+    let hidden = loaded
+        && state
+            .registry
+            .get(&skin_id)
+            .map(|w| !w.is_visible().unwrap_or(true))
+            .unwrap_or(false);
     let mut config = {
         let app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
-        app_config.skin_settings.get(&skin_id).cloned()
+        app_config
+            .skin_settings
+            .get(&skin_id)
+            .cloned()
             .unwrap_or_else(|| SkinRuntimeConfig::from_manifest(&skin.manifest))
     };
     // 面板需要有效值：None = 跟随 skin.json 的 window.resizable 默认
     config.resizable = Some(config.resizable.unwrap_or(skin.manifest.window.resizable));
+    // 同上：None = 跟随 manifest 的 window.edge_snap / snap_gap 默认。旧版漏
+    // 解析这两项——面板把裸 None 渲染成「关 / 0」，与按 manifest 生效的实际
+    // 状态相反（屿族皮肤 manifest 声明 开/20px，面板却显示 关/0，开关与行为
+    // 脱节）；snap_gap 过一遍上限钳制，手改 config.json 的越界值不下发面板
+    config.edge_snap = Some(config.edge_snap.unwrap_or(skin.manifest.window.edge_snap));
+    config.snap_gap = Some(
+        config
+            .snap_gap
+            .unwrap_or(skin.manifest.window.snap_gap)
+            .min(crate::window::snap::MAX_SNAP_GAP),
+    );
     // 同上：None = 跟随 skin.json 的 window.zoom 默认；手改 config.json
     // 可能注入越界/NaN 值，下发面板前统一过 clamp_zoom
     config.zoom = Some(clamp_zoom(config.zoom.unwrap_or(skin.manifest.window.zoom)));
@@ -180,7 +224,8 @@ pub fn get_skin_detail(window: tauri::WebviewWindow, app: AppHandle, skin_id: St
     let settings_values = loader::effective_settings(&skin.manifest, Some(&overrides));
 
     // 副本来源三元：原串 + 源显示名 + 源新版本（≠ 记录版本才给 = 可同步）
-    let (origin_name, origin_update) = match skin.origin.as_deref().and_then(|o| o.split_once('@')) {
+    let (origin_name, origin_update) = match skin.origin.as_deref().and_then(|o| o.split_once('@'))
+    {
         Some((origin_id, origin_ver)) => {
             let source = skins.iter().find(|s| s.id == origin_id);
             let name = source.map(|s| s.manifest.display_name(&lang));
@@ -228,7 +273,11 @@ async fn lifecycle_guards<'a>(state: &'a AppState) -> (impl Send + 'a, impl Send
 }
 
 #[tauri::command]
-pub async fn load_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<(), String> {
+pub async fn load_skin(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let _guards = lifecycle_guards(&state).await;
@@ -255,14 +304,18 @@ pub(crate) async fn load_skin_impl(app: AppHandle, skin_id: String) -> Result<()
         }
 
         let skins = loader::scan_skins_directory(&state.skins_dir);
-        let skin = skins.iter()
+        let skin = skins
+            .iter()
             .find(|s| s.id == sid)
             .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[sid.as_str()]))?
             .clone();
 
         let config = {
             let app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
-            app_config.skin_settings.get(&sid).cloned()
+            app_config
+                .skin_settings
+                .get(&sid)
+                .cloned()
                 .unwrap_or_else(|| SkinRuntimeConfig::from_manifest(&skin.manifest))
         };
 
@@ -276,14 +329,18 @@ pub(crate) async fn load_skin_impl(app: AppHandle, skin_id: String) -> Result<()
             if !app_config.loaded_skins.contains(&sid) {
                 app_config.loaded_skins.push(sid.clone());
             }
-            app_config.skin_settings.entry(sid.clone()).or_insert(config);
+            app_config
+                .skin_settings
+                .entry(sid.clone())
+                .or_insert(config);
             // 先改运行时后落盘：此刻窗口已建并注册，落盘失败不回滚窗口
             //（不把用户刚点开的皮肤又关掉），但运行时与磁盘已相反——重启
             // 后该皮肤不会自动加载。必须留补偿日志，否则状态分叉无从排查。
             if let Err(e) = config::save_config(&state.config_dir, &app_config) {
                 log::error!(
                     "compensating: skin '{}' window is live but config save failed: {}",
-                    sid, e
+                    sid,
+                    e
                 );
                 return Err(trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]));
             }
@@ -296,11 +353,17 @@ pub(crate) async fn load_skin_impl(app: AppHandle, skin_id: String) -> Result<()
         // 按真实状态即时同步，不靠簿记
         crate::hotkey::sync_tray_toggle_item(&handle);
         Ok(())
-    }).await.map_err(|e| trf(&outer_lang, Key::TaskFailed, &[&e.to_string()]))?
+    })
+    .await
+    .map_err(|e| trf(&outer_lang, Key::TaskFailed, &[&e.to_string()]))?
 }
 
 #[tauri::command]
-pub async fn unload_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<(), String> {
+pub async fn unload_skin(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let _guards = lifecycle_guards(&state).await;
@@ -325,7 +388,7 @@ pub(crate) async fn unload_skin_impl(app: AppHandle, skin_id: String) -> Result<
 
         factory::destroy_skin_window(&handle, &label)?;
         state.registry.unregister(&sid);
-        factory::clear_skin_menu_items(&sid);   // 自定义右键菜单项随窗口生命周期清除
+        factory::clear_skin_menu_items(&sid); // 自定义右键菜单项随窗口生命周期清除
 
         {
             let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
@@ -336,7 +399,8 @@ pub(crate) async fn unload_skin_impl(app: AppHandle, skin_id: String) -> Result<
             if let Err(e) = config::save_config(&state.config_dir, &app_config) {
                 log::error!(
                     "compensating: skin '{}' window is gone but config save failed: {}",
-                    sid, e
+                    sid,
+                    e
                 );
                 return Err(trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]));
             }
@@ -345,11 +409,17 @@ pub(crate) async fn unload_skin_impl(app: AppHandle, skin_id: String) -> Result<
         log::info!("Skin unloaded: {}", sid);
         let _ = handle.emit_to("main", "skin-unloaded", &sid);
         Ok(())
-    }).await.map_err(|e| trf(&outer_lang, Key::TaskFailed, &[&e.to_string()]))?
+    })
+    .await
+    .map_err(|e| trf(&outer_lang, Key::TaskFailed, &[&e.to_string()]))?
 }
 
 #[tauri::command]
-pub async fn reload_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<(), String> {
+pub async fn reload_skin(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let _guards = lifecycle_guards(&state).await;
@@ -394,46 +464,87 @@ fn runtime_entry_or_manifest<'a>(
     }
 }
 
-/// 窗口配置变更事件：目标皮肤已加载时向其 eval 派发 `desk-window-config-changed`
-///（detail = { key, value }，value 为应用后的有效值）。管理器面板路径与
-/// control 皮肤路径都经 set_skin_*_impl 落地，事件在此单点派发，两条路径
-/// 口径天然一致。拖拽/边框缩放引起的位置尺寸变化**不在此列**——那是皮肤
-/// 自己拖的（它知道），且 Moved/Resized 防抖通道不宜洪泛。
+/// 窗口属性变更广播（**单一汇聚点**——任何修改窗口属性的路径都必须经
+/// set_skin_*_impl 落地从而必经这里，勿旁路；完备性有测试钉住）：
+/// 1. 管理器：`emit_to("main", "window-config-changed", { skinId, key, value })`
+///    ——不问皮肤加载态（配置已持久化，打开中的编辑器要反映持久态）；
+///    右键菜单 / 皮肤自控（skin_set_window_config）/ 面板自身三路同此通道，
+///    口径天然一致（面板发起的变更回显同值，幂等无害）。value = 应用后的
+///    有效值（钳制后）。
+/// 2. 皮肤自身：已加载时 eval 派发 `desk-window-config-changed`（皮肤 API 面）。
+///
+/// 拖拽/边框缩放引起的位置尺寸变化**不在此列**——那是皮肤自己拖的（它知道），
+/// 且 Moved/Resized 防抖通道（skin-moved / skin-resized）不宜洪泛。
 fn emit_window_config_changed(app: &AppHandle, skin_id: &str, key: &str, value: serde_json::Value) {
+    // 管理器广播先行：皮肤未加载时 eval 无处投递，但持久化配置已变，打开中的
+    // 编辑器必须同步（面板显示脱节事故的教训——事件不能只发皮肤侧）
+    let _ = app.emit_to(
+        "main",
+        "window-config-changed",
+        serde_json::json!({
+            "skinId": skin_id,
+            "key": key,
+            "value": value,
+        }),
+    );
     let state = app.state::<AppState>();
-    let Some(win) = state.registry.get(skin_id) else { return };
+    let Some(win) = state.registry.get(skin_id) else {
+        return;
+    };
     let detail = serde_json::json!({ "key": key, "value": value });
-    let Ok(detail_json) = serde_json::to_string(&detail) else { return };
-    let _ = win.eval(&format!(
+    let Ok(detail_json) = serde_json::to_string(&detail) else {
+        return;
+    };
+    let _ = win.eval(format!(
         "document.dispatchEvent(new CustomEvent('desk-window-config-changed',{{detail:{}}}));",
         detail_json
     ));
 }
 
 #[tauri::command]
-pub fn set_skin_opacity(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, opacity: f64) -> Result<(), String> {
+pub fn set_skin_opacity(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    opacity: f64,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_opacity_impl(&app, &skin_id, opacity)
 }
 
 /// set_skin_opacity 的进程内实现（皮肤控制命令 skin_set_window_config 复用，
 /// 勿复制第三份）。已加载才可调（运行态 eval 需要窗口）。
-pub(crate) fn set_skin_opacity_impl(app: &AppHandle, skin_id: &str, opacity: f64) -> Result<(), String> {
+pub(crate) fn set_skin_opacity_impl(
+    app: &AppHandle,
+    skin_id: &str,
+    opacity: f64,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let window = state.registry.get(skin_id)
+    let window = state
+        .registry
+        .get(skin_id)
         .ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
 
     // NaN 防线（与 clamp_zoom 同口径）：NaN 穿透 clamp 会落盘成 JSON null，
     // 整份配置读回时 opacity 字段失守回落默认
-    let clamped = if opacity.is_finite() { opacity.clamp(crate::skin::types::MIN_OPACITY, 1.0) } else { 1.0 };
-    window.eval(&format!("document.documentElement.style.opacity = '{}';", clamped))
+    let clamped = if opacity.is_finite() {
+        opacity.clamp(crate::skin::types::MIN_OPACITY, 1.0)
+    } else {
+        1.0
+    };
+    window
+        .eval(format!(
+            "document.documentElement.style.opacity = '{}';",
+            clamped
+        ))
         .map_err(|e| format!("opacity: {}", e))?;
 
     {
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         runtime_entry_or_manifest(&state, &mut app_config, skin_id).opacity = clamped;
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
 
     #[cfg(target_os = "windows")]
@@ -456,13 +567,22 @@ pub(crate) fn set_skin_opacity_impl(app: &AppHandle, skin_id: &str, opacity: f64
 ///     不受影响——值守环无切换状态机，认登记不认路径）。
 /// 皮肤未加载时仅持久化，下次建窗生效。
 #[tauri::command]
-pub async fn set_skin_placement(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, placement: String) -> Result<(), String> {
+pub async fn set_skin_placement(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    placement: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_placement_impl(&app, &skin_id, &placement)
 }
 
 /// set_skin_placement 的进程内实现（皮肤控制命令复用）。
-pub(crate) fn set_skin_placement_impl(app: &AppHandle, skin_id: &str, placement: &str) -> Result<(), String> {
+pub(crate) fn set_skin_placement_impl(
+    app: &AppHandle,
+    skin_id: &str,
+    placement: &str,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
 
@@ -475,7 +595,8 @@ pub(crate) fn set_skin_placement_impl(app: &AppHandle, skin_id: &str, placement:
     // 持久化前先确认皮肤仍在盘上（对齐 set_skin_zoom）：皮肤已被删除时
     // or_default 会为一个不存在的 id 播种配置项
     let skin_exists = loader::scan_skins_directory(&state.skins_dir)
-        .iter().any(|s| s.id == skin_id);
+        .iter()
+        .any(|s| s.id == skin_id);
     if !skin_exists {
         return Err(trf(&lang, Key::SkinNotFound, &[skin_id]));
     }
@@ -485,10 +606,12 @@ pub(crate) fn set_skin_placement_impl(app: &AppHandle, skin_id: &str, placement:
     let current_pos = {
         if let Some(window) = state.registry.get(skin_id) {
             if let Ok(pos) = window.outer_position() {
-                window.scale_factor().ok().map(|sf| (
-                    (pos.x as f64 / sf).round() as i32,
-                    (pos.y as f64 / sf).round() as i32,
-                ))
+                window.scale_factor().ok().map(|sf| {
+                    (
+                        (pos.x as f64 / sf).round() as i32,
+                        (pos.y as f64 / sf).round() as i32,
+                    )
+                })
             } else {
                 None
             }
@@ -507,7 +630,8 @@ pub(crate) fn set_skin_placement_impl(app: &AppHandle, skin_id: &str, placement:
         let was = entry.on_desktop;
         entry.always_on_top = aot;
         entry.on_desktop = od;
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
         was
     };
 
@@ -533,9 +657,13 @@ pub(crate) fn set_skin_placement_impl(app: &AppHandle, skin_id: &str, placement:
             if let Some(window) = state.registry.get(skin_id) {
                 #[cfg(target_os = "windows")]
                 if let Ok(hwnd) = window.hwnd() {
-                    app.state::<AppState>().pinner.unpin(skin_id, hwnd.0 as isize);
+                    app.state::<AppState>()
+                        .pinner
+                        .unpin(skin_id, hwnd.0 as isize);
                 }
-                window.set_always_on_top(true).map_err(|e| format!("{}", e))?;
+                window
+                    .set_always_on_top(true)
+                    .map_err(|e| format!("{}", e))?;
                 #[cfg(target_os = "windows")]
                 factory::force_clean_skin_window(&window);
             }
@@ -547,7 +675,9 @@ pub(crate) fn set_skin_placement_impl(app: &AppHandle, skin_id: &str, placement:
         // 会重置皮肤 JS 运行时状态）。pin 的落底与登记即建窗时同一路径
         if !aot && !was_desktop {
             if let Some(window) = state.registry.get(skin_id) {
-                window.set_always_on_top(false).map_err(|e| format!("{}", e))?;
+                window
+                    .set_always_on_top(false)
+                    .map_err(|e| format!("{}", e))?;
                 #[cfg(target_os = "windows")]
                 if let Ok(hwnd) = window.hwnd() {
                     app.state::<AppState>().pinner.pin(skin_id, hwnd.0 as isize);
@@ -578,7 +708,11 @@ pub(crate) fn set_skin_placement_impl(app: &AppHandle, skin_id: &str, placement:
 /// 仅管理器可调；皮肤自身无此入口（它无法感知自己的出屏态）。
 #[cfg(target_os = "windows")]
 #[tauri::command]
-pub fn bring_skin_onscreen(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<bool, String> {
+pub fn bring_skin_onscreen(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<bool, String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let Some(skin_win) = state.registry.get(&skin_id) else {
@@ -590,7 +724,12 @@ pub fn bring_skin_onscreen(window: tauri::WebviewWindow, app: AppHandle, skin_id
     skin_win
         .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| format!("{}", e))?;
-    log::info!("Skin '{}' brought on screen via panel button: ({}, {})", skin_id, x, y);
+    log::info!(
+        "Skin '{}' brought on screen via panel button: ({}, {})",
+        skin_id,
+        x,
+        y
+    );
     Ok(true)
 }
 
@@ -600,21 +739,31 @@ pub fn bring_skin_onscreen(window: tauri::WebviewWindow, app: AppHandle, skin_id
 /// set_ignore_cursor_events 置位；顺序不能反，否则位会被子类摘回。
 /// 皮肤未加载时仅持久化，下次建窗（create_skin_window）生效。
 #[tauri::command]
-pub fn set_skin_click_through(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, on: bool) -> Result<(), String> {
+pub fn set_skin_click_through(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    on: bool,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_click_through_impl(&app, &skin_id, on)
 }
 
 /// set_skin_click_through 的进程内实现（皮肤控制命令复用）。
 /// 皮肤未加载时仅持久化，下次建窗（create_skin_window）生效。
-pub(crate) fn set_skin_click_through_impl(app: &AppHandle, skin_id: &str, on: bool) -> Result<(), String> {
+pub(crate) fn set_skin_click_through_impl(
+    app: &AppHandle,
+    skin_id: &str,
+    on: bool,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
 
     // 持久化前先确认皮肤仍在盘上（对齐 set_skin_zoom）：皮肤已被删除时
     // or_default 会为一个不存在的 id 播种配置项
     let skin_exists = loader::scan_skins_directory(&state.skins_dir)
-        .iter().any(|s| s.id == skin_id);
+        .iter()
+        .any(|s| s.id == skin_id);
     if !skin_exists {
         return Err(trf(&lang, Key::SkinNotFound, &[skin_id]));
     }
@@ -623,7 +772,8 @@ pub(crate) fn set_skin_click_through_impl(app: &AppHandle, skin_id: &str, on: bo
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         let entry = runtime_entry_or_manifest(&state, &mut app_config, skin_id);
         entry.click_through = on;
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
 
     if let Some(window) = state.registry.get(skin_id) {
@@ -631,7 +781,9 @@ pub(crate) fn set_skin_click_through_impl(app: &AppHandle, skin_id: &str, on: bo
         if let Ok(hwnd) = window.hwnd() {
             factory::set_passthrough_hwnd(hwnd.0 as isize, on);
         }
-        window.set_ignore_cursor_events(on).map_err(|e| format!("{}", e))?;
+        window
+            .set_ignore_cursor_events(on)
+            .map_err(|e| format!("{}", e))?;
         // 关闭时让子类立刻把位剥净（开启时是无操作），避免等下一个清理周期。
         #[cfg(target_os = "windows")]
         factory::force_clean_skin_window(&window);
@@ -646,35 +798,62 @@ pub(crate) fn set_skin_click_through_impl(app: &AppHandle, skin_id: &str, on: bo
 const MAX_COORD: i32 = 32767;
 
 #[tauri::command]
-pub fn set_skin_position(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, x: i32, y: i32) -> Result<(), String> {
+pub fn set_skin_position(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_position_impl(&app, &skin_id, x, y)
 }
 
 /// set_skin_position 的进程内实现（皮肤控制命令复用）。已加载才可调。
-pub(crate) fn set_skin_position_impl(app: &AppHandle, skin_id: &str, x: i32, y: i32) -> Result<(), String> {
+pub(crate) fn set_skin_position_impl(
+    app: &AppHandle,
+    skin_id: &str,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let window = state.registry.get(skin_id).ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
+    let window = state
+        .registry
+        .get(skin_id)
+        .ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
     let x = x.clamp(-MAX_COORD, MAX_COORD);
     let y = y.clamp(-MAX_COORD, MAX_COORD);
     // Config and UI store logical pixels.
-    window.set_position(tauri::LogicalPosition::new(x as f64, y as f64))
+    window
+        .set_position(tauri::LogicalPosition::new(x as f64, y as f64))
         .map_err(|e| format!("{}", e))?;
 
     let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     let entry = runtime_entry_or_manifest(&state, &mut app_config, skin_id);
     entry.x = Some(x);
     entry.y = Some(y);
-    config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+    config::save_config(&state.config_dir, &app_config)
+        .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     drop(app_config);
 
-    emit_window_config_changed(app, skin_id, "position", serde_json::json!({ "x": x, "y": y }));
+    emit_window_config_changed(
+        app,
+        skin_id,
+        "position",
+        serde_json::json!({ "x": x, "y": y }),
+    );
     Ok(())
 }
 
 #[tauri::command]
-pub fn set_skin_size(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, width: u32, height: u32) -> Result<(), String> {
+pub fn set_skin_size(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_size_impl(&app, &skin_id, width, height)
 }
@@ -682,17 +861,26 @@ pub fn set_skin_size(window: tauri::WebviewWindow, app: AppHandle, skin_id: Stri
 /// set_skin_size 的进程内实现（皮肤控制命令复用）。已加载才可调。
 /// 入参 = 当前实际尺寸（zoom ≠ 100% 时的所见大小）；配置里持久化
 /// 的仍是 100% 基础尺寸 = 实际 ÷ 有效 zoom。
-pub(crate) fn set_skin_size_impl(app: &AppHandle, skin_id: &str, width: u32, height: u32) -> Result<(), String> {
+pub(crate) fn set_skin_size_impl(
+    app: &AppHandle,
+    skin_id: &str,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let window = state.registry.get(skin_id).ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
+    let window = state
+        .registry
+        .get(skin_id)
+        .ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
     let width = width.clamp(1, crate::skin::types::MAX_DIMENSION);
     let height = height.clamp(1, crate::skin::types::MAX_DIMENSION);
     // Config and UI store logical pixels (same convention as position and
     // as create_skin_window's inner_size).  PhysicalSize would disagree with
     // the creation size on scaled displays and "revert" on every reload.
     let zoom = effective_zoom(&state, skin_id);
-    window.set_size(tauri::LogicalSize::new(width as f64, height as f64))
+    window
+        .set_size(tauri::LogicalSize::new(width as f64, height as f64))
         .map_err(|e| format!("{}", e))?;
 
     {
@@ -700,11 +888,17 @@ pub(crate) fn set_skin_size_impl(app: &AppHandle, skin_id: &str, width: u32, hei
         let entry = runtime_entry_or_manifest(&state, &mut app_config, skin_id);
         entry.width = ((width as f64) / zoom).round() as u32;
         entry.height = ((height as f64) / zoom).round() as u32;
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
 
     // 事件语义与面板输入一致：所见实际尺寸（基础 × zoom 前的入参）
-    emit_window_config_changed(app, skin_id, "size", serde_json::json!({ "width": width, "height": height }));
+    emit_window_config_changed(
+        app,
+        skin_id,
+        "size",
+        serde_json::json!({ "width": width, "height": height }),
+    );
     Ok(())
 }
 
@@ -715,7 +909,11 @@ pub(crate) fn set_skin_size_impl(app: &AppHandle, skin_id: &str, width: u32, hei
 /// A loaded skin is reloaded so its window picks up the defaults (position,
 /// size, and the rebaked __DESK_PP__.settings) right away.
 #[tauri::command]
-pub async fn reset_skin_config(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<(), String> {
+pub async fn reset_skin_config(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     // 生命周期互斥：重置（删配置 + 重载）与并发 load/unload 不得交错；
     // install_lock 同取——导入/安装/卸载（持 install_lock）换目录期间重置
@@ -728,7 +926,10 @@ pub async fn reset_skin_config(window: tauri::WebviewWindow, app: AppHandle, ski
         let state = app.state::<AppState>();
         // settings_lock：与 skin_set_setting 的 load→save 互斥——否则交错时
         // 已删文件被在途写回「复活」（审查 A-M1；锁序 lifecycle→install→settings）
-        let _settings_guard = state.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _settings_guard = state
+            .settings_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(skin_dir) = find_skin_dir(&state, &skin_id) {
             // 衍生文件一并删：.bak 是损坏备份、.tmp 是原子写残留——重置后
             // 不该再有旧设置的任何痕迹
@@ -750,7 +951,8 @@ pub async fn reset_skin_config(window: tauri::WebviewWindow, app: AppHandle, ski
         let lang = state.lang();
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         app_config.skin_settings.remove(&skin_id);
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
 
     if app.state::<AppState>().registry.is_loaded(&skin_id) {
@@ -780,19 +982,32 @@ pub fn set_skin_custom_setting(
     let state = app.state::<AppState>();
     let lang = state.lang();
     let skins = loader::scan_skins_directory(&state.skins_dir);
-    let skin = skins.iter()
+    let skin = skins
+        .iter()
         .find(|s| s.id == skin_id)
         .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
-    let def = skin.manifest.settings.iter()
+    let def = skin
+        .manifest
+        .settings
+        .iter()
         .find(|d| d.key == key)
-        .ok_or_else(|| trf(&lang, Key::SkinHasNoSetting, &[skin_id.as_str(), key.as_str()]))?;
+        .ok_or_else(|| {
+            trf(
+                &lang,
+                Key::SkinHasNoSetting,
+                &[skin_id.as_str(), key.as_str()],
+            )
+        })?;
 
     let value = validate_custom_setting(def, &value, &lang)?;
 
     // 覆盖值写进皮肤文件夹的 settings.json，不再触碰全局 config。
     // 持锁覆盖 load→save 全程：settings.json 有两个写入方（管理器与皮肤
     // 自身的 skin_set_setting），不持锁会互相丢更新。
-    let _guard = state.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = state
+        .settings_lock
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let mut overrides = settings::load_skin_settings(&skin.directory);
     overrides.insert(key.clone(), value.clone());
     settings::save_skin_settings(&skin.directory, &overrides)
@@ -808,7 +1023,8 @@ pub fn set_skin_custom_setting(
         let val_json = serde_json::to_string(&value).map_err(|e| e.to_string())?;
         let script = format!(
             "(function(){{var k={key},v={val};var b=window.__DESK_PP__;if(b){{b.settings=b.settings||{{}};b.settings[k]=v;}}document.dispatchEvent(new CustomEvent('desk-setting-changed',{{detail:{{key:k,value:v}}}}));}})();",
-            key = key_json, val = val_json
+            key = key_json,
+            val = val_json
         );
         let _ = window.eval(&script);
     }
@@ -827,14 +1043,20 @@ pub(crate) fn validate_custom_setting(
     use crate::skin::types::SkinSettingKind;
     use serde_json::Value;
     match def.kind {
-        SkinSettingKind::Boolean => value.as_bool()
+        SkinSettingKind::Boolean => value
+            .as_bool()
             .map(Value::Bool)
             .ok_or_else(|| trf(lang, Key::SettingNeedsBool, &[def.key.as_str()])),
         SkinSettingKind::Number | SkinSettingKind::Slider | SkinSettingKind::Stepper => {
-            let mut n = value.as_f64()
+            let mut n = value
+                .as_f64()
                 .ok_or_else(|| trf(lang, Key::SettingNeedsNumber, &[def.key.as_str()]))?;
-            if let Some(min) = def.min { n = n.max(min); }
-            if let Some(max) = def.max { n = n.min(max); }
+            if let Some(min) = def.min {
+                n = n.max(min);
+            }
+            if let Some(max) = def.max {
+                n = n.min(max);
+            }
             Ok(serde_json::json!(n))
         }
         SkinSettingKind::Text => {
@@ -888,7 +1110,8 @@ pub(crate) fn validate_custom_setting(
         SkinSettingKind::Palette => {
             // 调色板带透明度调整：#rrggbb（视为不透明）或 #rrggbbaa
             let s = require_str(def, value, Key::WhatColor, lang)?;
-            let valid = (s.len() == 7 || s.len() == 9) && s.starts_with('#')
+            let valid = (s.len() == 7 || s.len() == 9)
+                && s.starts_with('#')
                 && s[1..].chars().all(|c| c.is_ascii_hexdigit());
             if valid {
                 Ok(Value::String(s.to_string()))
@@ -901,19 +1124,29 @@ pub(crate) fn validate_custom_setting(
             if def.options.iter().any(|o| o.value == s) {
                 Ok(Value::String(s.to_string()))
             } else {
-                Err(trf(lang, Key::SettingValueNotAllowed, &[def.key.as_str(), s]))
+                Err(trf(
+                    lang,
+                    Key::SettingValueNotAllowed,
+                    &[def.key.as_str(), s],
+                ))
             }
         }
         SkinSettingKind::MultiSelect => {
-            let arr = value.as_array()
+            let arr = value
+                .as_array()
                 .ok_or_else(|| trf(lang, Key::SettingNeedsArray, &[def.key.as_str()]))?;
             let mut seen = std::collections::HashSet::new();
             let mut out = Vec::new();
             for item in arr {
-                let s = item.as_str()
+                let s = item
+                    .as_str()
                     .ok_or_else(|| trf(lang, Key::SettingNeedsStringArray, &[def.key.as_str()]))?;
                 if !def.options.iter().any(|o| o.value == s) {
-                    return Err(trf(lang, Key::SettingValueNotAllowed, &[def.key.as_str(), s]));
+                    return Err(trf(
+                        lang,
+                        Key::SettingValueNotAllowed,
+                        &[def.key.as_str(), s],
+                    ));
                 }
                 if seen.insert(s) {
                     out.push(Value::String(s.to_string()));
@@ -922,14 +1155,18 @@ pub(crate) fn validate_custom_setting(
             Ok(Value::Array(out))
         }
         SkinSettingKind::TimeRange => {
-            let obj = value.as_object()
+            let obj = value
+                .as_object()
                 .ok_or_else(|| trf(lang, Key::SettingNeedsTimeRange, &[def.key.as_str()]))?;
-            let start = obj.get("start").and_then(|v| v.as_str())
+            let start = obj
+                .get("start")
+                .and_then(|v| v.as_str())
                 .ok_or_else(|| trf(lang, Key::SettingMissingStart, &[def.key.as_str()]))?;
-            let end = obj.get("end").and_then(|v| v.as_str())
+            let end = obj
+                .get("end")
+                .and_then(|v| v.as_str())
                 .ok_or_else(|| trf(lang, Key::SettingMissingEnd, &[def.key.as_str()]))?;
-            let (Some(start), Some(end)) =
-                (normalize_datetime(start), normalize_datetime(end))
+            let (Some(start), Some(end)) = (normalize_datetime(start), normalize_datetime(end))
             else {
                 return Err(trf(lang, Key::SettingNeedsDateTime, &[def.key.as_str()]));
             };
@@ -941,11 +1178,13 @@ pub(crate) fn validate_custom_setting(
             // overflow entries are silently truncated.
             const MAX_TASKS: usize = 500;
             const MAX_ITEM_LEN: usize = 200;
-            let arr = value.as_array()
+            let arr = value
+                .as_array()
                 .ok_or_else(|| trf(lang, Key::SettingNeedsArray, &[def.key.as_str()]))?;
             let mut out = Vec::new();
             for item in arr.iter().take(MAX_TASKS) {
-                let s = item.as_str()
+                let s = item
+                    .as_str()
                     .ok_or_else(|| trf(lang, Key::SettingNeedsStringArray, &[def.key.as_str()]))?;
                 out.push(Value::String(s.chars().take(MAX_ITEM_LEN).collect()));
             }
@@ -955,13 +1194,17 @@ pub(crate) fn validate_custom_setting(
             // Same silent caps as TaskList
             const MAX_TASKS: usize = 500;
             const MAX_ITEM_LEN: usize = 200;
-            let arr = value.as_array()
+            let arr = value
+                .as_array()
                 .ok_or_else(|| trf(lang, Key::SettingNeedsArray, &[def.key.as_str()]))?;
             let mut out = Vec::new();
             for item in arr.iter().take(MAX_TASKS) {
-                let obj = item.as_object()
+                let obj = item
+                    .as_object()
                     .ok_or_else(|| trf(lang, Key::EntryNeedsObject, &[def.key.as_str()]))?;
-                let text = obj.get("text").and_then(|v| v.as_str())
+                let text = obj
+                    .get("text")
+                    .and_then(|v| v.as_str())
                     .ok_or_else(|| trf(lang, Key::EntryMissingText, &[def.key.as_str()]))?;
                 let done = obj.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
                 out.push(serde_json::json!({
@@ -975,15 +1218,21 @@ pub(crate) fn validate_custom_setting(
             // Same silent caps as TaskList
             const MAX_TASKS: usize = 500;
             const MAX_ITEM_LEN: usize = 200;
-            let arr = value.as_array()
+            let arr = value
+                .as_array()
                 .ok_or_else(|| trf(lang, Key::SettingNeedsArray, &[def.key.as_str()]))?;
             let mut out = Vec::new();
             for item in arr.iter().take(MAX_TASKS) {
-                let obj = item.as_object()
+                let obj = item
+                    .as_object()
                     .ok_or_else(|| trf(lang, Key::EntryNeedsObject, &[def.key.as_str()]))?;
-                let time = obj.get("time").and_then(|v| v.as_str())
+                let time = obj
+                    .get("time")
+                    .and_then(|v| v.as_str())
                     .ok_or_else(|| trf(lang, Key::EntryMissingTime, &[def.key.as_str()]))?;
-                let text = obj.get("text").and_then(|v| v.as_str())
+                let text = obj
+                    .get("text")
+                    .and_then(|v| v.as_str())
                     .ok_or_else(|| trf(lang, Key::EntryMissingText, &[def.key.as_str()]))?;
                 let Some(time) = normalize_datetime(time) else {
                     return Err(trf(lang, Key::EntryTimeFormat, &[def.key.as_str()]));
@@ -998,11 +1247,13 @@ pub(crate) fn validate_custom_setting(
         SkinSettingKind::Weekdays => {
             // Fixed set, normalized to Monday-first order
             const DAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-            let arr = value.as_array()
+            let arr = value
+                .as_array()
                 .ok_or_else(|| trf(lang, Key::SettingNeedsArray, &[def.key.as_str()]))?;
             let mut picked = Vec::new();
             for item in arr {
-                let s = item.as_str()
+                let s = item
+                    .as_str()
                     .ok_or_else(|| trf(lang, Key::SettingNeedsStringArray, &[def.key.as_str()]))?;
                 if !DAYS.contains(&s) {
                     return Err(trf(lang, Key::InvalidWeekday, &[def.key.as_str(), s]));
@@ -1031,8 +1282,13 @@ fn require_str<'a>(
     what: Key,
     lang: &str,
 ) -> Result<&'a str, String> {
-    value.as_str()
-        .ok_or_else(|| trf(lang, Key::SettingNeedsWhat, &[def.key.as_str(), tr(lang, what)]))
+    value.as_str().ok_or_else(|| {
+        trf(
+            lang,
+            Key::SettingNeedsWhat,
+            &[def.key.as_str(), tr(lang, what)],
+        )
+    })
 }
 
 /// "HH:MM" or "HH:MM:SS", 24-hour.
@@ -1091,7 +1347,9 @@ fn normalize_datetime(s: &str) -> Option<String> {
 fn is_fixed_uint(s: &str, width: usize, min: u32, max: u32) -> bool {
     s.len() == width
         && s.chars().all(|c| c.is_ascii_digit())
-        && s.parse::<u32>().map(|n| (min..=max).contains(&n)).unwrap_or(false)
+        && s.parse::<u32>()
+            .map(|n| (min..=max).contains(&n))
+            .unwrap_or(false)
 }
 
 /// 右键菜单重入守卫：TrackPopupMenu 是模态的，等待期间调用方被占住——皮肤
@@ -1102,7 +1360,10 @@ static SKIN_MENU_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// Show the skin window's right-click popup menu and run the chosen action.
 /// Invoked from the injected bridge's contextmenu handler.
 #[tauri::command]
-pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+pub async fn show_skin_context_menu(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
     let lang = app.state::<AppState>().lang();
     let Some(skin_id) = window.label().strip_prefix("skin-").map(str::to_string) else {
         return Err(tr(&lang, Key::NotASkinWindow).to_string());
@@ -1166,7 +1427,12 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
         let wait = tauri::async_runtime::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             app2.run_on_main_thread(move || {
-                let _ = tx.send(factory::track_skin_popup_menu(&menu_window, &lang2, quick, &items_for_menu));
+                let _ = tx.send(factory::track_skin_popup_menu(
+                    &menu_window,
+                    &lang2,
+                    quick,
+                    &items_for_menu,
+                ));
             })
             .map_err(|e| e.to_string())?;
             rx.recv().map_err(|e| e.to_string())
@@ -1181,8 +1447,18 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
     match choice {
         factory::SKIN_MENU_OPEN_CONFIG => {
             // Surface the manager and tell it to open this skin's config page.
+            // 管理器可能刚销毁（关窗即销毁）：重建后页面尚在启动，emit 会丢——
+            // 暂存待选皮肤 id，前端启动时幂等拉取（pending_package 同款约定）
+            let needs_recreate = app.get_webview_window("main").is_none();
             crate::tray::show_manager_window(&app);
-            app.emit_to("main", "open-skin-config", &skin_id).map_err(|e| e.to_string())?;
+            if needs_recreate {
+                *app.state::<AppState>()
+                    .pending_open_config
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(skin_id.clone());
+            }
+            app.emit_to("main", "open-skin-config", &skin_id)
+                .map_err(|e| e.to_string())?;
         }
         factory::SKIN_MENU_RELOAD => {
             // Fire-and-forget: the reload destroys the invoking webview
@@ -1256,7 +1532,7 @@ pub async fn show_skin_context_menu(app: AppHandle, window: tauri::WebviewWindow
             let idx = (c - factory::SKIN_MENU_CUSTOM_BASE) as usize;
             if let Some(item) = menu_items.get(idx) {
                 if let Ok(id_json) = serde_json::to_string(&item.id) {
-                    let _ = window.eval(&format!(
+                    let _ = window.eval(format!(
                         r#"document.dispatchEvent(new CustomEvent('desk-skin-menu-item',{{detail:{{id:{id_json}}}}}));"#
                     ));
                 }
@@ -1280,7 +1556,10 @@ pub fn open_skin_devtools(app: AppHandle, window: tauri::WebviewWindow) -> Resul
     if window.label().strip_prefix("skin-").is_none() {
         return Err(tr(&lang, Key::NotASkinWindow).to_string());
     }
-    if !state.hot_reload_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+    if !state
+        .hot_reload_enabled
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
         return Ok(());
     }
     #[cfg(target_os = "windows")]
@@ -1291,16 +1570,28 @@ pub fn open_skin_devtools(app: AppHandle, window: tauri::WebviewWindow) -> Resul
 }
 
 #[tauri::command]
-pub fn set_skin_position_locked(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, locked: bool) -> Result<(), String> {
+pub fn set_skin_position_locked(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    locked: bool,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_position_locked_impl(&app, &skin_id, locked)
 }
 
 /// set_skin_position_locked 的进程内实现（皮肤控制命令复用）。已加载才可调。
-pub(crate) fn set_skin_position_locked_impl(app: &AppHandle, skin_id: &str, locked: bool) -> Result<(), String> {
+pub(crate) fn set_skin_position_locked_impl(
+    app: &AppHandle,
+    skin_id: &str,
+    locked: bool,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let window = state.registry.get(skin_id).ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
+    let window = state
+        .registry
+        .get(skin_id)
+        .ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
 
     if locked {
         let _ = window.eval(r#"
@@ -1313,19 +1604,22 @@ pub(crate) fn set_skin_position_locked_impl(app: &AppHandle, skin_id: &str, lock
             })();
         "#);
     } else {
-        let _ = window.eval(r#"
+        let _ = window.eval(
+            r#"
             (function(){
                 if(window.__DESK_PP__) window.__DESK_PP__.positionLocked = false;
                 var s=document.getElementById('desk-lock-style');
                 if(s) s.remove();
             })();
-        "#);
+        "#,
+        );
     }
 
     {
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         runtime_entry_or_manifest(&state, &mut app_config, skin_id).position_locked = locked;
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
 
     #[cfg(target_os = "windows")]
@@ -1338,18 +1632,30 @@ pub(crate) fn set_skin_position_locked_impl(app: &AppHandle, skin_id: &str, lock
 /// 边框缩放开关（「窗口」页）：即时生效——桥接的 setResizable 翻转标志并
 /// 同步边框提示层；同时持久化用户选择（Some(v)），None 语义为跟随 skin.json。
 #[tauri::command]
-pub fn set_skin_resizable(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, resizable: bool) -> Result<(), String> {
+pub fn set_skin_resizable(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    resizable: bool,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_resizable_impl(&app, &skin_id, resizable)
 }
 
 /// set_skin_resizable 的进程内实现（皮肤控制命令复用）。已加载才可调。
-pub(crate) fn set_skin_resizable_impl(app: &AppHandle, skin_id: &str, resizable: bool) -> Result<(), String> {
+pub(crate) fn set_skin_resizable_impl(
+    app: &AppHandle,
+    skin_id: &str,
+    resizable: bool,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let window = state.registry.get(skin_id).ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
+    let window = state
+        .registry
+        .get(skin_id)
+        .ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
 
-    let _ = window.eval(&format!(
+    let _ = window.eval(format!(
         "window.__DESK_PP__ && window.__DESK_PP__.setResizable({});",
         resizable
     ));
@@ -1357,7 +1663,8 @@ pub(crate) fn set_skin_resizable_impl(app: &AppHandle, skin_id: &str, resizable:
     {
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         runtime_entry_or_manifest(&state, &mut app_config, skin_id).resizable = Some(resizable);
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
 
     emit_window_config_changed(app, skin_id, "resizable", serde_json::json!(resizable));
@@ -1382,7 +1689,12 @@ pub(crate) fn clamp_zoom(z: f64) -> f64 {
 /// 设计尺寸，布局不重排。皮肤未加载时仅持久化，下次建窗生效（与
 /// set_skin_edge_snap 同款语义）。
 #[tauri::command]
-pub fn set_skin_zoom(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, zoom: f64) -> Result<(), String> {
+pub fn set_skin_zoom(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    zoom: f64,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_zoom_impl(&app, &skin_id, zoom)
 }
@@ -1397,7 +1709,8 @@ pub(crate) fn set_skin_zoom_impl(app: &AppHandle, skin_id: &str, zoom: f64) -> R
     // entry 缺失时按 manifest 尺寸播种（否则 or_default 的 300×200 会把
     // 下面的 set_size 缩错窗口；条目缺失 ⟹ 从未拖过 ⟹ 实际尺寸 = manifest）。
     let skins = loader::scan_skins_directory(&state.skins_dir);
-    let skin = skins.iter()
+    let skin = skins
+        .iter()
         .find(|s| s.id == skin_id)
         .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id]))?;
 
@@ -1405,13 +1718,15 @@ pub(crate) fn set_skin_zoom_impl(app: &AppHandle, skin_id: &str, zoom: f64) -> R
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         // 缺条目时按 manifest 整份播种（此前只补宽高，放置态/透明度等
         // 仍落硬编码默认——与 runtime_entry_or_manifest 同一改法）
-        let entry = app_config.skin_settings.entry(skin_id.to_string()).or_insert_with(|| {
-            SkinRuntimeConfig::from_manifest(&skin.manifest)
-        });
+        let entry = app_config
+            .skin_settings
+            .entry(skin_id.to_string())
+            .or_insert_with(|| SkinRuntimeConfig::from_manifest(&skin.manifest));
         let prev = entry.zoom;
         entry.zoom = Some(zoom);
         let size = (entry.width, entry.height);
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
         (size.0, size.1, prev)
     };
 
@@ -1438,11 +1753,15 @@ pub(crate) fn set_skin_zoom_impl(app: &AppHandle, skin_id: &str, zoom: f64) -> R
         }
         // 基础尺寸没变 → Resized 的「未变化跳过」不会回发事件；面板的宽高
         // 输入框显示的是实际尺寸，这里显式通知刷新。
-        let _ = app.emit_to("main", "skin-resized", serde_json::json!({
-            "skinId": skin_id,
-            "width": actual_w,
-            "height": actual_h,
-        }));
+        let _ = app.emit_to(
+            "main",
+            "skin-resized",
+            serde_json::json!({
+                "skinId": skin_id,
+                "width": actual_w,
+                "height": actual_h,
+            }),
+        );
     }
 
     emit_window_config_changed(app, skin_id, "zoom", serde_json::json!(zoom));
@@ -1459,7 +1778,9 @@ fn effective_zoom(state: &AppState, skin_id: &str) -> f64 {
         Some(z) => clamp_zoom(z),
         None => {
             let skins = loader::scan_skins_directory(&state.skins_dir);
-            skins.iter().find(|s| s.id == skin_id)
+            skins
+                .iter()
+                .find(|s| s.id == skin_id)
                 .map(|s| clamp_zoom(s.manifest.window.zoom))
                 .unwrap_or(1.0)
         }
@@ -1470,14 +1791,23 @@ fn effective_zoom(state: &AppState, skin_id: &str) -> f64 {
 /// WM_MOVING 处理按 HWND 查该表）；同时持久化。皮肤未加载时仅持久化，
 /// 下次加载建窗时随 SkinRuntimeConfig 生效（与 set_always_on_top 同款语义）。
 #[tauri::command]
-pub fn set_skin_edge_snap(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, on: bool) -> Result<(), String> {
+pub fn set_skin_edge_snap(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    on: bool,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_edge_snap_impl(&app, &skin_id, on)
 }
 
 /// set_skin_edge_snap 的进程内实现（皮肤控制命令复用）。
 /// 皮肤未加载时仅持久化，下次加载建窗时随 SkinRuntimeConfig 生效。
-pub(crate) fn set_skin_edge_snap_impl(app: &AppHandle, skin_id: &str, on: bool) -> Result<(), String> {
+pub(crate) fn set_skin_edge_snap_impl(
+    app: &AppHandle,
+    skin_id: &str,
+    on: bool,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
 
@@ -1486,7 +1816,8 @@ pub(crate) fn set_skin_edge_snap_impl(app: &AppHandle, skin_id: &str, on: bool) 
     // 跟随 manifest，审查 F2-A）；皮肤已被删除时 or_default 会为一个不存在
     // 的 id 播种配置项
     let m_gap = match loader::scan_skins_directory(&state.skins_dir)
-        .iter().find(|s| s.id == skin_id)
+        .iter()
+        .find(|s| s.id == skin_id)
     {
         Some(s) => s.manifest.window.snap_gap,
         None => return Err(trf(&lang, Key::SkinNotFound, &[skin_id])),
@@ -1497,7 +1828,8 @@ pub(crate) fn set_skin_edge_snap_impl(app: &AppHandle, skin_id: &str, on: bool) 
         let entry = runtime_entry_or_manifest(&state, &mut app_config, skin_id);
         entry.edge_snap = Some(on);
         let gap = entry.snap_gap.unwrap_or(m_gap);
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
         gap
     };
 
@@ -1516,13 +1848,22 @@ pub(crate) fn set_skin_edge_snap_impl(app: &AppHandle, skin_id: &str, on: bool) 
 
 /// 吸附间距（逻辑像素，「窗口」页）：clamp 上限后持久化并同步到吸附注册表。
 #[tauri::command]
-pub fn set_skin_snap_gap(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, gap: u32) -> Result<(), String> {
+pub fn set_skin_snap_gap(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    gap: u32,
+) -> Result<(), String> {
     require_manager(&window)?;
     set_skin_snap_gap_impl(&app, &skin_id, gap)
 }
 
 /// set_skin_snap_gap 的进程内实现（皮肤控制命令复用）。
-pub(crate) fn set_skin_snap_gap_impl(app: &AppHandle, skin_id: &str, gap: u32) -> Result<(), String> {
+pub(crate) fn set_skin_snap_gap_impl(
+    app: &AppHandle,
+    skin_id: &str,
+    gap: u32,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
     let gap = gap.min(crate::window::snap::MAX_SNAP_GAP);
@@ -1531,7 +1872,8 @@ pub(crate) fn set_skin_snap_gap_impl(app: &AppHandle, skin_id: &str, gap: u32) -
     // manifest 默认开关（Option 跟随模式，审查 F2-A）；皮肤已被删除时
     // or_default 会为一个不存在的 id 播种配置项
     let m_snap = match loader::scan_skins_directory(&state.skins_dir)
-        .iter().find(|s| s.id == skin_id)
+        .iter()
+        .find(|s| s.id == skin_id)
     {
         Some(s) => s.manifest.window.edge_snap,
         None => return Err(trf(&lang, Key::SkinNotFound, &[skin_id])),
@@ -1542,7 +1884,8 @@ pub(crate) fn set_skin_snap_gap_impl(app: &AppHandle, skin_id: &str, gap: u32) -
         let entry = runtime_entry_or_manifest(&state, &mut app_config, skin_id);
         entry.snap_gap = Some(gap);
         let enabled = entry.edge_snap.unwrap_or(m_snap);
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
         enabled
     };
 
@@ -1565,7 +1908,12 @@ pub(crate) fn set_skin_snap_gap_impl(app: &AppHandle, skin_id: &str, gap: u32) -
 /// filters 为扩展名列表（不含点，仅 file 模式用，空 = 不过滤）。
 /// 用户取消返回 None。
 #[tauri::command]
-pub async fn pick_path(window: tauri::WebviewWindow, app: AppHandle, mode: String, filters: Option<Vec<String>>) -> Result<Option<String>, String> {
+pub async fn pick_path(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    mode: String,
+    filters: Option<Vec<String>>,
+) -> Result<Option<String>, String> {
     require_manager(&window)?;
     use tauri_plugin_dialog::DialogExt;
     let handle = app.clone();
@@ -1584,36 +1932,52 @@ pub async fn pick_path(window: tauri::WebviewWindow, app: AppHandle, mode: Strin
             _ => {
                 let mut d = handle.dialog().file();
                 if !exts.is_empty() {
-                    d = d.add_filter(filter_name, &exts.iter().map(String::as_str).collect::<Vec<_>>());
+                    d = d.add_filter(
+                        filter_name,
+                        &exts.iter().map(String::as_str).collect::<Vec<_>>(),
+                    );
                 }
                 d.blocking_pick_file()
             }
         };
         path.map(|p| p.to_string())
-    }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))
 }
 
 /// 打开文件选择器，只过滤 .dskin 皮肤包（避免用户在一堆 zip 里挑错文件）
 #[tauri::command]
-pub async fn pick_skin_package(window: tauri::WebviewWindow, app: AppHandle) -> Result<Option<String>, String> {
+pub async fn pick_skin_package(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Result<Option<String>, String> {
     require_manager(&window)?;
     use tauri_plugin_dialog::DialogExt;
     let handle = app.clone();
     let lang = app.state::<AppState>().lang();
     let filter_name = tr(&lang, Key::DskinFilterName);
     tauri::async_runtime::spawn_blocking(move || {
-        let path = handle.dialog().file()
+        let path = handle
+            .dialog()
+            .file()
             .add_filter(filter_name, &["dskin"])
             .blocking_pick_file();
         path.map(|p| p.to_string())
-    }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))
 }
 
 /// 把已安装皮肤的文件夹打成 .dskin 分发包：保存对话框选输出位置后打包
 /// （与 tools/pack-skin 同口径：装载校验 + skip 清单 + Deflated zip）。
 /// 返回保存路径；用户取消返回 None。
 #[tauri::command]
-pub async fn package_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<Option<String>, String> {
+pub async fn package_skin(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<Option<String>, String> {
     require_manager(&window)?;
     use tauri_plugin_dialog::DialogExt;
     let state = app.state::<AppState>();
@@ -1634,7 +1998,9 @@ pub async fn package_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id:
     let handle = app.clone();
     let filter_name = tr(&lang, Key::DskinFilterName);
     let dest = tauri::async_runtime::spawn_blocking(move || {
-        handle.dialog().file()
+        handle
+            .dialog()
+            .file()
             .add_filter(filter_name, &["dskin"])
             .set_file_name(&default_name)
             .blocking_save_file()
@@ -1653,19 +2019,26 @@ pub async fn package_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id:
 /// 导出布局备份：保存对话框选路径后，把 config/ + skins/ 打成一个 zip
 /// （含备份清单 driftlet-backup.json）。返回保存路径；用户取消返回 None。
 #[tauri::command]
-pub async fn export_config(window: tauri::WebviewWindow, app: AppHandle) -> Result<Option<String>, String> {
+pub async fn export_config(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Result<Option<String>, String> {
     require_manager(&window)?;
     use tauri_plugin_dialog::DialogExt;
     let handle = app.clone();
     let lang = app.state::<AppState>().lang();
     let filter_name = tr(&lang, Key::BackupFilterName);
     let dest = tauri::async_runtime::spawn_blocking(move || {
-        handle.dialog().file()
+        handle
+            .dialog()
+            .file()
             .add_filter(filter_name, &["zip"])
             .set_file_name("driftlet-backup.zip")
             .blocking_save_file()
             .map(|p| p.to_string())
-    }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))?;
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))?;
     let Some(dest) = dest else { return Ok(None) };
     // install_lock 在异步上下文获取，guard 留在本帧持有到导出完成（tokio
     // guard 是 Send，可跨 await）；重 IO 挪 spawn_blocking
@@ -1673,7 +2046,11 @@ pub async fn export_config(window: tauri::WebviewWindow, app: AppHandle) -> Resu
     let _install_guard = state.install_lock.lock().await;
     let (config_dir, skins_dir, lang2) = {
         let state = app.state::<AppState>();
-        (state.config_dir.clone(), state.skins_dir.clone(), lang.clone())
+        (
+            state.config_dir.clone(),
+            state.skins_dir.clone(),
+            lang.clone(),
+        )
     };
     let dest_path = std::path::PathBuf::from(&dest);
     tauri::async_runtime::spawn_blocking(move || {
@@ -1688,19 +2065,28 @@ pub async fn export_config(window: tauri::WebviewWindow, app: AppHandle) -> Resu
 ///（复审 A-M2——备份导入曾绕过 .dskin 向导的权限展示，审查确认后才许
 /// import_config 执行）。用户取消返回 None。
 #[tauri::command]
-pub async fn inspect_backup(window: tauri::WebviewWindow, app: AppHandle) -> Result<Option<crate::backup::BackupInspection>, String> {
+pub async fn inspect_backup(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Result<Option<crate::backup::BackupInspection>, String> {
     require_manager(&window)?;
     use tauri_plugin_dialog::DialogExt;
     let handle = app.clone();
     let lang = app.state::<AppState>().lang();
     let filter_name = tr(&lang, Key::BackupFilterName);
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        handle.dialog().file()
+        handle
+            .dialog()
+            .file()
             .add_filter(filter_name, &["zip"])
             .blocking_pick_file()
             .map(|p| p.to_string())
-    }).await.map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))?;
-    let Some(picked) = picked else { return Ok(None) };
+    })
+    .await
+    .map_err(|e| trf(&lang, Key::DialogError, &[&e.to_string()]))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
     let lang2 = lang.clone();
     let info = tauri::async_runtime::spawn_blocking(move || {
         crate::backup::inspect_backup(std::path::Path::new(&picked), &lang2)
@@ -1726,12 +2112,16 @@ pub async fn import_config(
     require_manager(&window)?;
     match skin_ids {
         Some(ids) if !ids.is_empty() => {
-            let (imported, skipped) = backup::import_backup_selective(app, std::path::Path::new(&path), ids).await?;
+            let (imported, skipped) =
+                backup::import_backup_selective(app, std::path::Path::new(&path), ids).await?;
             Ok(ImportOutcome { imported, skipped })
         }
         _ => {
             backup::import_backup(app, std::path::Path::new(&path)).await?;
-            Ok(ImportOutcome { imported: Vec::new(), skipped: Vec::new() })
+            Ok(ImportOutcome {
+                imported: Vec::new(),
+                skipped: Vec::new(),
+            })
         }
     }
 }
@@ -1748,7 +2138,11 @@ pub struct ImportOutcome {
 /// 合法时返回包信息与安装状态（new / update / reinstall / downgrade），
 /// 前端据此弹确认框。
 #[tauri::command]
-pub fn inspect_skin_package(window: tauri::WebviewWindow, app: AppHandle, package_path: String) -> Result<package::PackageInfo, String> {
+pub fn inspect_skin_package(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    package_path: String,
+) -> Result<package::PackageInfo, String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -1760,7 +2154,11 @@ pub fn inspect_skin_package(window: tauri::WebviewWindow, app: AppHandle, packag
 /// 时生效）；用户数据（skin_settings[id]）原样保留 —— 配置按皮肤 id 归属，
 /// 与文件解耦。
 #[tauri::command]
-pub async fn install_skin_package(window: tauri::WebviewWindow, app: AppHandle, package_path: String) -> Result<SkinInfo, String> {
+pub async fn install_skin_package(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    package_path: String,
+) -> Result<SkinInfo, String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -1770,7 +2168,8 @@ pub async fn install_skin_package(window: tauri::WebviewWindow, app: AppHandle, 
     let _install_guard = state.install_lock.lock().await;
 
     // 先检查一次，拿到皮肤 id 判断是否需要卸载
-    let info = package::inspect_package(std::path::Path::new(&package_path), &state.skins_dir, &lang)?;
+    let info =
+        package::inspect_package(std::path::Path::new(&package_path), &state.skins_dir, &lang)?;
     let was_loaded = state.registry.is_loaded(&info.id);
 
     if was_loaded {
@@ -1784,7 +2183,10 @@ pub async fn install_skin_package(window: tauri::WebviewWindow, app: AppHandle, 
     let lang2 = lang.clone();
     let skin = tauri::async_runtime::spawn_blocking(move || {
         let state2 = app2.state::<AppState>();
-        let _settings_guard = state2.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _settings_guard = state2
+            .settings_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         package::install_package(
             std::path::Path::new(&package_path),
             &state2.skins_dir,
@@ -1825,7 +2227,10 @@ pub async fn install_skin_package(window: tauri::WebviewWindow, app: AppHandle, 
 /// 用 take() 消费掉，保证引导页只弹一次；热启动路径走的是
 /// `open-skin-package` 事件，不经过这里。
 #[tauri::command]
-pub fn take_pending_package_install(window: tauri::WebviewWindow, app: AppHandle) -> Option<String> {
+pub fn take_pending_package_install(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Option<String> {
     require_manager(&window).ok()?;
     app.state::<AppState>()
         .pending_package
@@ -1834,8 +2239,160 @@ pub fn take_pending_package_install(window: tauri::WebviewWindow, app: AppHandle
         .take()
 }
 
+/// 取走「打开皮肤配置」的暂存皮肤 id：管理器销毁后重建期间，皮肤右键
+/// 「打开皮肤配置」的事件已在页面就绪前发出（丢失）——暂存由前端启动时
+/// 幂等拉取（与 take_pending_package_install 同一约定，取走即清）。
 #[tauri::command]
-pub async fn remove_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<(), String> {
+pub fn take_pending_open_config(window: tauri::WebviewWindow, app: AppHandle) -> Option<String> {
+    require_manager(&window).ok()?;
+    app.state::<AppState>()
+        .pending_open_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+}
+
+/// 启动自动更新检测每进程只放行一次（管理器关窗即销毁后，重建会重跑前端
+/// init——没有本闸门，挂着更新时每次打开管理器都重查重弹）。返回 true =
+/// 本进程已做过；首次调用返回 false 并置位。手动「检查更新」不走本闸门。
+#[tauri::command]
+pub fn take_update_auto_checked(window: tauri::WebviewWindow, app: AppHandle) -> bool {
+    if require_manager(&window).is_err() {
+        return true; // 身份不明时按「已做过」处理：不放行自动检测
+    }
+    app.state::<AppState>()
+        .update_auto_checked
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+}
+
+// ─── 专注模式（方案：docs/proposals/专注模式方案-2026-09.md） ───
+
+/// 专注模式面板读态
+#[derive(serde::Serialize)]
+pub struct FocusModeInfo {
+    active: bool,
+    /// 用户偏好档（"hide" | "unload"）
+    action: String,
+    auto_fullscreen: bool,
+    /// 白名单（focus_exempt 皮肤 id 集合）
+    exempt: Vec<String>,
+    /// 本次模式受影响皮肤数（进入时快照的大小；未激活为 0）——面板状态卡
+    /// 的「已关闭 N 张」数据源
+    affected_count: usize,
+}
+
+#[tauri::command]
+pub fn get_focus_mode_state(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Result<FocusModeInfo, String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(FocusModeInfo {
+        active: cfg.focus_mode.active,
+        action: cfg.focus_mode_action.clone(),
+        auto_fullscreen: cfg.focus_mode_auto_fullscreen,
+        exempt: cfg
+            .skin_settings
+            .iter()
+            .filter(|(_, c)| c.focus_exempt)
+            .map(|(id, _)| id.clone())
+            .collect(),
+        affected_count: if cfg.focus_mode.active {
+            cfg.focus_mode.snapshot.len()
+        } else {
+            0
+        },
+    })
+}
+
+/// 切换专注模式（面板主按钮）：返回切换后的激活态
+#[tauri::command]
+pub async fn toggle_focus_mode(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Result<bool, String> {
+    require_manager(&window)?;
+    if crate::focus::is_active(&app) {
+        crate::focus::exit(&app, true).await?;
+    } else {
+        crate::focus::enter(&app, crate::focus::Trigger::Manual).await?;
+    }
+    Ok(crate::focus::is_active(&app))
+}
+
+/// 设置白名单豁免（皮肤行为配置归 skin_settings 自管——布局语义的边界不动）
+#[tauri::command]
+pub fn set_focus_exempt(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    on: bool,
+) -> Result<(), String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    // 皮肤须存在（手改配置/幽灵 id 不写）
+    if !crate::skin::loader::scan_skins_directory(&state.skins_dir)
+        .iter()
+        .any(|s| s.id == skin_id)
+    {
+        return Err(crate::i18n::trf(
+            &lang,
+            crate::i18n::Key::SkinNotFound,
+            &[&skin_id],
+        ));
+    }
+    let mut cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    cfg.skin_settings
+        .entry(skin_id.clone())
+        .or_insert_with(crate::skin::types::SkinRuntimeConfig::default)
+        .focus_exempt = on;
+    config::save_config(&state.config_dir, &cfg)
+        .map_err(|e| crate::i18n::trf(&lang, crate::i18n::Key::ConfigSaveFailed, &[&e.to_string()]))
+}
+
+/// 设置专注模式动作偏好档（"hide" | "unload"）——模式激活期间改档不影响
+/// 本次还原口径（退出按进入档还原，见 focus.rs）
+#[tauri::command]
+pub fn set_focus_mode_action(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    action: String,
+) -> Result<(), String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let action = if action == "unload" { "unload" } else { "hide" };
+    let mut cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    cfg.focus_mode_action = action.to_string();
+    config::save_config(&state.config_dir, &cfg)
+        .map_err(|e| crate::i18n::trf(&lang, crate::i18n::Key::ConfigSaveFailed, &[&e.to_string()]))
+}
+
+/// 设置「全屏时自动进入专注模式」（检测线程每拍现读配置，即时生效）
+#[tauri::command]
+pub fn set_focus_mode_auto_fullscreen(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    on: bool,
+) -> Result<(), String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let mut cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    cfg.focus_mode_auto_fullscreen = on;
+    config::save_config(&state.config_dir, &cfg)
+        .map_err(|e| crate::i18n::trf(&lang, crate::i18n::Key::ConfigSaveFailed, &[&e.to_string()]))
+}
+
+#[tauri::command]
+pub async fn remove_skin(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -1848,7 +2405,10 @@ pub async fn remove_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: 
     // remove_dir_all 期间持 settings_lock：与 set_skin_custom_setting /
     // skin_set_setting 的设置写入互斥，防设置写进半删的目录（皮肤删完
     // 重扫不到，设置悬空丢失）
-    let _settings_guard = state.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _settings_guard = state
+        .settings_lock
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(skin_dir) = find_skin_dir(&state, &skin_id) {
         std::fs::remove_dir_all(&skin_dir)
             .map_err(|e| trf(&lang, Key::RemoveSkinFailed, &[&e.to_string()]))?;
@@ -1857,7 +2417,8 @@ pub async fn remove_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: 
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         app_config.loaded_skins.retain(|id| id != &skin_id);
         app_config.skin_settings.remove(&skin_id);
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
     Ok(())
 }
@@ -1867,7 +2428,11 @@ pub async fn remove_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: 
 /// 独立。副本 skin.json 写入 x-driftlet-origin 记录来源（供未来「从源
 /// 同步副本」；SkinManifest 不拒绝未知字段，旧宿主读到安全）。
 #[tauri::command]
-pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<SkinInfo, String> {
+pub async fn duplicate_skin(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<SkinInfo, String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -1878,7 +2443,10 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
         return Err(tr(&lang, Key::UnloadBeforeDuplicate).to_string());
     }
     // 复制期间持 settings_lock：与 settings.json 写入互斥（同 remove_skin）
-    let _settings_guard = state.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _settings_guard = state
+        .settings_lock
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
 
     let skins = loader::scan_skins_directory(&state.skins_dir);
     let source = skins
@@ -1894,7 +2462,11 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
     //（validate_skin_id 上限；id 是 ASCII，按字节截断安全）
     let mut n = 1u32;
     let new_id = loop {
-        let suffix = if n == 1 { "-copy".to_string() } else { format!("-copy-{}", n) };
+        let suffix = if n == 1 {
+            "-copy".to_string()
+        } else {
+            format!("-copy-{}", n)
+        };
         let keep = 64usize.saturating_sub(suffix.len()).min(skin_id.len());
         let candidate = format!("{}{}", &skin_id[..keep], suffix);
         if !skins.iter().any(|s| s.id == candidate) {
@@ -1903,8 +2475,18 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
         n += 1;
     };
     // 名称与 id 序号同序；名称本就可重复，不强制唯一
-    let copy_name = if n == 1 { format!("{} 副本", source_name) } else { format!("{} 副本 {}", source_name, n) };
-    let copy_name_en = source_name_en.map(|ne| if n == 1 { format!("{} Copy", ne) } else { format!("{} Copy {}", ne, n) });
+    let copy_name = if n == 1 {
+        format!("{} 副本", source_name)
+    } else {
+        format!("{} 副本 {}", source_name, n)
+    };
+    let copy_name_en = source_name_en.map(|ne| {
+        if n == 1 {
+            format!("{} Copy", ne)
+        } else {
+            format!("{} Copy {}", ne, n)
+        }
+    });
 
     let new_dir = state.skins_dir.join(&new_id);
     // 拷贝失败清半成品（rewrite 失败路径有清理，copy 失败同样要有——审查 B 面发现）
@@ -1919,7 +2501,8 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
             let manifest_path = new_dir.join("skin.json");
             let raw = std::fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
             let mut json: serde_json::Value =
-                serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+                serde_json::from_str(raw.trim_start_matches('\u{feff}'))
+                    .map_err(|e| e.to_string())?;
             json["id"] = serde_json::Value::String(new_id.clone());
             // 迁移旧字段名 name → name_zh：两键并存会让 serde 按 duplicate
             // field 拒载（alias 与新键同槽），改写身份时必须顺手摘掉旧键；
@@ -1928,7 +2511,10 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
             let obj = json.as_object_mut().unwrap();
             obj.remove("name");
             if !copy_name.is_empty() {
-                obj.insert("name_zh".into(), serde_json::Value::String(copy_name.clone()));
+                obj.insert(
+                    "name_zh".into(),
+                    serde_json::Value::String(copy_name.clone()),
+                );
             }
             if let Some(ne) = &copy_name_en {
                 obj.insert("name_en".into(), serde_json::Value::String(ne.clone()));
@@ -1955,15 +2541,21 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
     // 迭代序不确定归属（审查发现）——副本热键清空，需要时用户自配
     {
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(dup) = app_config.skin_settings.get(&skin_id).cloned().map(|mut c| {
-            c.x = c.x.map(|x| x + 32);
-            c.y = c.y.map(|y| y + 32);
-            c.hotkey = String::new();
-            c
-        }) {
+        if let Some(dup) = app_config
+            .skin_settings
+            .get(&skin_id)
+            .cloned()
+            .map(|mut c| {
+                c.x = c.x.map(|x| x + 32);
+                c.y = c.y.map(|y| y + 32);
+                c.hotkey = String::new();
+                c
+            })
+        {
             app_config.skin_settings.insert(new_id.clone(), dup);
         }
-        config::save_config(&state.config_dir, &app_config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &app_config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
 
     // 重扫取 SkinInfo 返回（前端选中副本/提示用）
@@ -1992,7 +2584,11 @@ pub async fn duplicate_skin(window: tauri::WebviewWindow, app: AppHandle, skin_i
 /// 全保留；副本 manifest 只保留 id/name_zh/name_en（副本身份），其余跟随源，
 /// `x-driftlet-origin` 刷新为源当前版本。返回源当前版本号（前端展示用）。
 #[tauri::command]
-pub async fn sync_skin_copy(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<String, String> {
+pub async fn sync_skin_copy(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<String, String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -2002,17 +2598,23 @@ pub async fn sync_skin_copy(window: tauri::WebviewWindow, app: AppHandle, skin_i
     if state.registry.is_loaded(&skin_id) {
         return Err(tr(&lang, Key::UnloadBeforeDuplicate).to_string());
     }
-    let _settings_guard = state.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _settings_guard = state
+        .settings_lock
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
 
     let skins = loader::scan_skins_directory(&state.skins_dir);
     let copy = skins
         .iter()
         .find(|s| s.id == skin_id)
         .ok_or_else(|| trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]))?;
-    let origin = copy
-        .origin
-        .clone()
-        .ok_or_else(|| trf(&lang, Key::SyncCopyFailed, &["不是副本皮肤（无 x-driftlet-origin 标记）"]))?;
+    let origin = copy.origin.clone().ok_or_else(|| {
+        trf(
+            &lang,
+            Key::SyncCopyFailed,
+            &["不是副本皮肤（无 x-driftlet-origin 标记）"],
+        )
+    })?;
     let (origin_id, _) = origin.split_once('@').unwrap_or((origin.as_str(), ""));
     let source = skins
         .iter()
@@ -2020,8 +2622,7 @@ pub async fn sync_skin_copy(window: tauri::WebviewWindow, app: AppHandle, skin_i
         .ok_or_else(|| tr(&lang, Key::SourceSkinMissing).to_string())?;
     let new_version = source.manifest.version.clone().unwrap_or_default();
 
-    replay_source_into_copy(copy, source)
-        .map_err(|e| trf(&lang, Key::SyncCopyFailed, &[&e]))?;
+    replay_source_into_copy(copy, source).map_err(|e| trf(&lang, Key::SyncCopyFailed, &[&e]))?;
     Ok(new_version)
 }
 
@@ -2055,7 +2656,8 @@ fn replay_source_into_copy(
         // 设置值回写（源的 schema 可能已变：新增项用默认、删除项失效——
         // 与安装更新的保留语义同款，effective_settings 合并时兜住）
         if !old_settings.is_empty() {
-            crate::skin::settings::save_skin_settings(copy_dir, &old_settings).map_err(|e| e.to_string())?;
+            crate::skin::settings::save_skin_settings(copy_dir, &old_settings)
+                .map_err(|e| e.to_string())?;
         }
         // manifest 重写：以源的新文件为基础，只换回副本身份与来源标记
         let manifest_path = copy_dir.join("skin.json");
@@ -2068,7 +2670,10 @@ fn replay_source_into_copy(
         let obj = json.as_object_mut().unwrap();
         obj.remove("name");
         if !copy_name.is_empty() {
-            obj.insert("name_zh".into(), serde_json::Value::String(copy_name.clone()));
+            obj.insert(
+                "name_zh".into(),
+                serde_json::Value::String(copy_name.clone()),
+            );
         }
         match &copy_name_en {
             Some(ne) => {
@@ -2122,7 +2727,11 @@ pub(crate) fn sync_autostart(app: &AppHandle, on: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
     static AUTOSTART_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = AUTOSTART_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let r = if on { app.autolaunch().enable() } else { app.autolaunch().disable() };
+    let r = if on {
+        app.autolaunch().enable()
+    } else {
+        app.autolaunch().disable()
+    };
     match r {
         Ok(()) => Ok(()),
         Err(e) if !on && e.to_string().contains("(os error 2)") => Ok(()), // 已关 = 目标态
@@ -2139,7 +2748,8 @@ pub fn set_autostart(window: tauri::WebviewWindow, app: AppHandle, on: bool) -> 
     let lang = state.lang();
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.autostart = on;
-    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+    config::save_config(&state.config_dir, &config)
+        .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
 #[tauri::command]
@@ -2150,7 +2760,11 @@ pub fn get_autostart(window: tauri::WebviewWindow, app: AppHandle) -> Result<boo
 }
 
 #[tauri::command]
-pub fn set_theme(window: tauri::WebviewWindow, app: AppHandle, theme: String) -> Result<(), String> {
+pub fn set_theme(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    theme: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -2162,14 +2776,16 @@ pub fn set_theme(window: tauri::WebviewWindow, app: AppHandle, theme: String) ->
     {
         let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         config.theme = theme.clone();
-        config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
     // 日志窗开着时同步主题（其主题烘焙在建窗 URL 里，不推会停在旧主题）
     let _ = app.emit_to("log", "app-log-theme", &theme);
 
     // 推送已加载皮肤：更新桥成员并派发事件（auto 已折算成具体主题——与
     // set_language 同款模式；皮肤不监听也不受影响，下次 reload 时桥会烘焙新主题）
-    let theme_json = serde_json::to_string(&current_theme(&state)).unwrap_or_else(|_| "\"light\"".into());
+    let theme_json =
+        serde_json::to_string(&current_theme(&state)).unwrap_or_else(|_| "\"light\"".into());
     let script = format!(
         r#"(function(){{if(!window.__DESK_PP__)return;window.__DESK_PP__.theme={t};document.dispatchEvent(new CustomEvent('desk-theme-changed',{{detail:{{theme:{t}}}}}));}})();"#,
         t = theme_json
@@ -2196,7 +2812,11 @@ pub(crate) fn current_theme(state: &AppState) -> String {
         "light" | "dark" => configured,
         _ => {
             let hour = local_hour();
-            if (6..18).contains(&hour) { "light".to_string() } else { "dark".to_string() }
+            if (6..18).contains(&hour) {
+                "light".to_string()
+            } else {
+                "dark".to_string()
+            }
         }
     }
 }
@@ -2223,17 +2843,25 @@ fn local_hour() -> u32 {
 /// 皮肤热重载总开关（持久化 config.hot_reload + 即时翻转运行时标志）。
 /// 仅影响 debug 构建的 watcher（release 从不启动 watcher）。
 #[tauri::command]
-pub fn set_hot_reload(window: tauri::WebviewWindow, app: AppHandle, on: bool) -> Result<(), String> {
+pub fn set_hot_reload(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    on: bool,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
-    state.hot_reload_enabled.store(on, std::sync::atomic::Ordering::Relaxed);
+    state
+        .hot_reload_enabled
+        .store(on, std::sync::atomic::Ordering::Relaxed);
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.hot_reload = on;
     // 落盘失败回滚运行时标志（与 set_skin_zoom 的回滚同纪律——否则内存
     // =on/磁盘=off 分叉到会话结束，审查发现）
     config::save_config(&state.config_dir, &config).map_err(|e| {
-        state.hot_reload_enabled.store(!on, std::sync::atomic::Ordering::Relaxed);
+        state
+            .hot_reload_enabled
+            .store(!on, std::sync::atomic::Ordering::Relaxed);
         trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()])
     })
 }
@@ -2247,7 +2875,10 @@ pub fn set_hot_reload(window: tauri::WebviewWindow, app: AppHandle, on: bool) ->
 /// `installer_ready`（该版本安装包是否已就位且通过核对——true 前端跳过
 /// 下载直接「立即安装」）。
 #[tauri::command]
-pub async fn check_update(window: tauri::WebviewWindow, app: AppHandle) -> Result<crate::update::UpdateCheckResult, String> {
+pub async fn check_update(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Result<crate::update::UpdateCheckResult, String> {
     require_manager(&window)?;
     let config_dir = app.state::<AppState>().config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || crate::update::fetch_latest_release(&config_dir))
@@ -2257,13 +2888,18 @@ pub async fn check_update(window: tauri::WebviewWindow, app: AppHandle) -> Resul
 
 /// 更新检测开关（持久化 config.update_check，默认开；无运行时镜像要同步）。
 #[tauri::command]
-pub fn set_update_check(window: tauri::WebviewWindow, app: AppHandle, on: bool) -> Result<(), String> {
+pub fn set_update_check(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    on: bool,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.update_check = on;
-    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+    config::save_config(&state.config_dir, &config)
+        .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
 /// 跳转 GitHub 最新 release 下载页。URL 后端固定（不接受前端入参）；
@@ -2275,6 +2911,31 @@ pub fn open_release_page(window: tauri::WebviewWindow, app: AppHandle) -> Result
     crate::skin_api::open_target_impl(crate::update::RELEASES_LATEST_URL, &lang)
 }
 
+/// 跳转公开仓库主页（关于页「仓库地址」）。URL 后端固定（不接受前端入参）；
+/// 与 open_release_page 同走 open_target_impl。
+#[tauri::command]
+pub fn open_repo_page(window: tauri::WebviewWindow, app: AppHandle) -> Result<(), String> {
+    require_manager(&window)?;
+    let lang = app.state::<AppState>().lang();
+    crate::skin_api::open_target_impl(crate::update::REPO_URL, &lang)
+}
+
+/// 最终用户协议全文（关于页「用户协议 → 查看」）。与安装器许可页同一对
+/// 语言文件（include_str! 编译期嵌入，单一事实源）：中文界面取纯中文版、
+/// 其余界面取英文版（与安装器许可页的按语言口径一致——安装器由 NSIS
+/// LicenseLangString 按安装语言选择）。NSIS 要求文件 UTF-8 带 BOM，
+/// 下发前端前剥掉
+#[tauri::command]
+pub fn get_user_agreement(window: tauri::WebviewWindow, app: AppHandle) -> Result<String, String> {
+    require_manager(&window)?;
+    let lang = app.state::<AppState>().lang();
+    let text = match lang.as_str() {
+        "zh-CN" => include_str!("../windows/installer-license-zh.txt"),
+        _ => include_str!("../windows/installer-license-en.txt"),
+    };
+    Ok(text.trim_start_matches('\u{feff}').to_string())
+}
+
 /// 自动下载新版安装包到更新目录（固定文件名覆盖旧包 + 分段 .part 起手
 /// 全清不留垃圾）。多源竞速 + 分段并行提速（国内直连 GitHub 常极慢），
 /// 官方 SHA-256 在时镜像源才参与、落盘哈希不符即废；完成才返回路径——
@@ -2282,7 +2943,13 @@ pub fn open_release_page(window: tauri::WebviewWindow, app: AppHandle) -> Result
 /// 下发（前端进度条）。`sha256` = check_update 带回的官方哈希（老
 /// release 无 → 只走 GitHub 直连）。
 #[tauri::command]
-pub async fn download_update(window: tauri::WebviewWindow, app: AppHandle, url: String, version: String, sha256: Option<String>) -> Result<String, String> {
+pub async fn download_update(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    url: String,
+    version: String,
+    sha256: Option<String>,
+) -> Result<String, String> {
     require_manager(&window)?;
     let config_dir = app.state::<AppState>().config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -2310,8 +2977,14 @@ pub async fn download_update(window: tauri::WebviewWindow, app: AppHandle, url: 
             });
             let _ = window.emit("update-download-progress", payload);
         };
-        crate::update::download_installer(&config_dir, &url, &version, sha256.as_deref(), &on_progress)
-            .map(|p| p.to_string_lossy().into_owned())
+        crate::update::download_installer(
+            &config_dir,
+            &url,
+            &version,
+            sha256.as_deref(),
+            &on_progress,
+        )
+        .map(|p| p.to_string_lossy().into_owned())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2338,7 +3011,11 @@ pub fn install_update(window: tauri::WebviewWindow, app: AppHandle) -> Result<()
 /// rebuild the tray menu so it switches language immediately. 已加载的皮肤
 /// 窗口同步收到 desk-language-changed 事件（皮肤可让自己的界面跟随切换）。
 #[tauri::command]
-pub fn set_language(window: tauri::WebviewWindow, app: AppHandle, language: String) -> Result<(), String> {
+pub fn set_language(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    language: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -2347,7 +3024,8 @@ pub fn set_language(window: tauri::WebviewWindow, app: AppHandle, language: Stri
     {
         let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         config.language = language.clone();
-        config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
     *state.language.lock().unwrap_or_else(|e| e.into_inner()) = language.clone();
     crate::tray::rebuild_tray_menu(&app, &language);
@@ -2373,21 +3051,31 @@ pub fn set_language(window: tauri::WebviewWindow, app: AppHandle, language: Stri
 /// live registration; on registration failure the previous hotkey is
 /// restored and the new value is NOT persisted.
 #[tauri::command]
-pub fn set_hotkey(window: tauri::WebviewWindow, app: AppHandle, hotkey: String) -> Result<(), String> {
+pub fn set_hotkey(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    hotkey: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     crate::hotkey::apply_hotkey(&app, hotkey.trim())?;
     let state = app.state::<AppState>();
     let lang = state.lang();
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
     config.hotkey_toggle_skins = hotkey.trim().to_string();
-    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+    config::save_config(&state.config_dir, &config)
+        .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
 /// 设置某皮肤的专属显隐热键（"" = 清除）。先注册后落盘（与 set_hotkey
 /// 同款纪律：校验/冲突/OS 注册失败一律不写配置）；注册表常驻——皮肤
 /// 未加载时按下静默无效果。
 #[tauri::command]
-pub fn set_skin_hotkey(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, hotkey: String) -> Result<(), String> {
+pub fn set_skin_hotkey(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    hotkey: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     crate::hotkey::set_skin_hotkey(&app, &skin_id, hotkey.trim())?;
     let state = app.state::<AppState>();
@@ -2398,7 +3086,8 @@ pub fn set_skin_hotkey(window: tauri::WebviewWindow, app: AppHandle, skin_id: St
         .entry(skin_id)
         .or_insert_with(SkinRuntimeConfig::default);
     cfg.hotkey = hotkey.trim().to_string();
-    config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+    config::save_config(&state.config_dir, &config)
+        .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
 /// 管理器显隐单个皮肤（编辑器「隐藏/显示皮肤」按钮与皮肤组批量操作
@@ -2406,7 +3095,12 @@ pub fn set_skin_hotkey(window: tauri::WebviewWindow, app: AppHandle, skin_id: St
 ///（hotkey::sync_tray_toggle_item：托盘勾选与管理器列表/编辑器的
 /// 「已隐藏」徽标按真实窗口状态刷新）；只显示不抢焦点。
 #[tauri::command]
-pub fn set_skin_visibility(window: tauri::WebviewWindow, app: AppHandle, skin_id: String, visible: bool) -> Result<(), String> {
+pub fn set_skin_visibility(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+    visible: bool,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -2530,7 +3224,8 @@ pub fn capture_layout(
             }
             None => config.layouts.push(preset.clone()),
         }
-        config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
     // 布局清单变了：托盘「布局方案」子菜单同步重建。守卫必须先放——
     // rebuild 链路 build_layouts_submenu 要再取 config 锁，std::Mutex
@@ -2555,7 +3250,10 @@ pub async fn apply_layout(
 
 /// apply_layout 的进程内实现（托盘「布局方案」子菜单无管理器窗口，
 /// 与命令同一实现）
-pub(crate) async fn apply_layout_impl(app: &AppHandle, layout_id: &str) -> Result<LayoutApplyOutcome, String> {
+pub(crate) async fn apply_layout_impl(
+    app: &AppHandle,
+    layout_id: &str,
+) -> Result<LayoutApplyOutcome, String> {
     let layout = {
         let state = app.state::<AppState>();
         let lang = state.lang();
@@ -2570,8 +3268,7 @@ pub(crate) async fn apply_layout_impl(app: &AppHandle, layout_id: &str) -> Resul
     let state = app.state::<AppState>();
     let _guards = lifecycle_guards(&state).await;
 
-    let target: std::collections::HashSet<&str> =
-        layout.skins.keys().map(|s| s.as_str()).collect();
+    let target: std::collections::HashSet<&str> = layout.skins.keys().map(|s| s.as_str()).collect();
     for id in state.registry.loaded_ids() {
         if !target.contains(id.as_str()) {
             // 卸载失败不中止整体应用（该皮肤留在桌面，记日志继续）
@@ -2607,9 +3304,9 @@ pub(crate) async fn apply_layout_impl(app: &AppHandle, layout_id: &str) -> Resul
         } else {
             // 已加载：原地应用位置与尺寸（尺寸按有效 zoom 折算实际值——
             // set_size_impl 的入参是「当前实际尺寸」，会反算回基础尺寸）
-            set_skin_position_impl(&app, id, snap.x.unwrap_or(100), snap.y.unwrap_or(100))?;
+            set_skin_position_impl(app, id, snap.x.unwrap_or(100), snap.y.unwrap_or(100))?;
             set_skin_size_impl(
-                &app,
+                app,
                 id,
                 ((snap.width as f64) * zoom).round() as u32,
                 ((snap.height as f64) * zoom).round() as u32,
@@ -2630,10 +3327,11 @@ pub(crate) async fn apply_layout_impl(app: &AppHandle, layout_id: &str) -> Resul
 
     {
         let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
-        config::save_config(&state.config_dir, &cfg).map_err(|e| trf(&state.lang(), Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &cfg)
+            .map_err(|e| trf(&state.lang(), Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
     // 托盘勾选/子菜单与管理器徽标按真实窗口状态刷新（显隐变化的统一漏斗）
-    crate::hotkey::sync_tray_toggle_item(&app);
+    crate::hotkey::sync_tray_toggle_item(app);
     Ok(LayoutApplyOutcome { applied, skipped })
 }
 
@@ -2641,7 +3339,11 @@ pub(crate) async fn apply_layout_impl(app: &AppHandle, layout_id: &str) -> Resul
 /// 同款「前端持有完整状态、操作后整体回写」哲学）。白名单归一：
 /// 名称 trim 后 1–64 字符、id 去重（保首个）、总数 ≤64。
 #[tauri::command]
-pub fn set_layouts(window: tauri::WebviewWindow, app: AppHandle, layouts: Vec<LayoutPreset>) -> Result<(), String> {
+pub fn set_layouts(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    layouts: Vec<LayoutPreset>,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -2662,7 +3364,8 @@ pub fn set_layouts(window: tauri::WebviewWindow, app: AppHandle, layouts: Vec<La
     {
         let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         config.layouts = clean;
-        config::save_config(&state.config_dir, &config).map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+        config::save_config(&state.config_dir, &config)
+            .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
     }
     // 同 capture_layout：守卫先放再重建托盘菜单（std::Mutex 不可重入）
     crate::tray::rebuild_tray_menu(&app, &lang);
@@ -2711,7 +3414,11 @@ pub fn open_skins_folder(window: tauri::WebviewWindow, app: AppHandle) -> Result
 }
 
 #[tauri::command]
-pub fn open_skin_folder(window: tauri::WebviewWindow, app: AppHandle, skin_id: String) -> Result<(), String> {
+pub fn open_skin_folder(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_id: String,
+) -> Result<(), String> {
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
@@ -2783,7 +3490,12 @@ pub fn list_gpu_adapters(window: tauri::WebviewWindow) -> Result<Vec<GpuAdapterI
     {
         Ok(crate::skin_api::gpu::collect()
             .into_iter()
-            .map(|g| GpuAdapterItem { name: g.name, luid: g.luid, gpu_type: g.gpu_type, usage: g.usage })
+            .map(|g| GpuAdapterItem {
+                name: g.name,
+                luid: g.luid,
+                gpu_type: g.gpu_type,
+                usage: g.usage,
+            })
             .collect())
     }
     #[cfg(not(target_os = "windows"))]
@@ -2792,13 +3504,11 @@ pub fn list_gpu_adapters(window: tauri::WebviewWindow) -> Result<Vec<GpuAdapterI
     }
 }
 
-
 #[cfg(target_os = "windows")]
 fn enum_system_fonts() -> Vec<String> {
     use windows::Win32::Foundation::LPARAM;
     use windows::Win32::Graphics::Gdi::{
-        CreateCompatibleDC, DeleteDC, EnumFontFamiliesExW, LOGFONTW, TEXTMETRICW,
-        DEFAULT_CHARSET,
+        CreateCompatibleDC, DEFAULT_CHARSET, DeleteDC, EnumFontFamiliesExW, LOGFONTW, TEXTMETRICW,
     };
 
     unsafe extern "system" fn collect(
@@ -2822,8 +3532,10 @@ fn enum_system_fonts() -> Vec<String> {
     unsafe {
         let hdc = CreateCompatibleDC(None);
         if !hdc.0.is_null() {
-            let mut lf = LOGFONTW::default();
-            lf.lfCharSet = DEFAULT_CHARSET;
+            let lf = LOGFONTW {
+                lfCharSet: DEFAULT_CHARSET,
+                ..Default::default()
+            };
             EnumFontFamiliesExW(
                 hdc,
                 &lf,
@@ -2838,7 +3550,6 @@ fn enum_system_fonts() -> Vec<String> {
     fonts.dedup();
     fonts
 }
-
 
 // ─── Log Window ───
 
@@ -2930,7 +3641,7 @@ pub(crate) fn open_log_window_impl(app: &AppHandle) -> Result<(), String> {
             crate::apply_window_icon(hwnd_val);
         }
         // 右键菜单 / F5·Ctrl+R 等浏览器加速键屏蔽（异步初始化重试，同管理器窗）
-        factory::spawn_webview_hardening_retry(&app, "log");
+        factory::spawn_webview_hardening_retry(app, "log");
     }
     Ok(())
 }
@@ -2950,11 +3661,58 @@ pub fn clear_app_log(window: tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::skin::types::{SkinSettingDef, SkinSettingKind, SkinSettingOption};
+
+    /// 用户协议双语言文件（安装器许可页 LicenseLangString + 关于页
+    /// get_user_agreement 的同一对事实源）：防拆错/防 BOM 丢失/防串语言
+    #[test]
+    fn user_agreement_files_bom_and_language_split() {
+        let zh = include_str!("../windows/installer-license-zh.txt");
+        let en = include_str!("../windows/installer-license-en.txt");
+        assert!(
+            zh.starts_with('\u{feff}') && en.starts_with('\u{feff}'),
+            "NSIS 许可页要求两份协议文件都是 UTF-8 带 BOM（无 BOM 运行期按 ANSI 解码，中文全乱码）"
+        );
+        assert!(zh.contains("最终用户协议"), "中文协议缺标题");
+        assert!(en.contains("END USER AGREEMENT"), "英文协议缺标题");
+        assert!(
+            !zh.contains("END USER AGREEMENT"),
+            "中文版应为纯中文，不得混入英文条款正文"
+        );
+        assert!(
+            !en.contains("最终用户协议"),
+            "英文版应为纯英文，不得混入中文条款正文"
+        );
+        // 双版章节数一致（中文 一~十 / 英文 1.~10.），防单边漏改
+        let zh_sections = zh.matches("\n\n一、").count()
+            + zh.matches("\n\n二、").count()
+            + zh.matches("\n\n三、").count()
+            + zh.matches("\n\n四、").count()
+            + zh.matches("\n\n五、").count()
+            + zh.matches("\n\n六、").count()
+            + zh.matches("\n\n七、").count()
+            + zh.matches("\n\n八、").count()
+            + zh.matches("\n\n九、").count()
+            + zh.matches("\n\n十、").count();
+        let en_sections = en.matches("\n\n1. ").count()
+            + en.matches("\n\n2. ").count()
+            + en.matches("\n\n3. ").count()
+            + en.matches("\n\n4. ").count()
+            + en.matches("\n\n5. ").count()
+            + en.matches("\n\n6. ").count()
+            + en.matches("\n\n7. ").count()
+            + en.matches("\n\n8. ").count()
+            + en.matches("\n\n9. ").count()
+            + en.matches("\n\n10. ").count();
+        assert_eq!(zh_sections, en_sections, "中英协议章节数不一致（单边漏改）");
+        assert_eq!(
+            zh_sections, 10,
+            "协议应为十条（增删章节时同步双版并更新本断言）"
+        );
+    }
 
     /// Tests exercise validation logic, not wording — always use zh-CN.
     fn validate_custom_setting_zh(
@@ -2987,7 +3745,11 @@ mod tests {
         SkinSettingDef {
             options: values
                 .iter()
-                .map(|v| SkinSettingOption { value: v.to_string(), label_zh: None, label_en: None })
+                .map(|v| SkinSettingOption {
+                    value: v.to_string(),
+                    label_zh: None,
+                    label_en: None,
+                })
                 .collect(),
             ..def(kind)
         }
@@ -3037,7 +3799,8 @@ mod tests {
         assert!(validate_custom_setting_zh(&d, &not_obj).is_err());
         // 超长文本截断
         let long = "x".repeat(300);
-        let v = validate_custom_setting_zh(&d, &serde_json::json!([{"time": "", "text": long}])).unwrap();
+        let v = validate_custom_setting_zh(&d, &serde_json::json!([{"time": "", "text": long}]))
+            .unwrap();
         assert_eq!(v[0]["text"].as_str().unwrap().chars().count(), 200);
     }
 
@@ -3068,7 +3831,8 @@ mod tests {
         assert!(validate_custom_setting_zh(&d, &serde_json::json!([{"done": true}])).is_err());
         // 超长文本截断
         let long = "x".repeat(300);
-        let v = validate_custom_setting_zh(&d, &serde_json::json!([{"text": long, "done": false}])).unwrap();
+        let v = validate_custom_setting_zh(&d, &serde_json::json!([{"text": long, "done": false}]))
+            .unwrap();
         assert_eq!(v[0]["text"].as_str().unwrap().chars().count(), 200);
     }
 
@@ -3158,6 +3922,58 @@ mod tests {
         assert!(validate_custom_setting_zh(&d, &serde_json::json!("dusk")).is_err());
     }
 
+    /// 窗口属性写路径的广播完备性（面板显示脱节事故的结构性防线）：
+    /// 每个 set_skin_*_impl 的函数体必须出现 emit_window_config_changed——
+    /// 漏发 = 右键菜单/皮肤自控改了窗口属性而打开中的管理器面板不知情。
+    /// 与 policy.rs 闸门完备性测试同思路（源码段扫描）：marker 写成拼装串，
+    /// 避免本测试自身的字符串字面量被误扫。
+    #[test]
+    fn window_config_setters_all_broadcast() {
+        let src = include_str!("commands.rs");
+        // marker 带行首换行：真函数定义必在行首，本测试自身的字符串字面量
+        // （转义写法，源码里是反斜杠+n 两个字符）不会被误扫
+        let marker = "\npub(crate) fn set_skin_";
+        let needle = concat!("emit_window_config", "_changed");
+        let mut names = Vec::new();
+        let mut rest = src;
+        while let Some(i) = rest.find(marker) {
+            let after = &rest[i + marker.len()..];
+            let name = after.split('(').next().unwrap_or("").trim();
+            if name.is_empty() {
+                panic!("setter scan: empty name after marker");
+            }
+            // 函数体段：到最近的下一个顶层项边界（同 policy.rs fn_segment；
+            // 行注释剥离后再断言——注释里抄一行广播文本不得骗过核对）
+            let end = [
+                "\nfn ", "\npub", "\nstatic", "\nconst", "\nstruct", "\nimpl", "\nmod", "\n///",
+                "\n//", "\n#[",
+            ]
+            .iter()
+            .filter_map(|m| after[1..].find(m).map(|j| j + 1))
+            .min()
+            .unwrap_or(after.len());
+            let body = after[..end]
+                .lines()
+                .map(|l| l.split("//").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            names.push(name.to_string());
+            assert!(
+                body.contains(needle),
+                "set_skin_{} 未经 emit_window_config_changed 广播——窗口属性变更会绕开管理器实时同步",
+                name
+            );
+            rest = &after[1..];
+        }
+        // 钉住当前集合规模：新增窗口属性写路径必须广播并更新此处计数
+        assert_eq!(
+            names.len(),
+            10,
+            "set_skin_*_impl 集合变化（{:?}）——新写路径必须广播并更新此计数",
+            names
+        );
+    }
+
     #[test]
     fn validates_palette_with_alpha() {
         let d = def(SkinSettingKind::Palette);
@@ -3174,9 +3990,18 @@ mod tests {
         let mut d = def(SkinSettingKind::Slider);
         d.min = Some(0.0);
         d.max = Some(100.0);
-        assert_eq!(validate_custom_setting_zh(&d, &serde_json::json!(150)).unwrap(), serde_json::json!(100.0));
-        assert_eq!(validate_custom_setting_zh(&d, &serde_json::json!(-5)).unwrap(), serde_json::json!(0.0));
-        assert_eq!(validate_custom_setting_zh(&d, &serde_json::json!(60)).unwrap(), serde_json::json!(60.0));
+        assert_eq!(
+            validate_custom_setting_zh(&d, &serde_json::json!(150)).unwrap(),
+            serde_json::json!(100.0)
+        );
+        assert_eq!(
+            validate_custom_setting_zh(&d, &serde_json::json!(-5)).unwrap(),
+            serde_json::json!(0.0)
+        );
+        assert_eq!(
+            validate_custom_setting_zh(&d, &serde_json::json!(60)).unwrap(),
+            serde_json::json!(60.0)
+        );
     }
 
     #[test]
@@ -3248,7 +4073,10 @@ mod tests {
         replay_source_into_copy(&copy, &source).unwrap();
 
         // 内容换源：新文件进来、旧内容被替换
-        assert_eq!(std::fs::read_to_string(copy_dir.join("index.html")).unwrap(), "<html>source-new</html>");
+        assert_eq!(
+            std::fs::read_to_string(copy_dir.join("index.html")).unwrap(),
+            "<html>source-new</html>"
+        );
         assert!(copy_dir.join("new.js").is_file());
         // 设置值保留
         let settings = crate::skin::settings::load_skin_settings(&copy_dir);
@@ -3259,7 +4087,10 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(json["id"], "flip-clock-copy");
         assert_eq!(json["name_zh"], "我的时钟");
-        assert!(json.get("name").is_none(), "旧键 name 必须被摘除（duplicate field 拒载防护）");
+        assert!(
+            json.get("name").is_none(),
+            "旧键 name 必须被摘除（duplicate field 拒载防护）"
+        );
         assert_eq!(json["name_en"], "My Clock");
         assert_eq!(json["version"], "2.0.0");
         assert_eq!(json["x-driftlet-origin"], "flip-clock@2.0.0");

@@ -51,11 +51,11 @@ pub fn save_skin_settings(
     let final_path = skin_dir.join(SETTINGS_FILENAME);
     let temp_path = skin_dir.join(format!("{}.tmp", SETTINGS_FILENAME));
 
-    let json = serde_json::to_string_pretty(values)
-        .map_err(|e| format!("Serialization error: {}", e))?;
+    let json =
+        serde_json::to_string_pretty(values).map_err(|e| format!("Serialization error: {}", e))?;
 
-    let mut tmp = fs::File::create(&temp_path)
-        .map_err(|e| format!("Cannot create temp file: {}", e))?;
+    let mut tmp =
+        fs::File::create(&temp_path).map_err(|e| format!("Cannot create temp file: {}", e))?;
     tmp.write_all(json.as_bytes())
         .map_err(|e| format!("Cannot write skin settings: {}", e))?;
     tmp.sync_all()

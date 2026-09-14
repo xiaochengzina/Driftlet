@@ -48,8 +48,8 @@ pub fn idle_ms() -> Result<u64, String> {
 pub fn foreground_window() -> Option<ForegroundWindowInfo> {
     use windows::Win32::Foundation::LPARAM;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId, SendMessageTimeoutW,
-        SMTO_ABORTIFHUNG, WM_GETTEXT,
+        GetForegroundWindow, GetWindowThreadProcessId, SMTO_ABORTIFHUNG, SendMessageTimeoutW,
+        WM_GETTEXT,
     };
 
     unsafe {
@@ -87,11 +87,11 @@ pub fn foreground_window() -> Option<ForegroundWindowInfo> {
 
 #[cfg(target_os = "windows")]
 fn process_name_of(pid: u32) -> Option<String> {
-    use windows::core::PWSTR;
     use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
     };
+    use windows::core::PWSTR;
 
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
@@ -120,13 +120,13 @@ fn process_name_of(pid: u32) -> Option<String> {
 // ─── Monitors ───
 
 pub fn monitors() -> Vec<MonitorInfo> {
-    use windows::core::BOOL;
     use windows::Win32::Foundation::{LPARAM, RECT};
     use windows::Win32::Graphics::Gdi::{
         EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
     };
     use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
+    use windows::core::BOOL;
 
     unsafe extern "system" fn collect(
         hmon: HMONITOR,

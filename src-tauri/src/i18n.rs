@@ -24,7 +24,7 @@ pub enum Key {
     // Tray menu + tooltip
     TrayShowManager,
     TrayReloadAll,
-    TrayToggleSkins,
+    TrayFocusMode,
     TraySkinsMenu,
     TraySkinsEmpty,
     TrayLayouts,
@@ -165,6 +165,7 @@ pub enum Key {
     InvalidPowerAction,
     RecycleBinFailed,
     ElevatedNotice,
+    Webview2Outdated,
     // Only used in the non-Windows fallback arms.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     WindowsOnly,
@@ -207,7 +208,7 @@ fn zh(key: Key) -> &'static str {
         Key::TrayLayouts => "布局方案",
         Key::TrayLayoutsEmpty => "（无布局方案）",
         Key::TrayReloadAll => "重新加载所有皮肤",
-        Key::TrayToggleSkins => "隐藏已加载的皮肤",
+        Key::TrayFocusMode => "专注模式",
         Key::TrayQuit => "退出",
         Key::TrayTooltip => "桌面皮肤管理器",
         Key::HotkeyInvalid => "无效的快捷键：需要修饰键 + 普通键（如 Ctrl+Alt+D）",
@@ -276,7 +277,9 @@ fn zh(key: Key) -> &'static str {
         Key::ImportFolderConflict => "文件夹「{}」已被另一个皮肤占用，请先处理冲突再导入",
         Key::SkinFolderNotFound => "皮肤文件夹 '{}' 未找到",
         Key::OpenFailed => "打开失败: {}",
-        Key::InvalidSkinId => "皮肤 id '{}' 不合法：仅允许小写字母、数字、中划线，且必须以字母或数字开头",
+        Key::InvalidSkinId => {
+            "皮肤 id '{}' 不合法：仅允许小写字母、数字、中划线，且必须以字母或数字开头"
+        }
         Key::ReplaceOldDirFailed => "无法替换旧版本皮肤目录: {}",
         Key::InstallSkinFailed => "安装皮肤失败: {}",
         Key::RestoreSettingsFailed => "无法恢复用户设置: {}",
@@ -330,7 +333,12 @@ fn zh(key: Key) -> &'static str {
         Key::PowerControlFailed => "电源操作失败：{}",
         Key::InvalidPowerAction => "无效的电源动作 '{}'",
         Key::RecycleBinFailed => "清空回收站失败：{}",
-        Key::ElevatedNotice => "检测到 Driftlet 正以管理员权限运行。\n\n影响：声明 shell 权限的皮肤可静默以管理员权限执行命令（不经 UAC 弹窗）；从资源管理器拖 .dskin 到管理器会被系统拦截（可改用双击或文件选择器安装）。\n\n「是」= 继续运行（以后不再提示）；「否」= 退出。",
+        Key::ElevatedNotice => {
+            "检测到 Driftlet 正以管理员权限运行。\n\n影响：声明 shell 权限的皮肤可静默以管理员权限执行命令（不经 UAC 弹窗）；从资源管理器拖 .dskin 到管理器会被系统拦截（可改用双击或文件选择器安装）。\n\n「是」= 继续运行（以后不再提示）；「否」= 退出。"
+        }
+        Key::Webview2Outdated => {
+            "检测到当前 WebView2 运行时为 {}（低于 Driftlet 的渲染基线 {}）。\n\n默认皮肤与部分界面依赖新版 WebView2 的 CSS 能力（容器查询 / color-mix），当前运行时上渲染会严重失真。\n\n「是」= 打开微软官方一键更新页（约 1 分钟，更新后重启本应用生效）；「否」= 仍要继续（渲染可能异常，默认皮肤会自动降级为基础样式）。\n\n本机无网络时：请从有网络的机器访问微软 WebView2 下载页获取脱机安装包，拷贝到本机安装。\n\n运行时更新前，每次启动都会提醒。"
+        }
         Key::WindowsOnly => "该功能仅支持 Windows",
     }
 }
@@ -343,12 +351,18 @@ fn en(key: Key) -> &'static str {
         Key::TrayLayouts => "Layouts",
         Key::TrayLayoutsEmpty => "(No layouts)",
         Key::TrayReloadAll => "Reload All Skins",
-        Key::TrayToggleSkins => "Hide Loaded Skins",
+        Key::TrayFocusMode => "Focus Mode",
         Key::TrayQuit => "Quit",
         Key::TrayTooltip => "Desktop Skin Manager",
-        Key::HotkeyInvalid => "Invalid hotkey: it needs a modifier plus a regular key (e.g. Ctrl+Alt+D)",
-        Key::HotkeyRegisterFailed => "Failed to register hotkey: {} (it may be taken by another app)",
-        Key::HotkeyConflict => "Hotkey \"{}\" is already taken (by the global hotkey or another skin)",
+        Key::HotkeyInvalid => {
+            "Invalid hotkey: it needs a modifier plus a regular key (e.g. Ctrl+Alt+D)"
+        }
+        Key::HotkeyRegisterFailed => {
+            "Failed to register hotkey: {} (it may be taken by another app)"
+        }
+        Key::HotkeyConflict => {
+            "Hotkey \"{}\" is already taken (by the global hotkey or another skin)"
+        }
         Key::MenuOpenConfig => "Open Skin Settings",
         Key::MenuReload => "Reload Skin",
         Key::MenuHideSkin => "Hide Skin",
@@ -409,10 +423,14 @@ fn en(key: Key) -> &'static str {
         Key::SyncCopyFailed => "Failed to sync copy from source: {}",
         Key::LayoutNameInvalid => "Layout name must be 1–64 characters",
         Key::LayoutNotFound => "Layout preset \"{}\" not found",
-        Key::ImportFolderConflict => "Folder \"{}\" is already used by another skin — resolve the conflict before importing",
+        Key::ImportFolderConflict => {
+            "Folder \"{}\" is already used by another skin — resolve the conflict before importing"
+        }
         Key::SkinFolderNotFound => "Skin folder '{}' not found",
         Key::OpenFailed => "Failed to open: {}",
-        Key::InvalidSkinId => "Invalid skin id '{}': only lowercase letters, digits and dashes are allowed, and it must start with a letter or digit",
+        Key::InvalidSkinId => {
+            "Invalid skin id '{}': only lowercase letters, digits and dashes are allowed, and it must start with a letter or digit"
+        }
         Key::ReplaceOldDirFailed => "Failed to replace the existing skin directory: {}",
         Key::InstallSkinFailed => "Failed to install skin: {}",
         Key::RestoreSettingsFailed => "Failed to restore user settings: {}",
@@ -436,11 +454,15 @@ fn en(key: Key) -> &'static str {
         Key::BackupTooManyFiles => "Backup contains too many files",
         Key::BackupExtractedTooLarge => "Backup is too large once extracted",
         Key::InvalidBackup => "Not a valid Driftlet backup (missing config/config.json)",
-        Key::BackupFormatUnsupported => "Backup was created by a newer Driftlet (format {}) and cannot be imported",
+        Key::BackupFormatUnsupported => {
+            "Backup was created by a newer Driftlet (format {}) and cannot be imported"
+        }
         Key::ReadBackupFailed => "Failed to read backup: {}",
         Key::ExportBackupFailed => "Failed to export backup: {}",
         Key::ImportBackupFailed => "Failed to import backup: {}",
-        Key::ImportPartialUnloaded => "Import aborted; the following skins were unloaded — reload them to restore: {}",
+        Key::ImportPartialUnloaded => {
+            "Import aborted; the following skins were unloaded — reload them to restore: {}"
+        }
         Key::WritePreviewFailed => "Failed to write preview image: {}",
         Key::WebViewNotReady => "WebView2 is not ready: {}",
         Key::CapturePreviewCallFailed => "CapturePreview call failed: {}",
@@ -466,7 +488,12 @@ fn en(key: Key) -> &'static str {
         Key::PowerControlFailed => "Power operation failed: {}",
         Key::InvalidPowerAction => "Invalid power action '{}'",
         Key::RecycleBinFailed => "Failed to empty the recycle bin: {}",
-        Key::ElevatedNotice => "Driftlet is running with administrator rights.\n\nConsequences: skins holding the shell permission can silently run commands with full administrator rights (no UAC prompt); dragging .dskin files from Explorer into the manager will be blocked by the system (use double-click or the file picker instead).\n\nYes = continue (never ask again); No = exit.",
+        Key::ElevatedNotice => {
+            "Driftlet is running with administrator rights.\n\nConsequences: skins holding the shell permission can silently run commands with full administrator rights (no UAC prompt); dragging .dskin files from Explorer into the manager will be blocked by the system (use double-click or the file picker instead).\n\nYes = continue (never ask again); No = exit."
+        }
+        Key::Webview2Outdated => {
+            "The WebView2 runtime on this machine is {} — below Driftlet's rendering baseline {}.\n\nThe bundled skins and parts of the UI rely on modern CSS (container queries / color-mix) and will render incorrectly on this runtime.\n\nYes = open Microsoft's one-click update page (~1 minute; relaunch afterwards); No = continue anyway (rendering may be broken — the bundled skins degrade to a basic look automatically).\n\nOffline machine? From a machine with internet access, grab the offline installer on Microsoft's WebView2 download page and copy it over.\n\nThis reminder appears at every launch until the runtime is updated."
+        }
         Key::WindowsOnly => "This feature is only supported on Windows",
     }
 }

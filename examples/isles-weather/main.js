@@ -135,8 +135,11 @@
     const city = (Isles.settings().city || "").trim();
     if (geoCache && geoCache.input === city && geoCache.lang === Isles.lang()) return geoCache;
     if (!city) return null;
-    // 地理编码语言跟随界面——英文界面城市名不再落中文（审查建议）
-    const data = await httpJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=${Isles.lang() === "en" ? "en" : "zh"}&format=json`);
+    // 地理编码语言：含 CJK/假名的输入强制 zh——实测 language=en 时中文城市名
+    // 零命中（「南昌」误报 not found 的事故根因；不带 language 参数中文名也
+    // 零命中）；拉丁输入跟随界面语言（返回的显示名随此参数本地化）
+    const langParam = /[\u3400-\u9fff\u3040-\u30ff\uff00-\uffef]/.test(city) ? "zh" : (Isles.lang() === "en" ? "en" : "zh");
+    const data = await httpJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=${langParam}&format=json`);
     const hit = data?.results?.[0];
     if (!hit) throw new Error(Isles.t(`找不到城市「${city}」`, `city "${city}" not found`));
     geoCache = { input: city, lang: Isles.lang(), name: hit.name || city, lat: hit.latitude, lon: hit.longitude };
@@ -232,7 +235,11 @@
     // 低温在前（低到高）——用户直觉与通行天气应用一致（高~低曾实机反馈反直觉）
     const hi = Math.round(daily.temperature_2m_max?.[0] ?? 0);
     const lo = Math.round(daily.temperature_2m_min?.[0] ?? 0);
-    $("meta").textContent = `${lo}°~${hi}° · ${geo.name}`;
+    $("meta-range").textContent = `${lo}°~${hi}° · `;
+    // 城市名单独一个 span：限宽约 4 汉字、超出省略（CSS 在 index.html），
+    // 悬停 title 出全名
+    $("meta-city").textContent = geo.name;
+    $("meta-city").title = geo.name;
 
     // 未来五日预报（跳过今天——左区已是当下，不重复）；列内 = 星期/图标/温度区间/日期
     const box = $("forecast");

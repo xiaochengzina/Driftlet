@@ -1,5 +1,5 @@
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::skin::types::{Skin, SkinRuntimeConfig};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 // ── Windows: frameless skin-window helpers ──────────────────────────
 
@@ -8,9 +8,8 @@ use crate::skin::types::{Skin, SkinRuntimeConfig};
 #[cfg(target_os = "windows")]
 const FRAMELESS_STYLE: isize = {
     use windows::Win32::UI::WindowsAndMessaging::{
-        WS_CAPTION, WS_THICKFRAME, WS_SYSMENU,
-        WS_MINIMIZEBOX, WS_MAXIMIZEBOX,
-        WS_BORDER, WS_DLGFRAME,
+        WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
+        WS_THICKFRAME,
     };
     !(WS_CAPTION.0 as isize
         | WS_THICKFRAME.0 as isize
@@ -24,8 +23,8 @@ const FRAMELESS_STYLE: isize = {
 #[cfg(target_os = "windows")]
 const FRAMELESS_EXSTYLE: isize = {
     use windows::Win32::UI::WindowsAndMessaging::{
-        WS_EX_WINDOWEDGE, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE,
-        WS_EX_TRANSPARENT,
+        WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE, WS_EX_TRANSPARENT,
+        WS_EX_WINDOWEDGE,
     };
     !(WS_EX_WINDOWEDGE.0 as isize
         | WS_EX_CLIENTEDGE.0 as isize
@@ -41,7 +40,7 @@ const FRAMELESS_EXSTYLE: isize = {
 #[cfg(target_os = "windows")]
 const FRAMELESS_EXSTYLE_PASSTHROUGH: isize = {
     use windows::Win32::UI::WindowsAndMessaging::{
-        WS_EX_WINDOWEDGE, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE,
+        WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE, WS_EX_WINDOWEDGE,
     };
     !(WS_EX_WINDOWEDGE.0 as isize
         | WS_EX_CLIENTEDGE.0 as isize
@@ -54,9 +53,8 @@ const FRAMELESS_EXSTYLE_PASSTHROUGH: isize = {
 /// 保留 TRANSPARENT|LAYERED，其余窗口照旧剥净（LAYERED 平时不在我们的
 /// WebView2 渲染假设内）。不保留则穿透位会在下一次清理/5 秒自愈周期被摘回。
 #[cfg(target_os = "windows")]
-static PASSTHROUGH_HWNDS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashSet<isize>>,
-> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+static PASSTHROUGH_HWNDS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<isize>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
 /// 登记/注销穿透 HWND。必须先登记再调 set_ignore_cursor_events：tao 经
 /// execute_in_thread 在主线程落 SetWindowLongPtr，其触发的 WM_STYLECHANGING
@@ -90,23 +88,18 @@ fn is_passthrough(hwnd_val: isize) -> bool {
 /// acts as a frame amplifier.
 #[cfg(target_os = "windows")]
 unsafe fn setup_frameless(hwnd_val: isize) {
+    use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
+        DWM_WINDOW_CORNER_PREFERENCE, DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY,
+        DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, DWMWA_WINDOW_CORNER_PREFERENCE,
         DwmSetWindowAttribute,
-        DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWM_WINDOW_CORNER_PREFERENCE,
-        DWMWA_VISIBLE_FRAME_BORDER_THICKNESS,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
-        GetSystemMenu, DeleteMenu,
-        GWL_STYLE, GWL_EXSTYLE,
-        SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOACTIVATE, SWP_NOZORDER, SWP_NOOWNERZORDER,
-        HWND_TOP, WS_EX_LAYERED, WS_POPUP,
-        MF_BYCOMMAND,
-        SC_RESTORE, SC_MOVE, SC_SIZE, SC_MINIMIZE, SC_MAXIMIZE, SC_CLOSE,
+        DeleteMenu, GWL_EXSTYLE, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, HWND_TOP,
+        MF_BYCOMMAND, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+        SetWindowLongPtrW, SetWindowPos, WS_EX_LAYERED, WS_POPUP,
     };
-    use windows::Win32::Foundation::HWND;
 
     let hwnd = HWND(hwnd_val as *mut _);
 
@@ -115,14 +108,23 @@ unsafe fn setup_frameless(hwnd_val: isize) {
     let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &no_color as *const _ as _, 4);
 
     let corner = DWM_WINDOW_CORNER_PREFERENCE(1);
-    let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as _, std::mem::size_of_val(&corner) as u32);
+    let _ = DwmSetWindowAttribute(
+        hwnd,
+        DWMWA_WINDOW_CORNER_PREFERENCE,
+        &corner as *const _ as _,
+        std::mem::size_of_val(&corner) as u32,
+    );
 
     let ncrp: u32 = 1;
     let _ = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &ncrp as *const _ as _, 4);
 
     let border_thickness: u32 = 0;
-    let _ = DwmSetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS,
-        &border_thickness as *const _ as _, 4);
+    let _ = DwmSetWindowAttribute(
+        hwnd,
+        DWMWA_VISIBLE_FRAME_BORDER_THICKNESS,
+        &border_thickness as *const _ as _,
+        4,
+    );
 
     // Strip frame styles + add WS_POPUP
     let s = GetWindowLongPtrW(hwnd, GWL_STYLE);
@@ -132,13 +134,25 @@ unsafe fn setup_frameless(hwnd_val: isize) {
     // WebView2/DirectComposition rendering).  WS_EX_TRANSPARENT is also
     // stripped so the skin receives mouse events normally.
     let e = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    SetWindowLongPtrW(hwnd, GWL_EXSTYLE,
-        e & FRAMELESS_EXSTYLE & !(WS_EX_LAYERED.0 as isize));
+    SetWindowLongPtrW(
+        hwnd,
+        GWL_EXSTYLE,
+        e & FRAMELESS_EXSTYLE & !(WS_EX_LAYERED.0 as isize),
+    );
 
     let _ = SetWindowPos(
-        hwnd, Some(HWND_TOP), 0, 0, 0, 0,
-        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
-            | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+        hwnd,
+        Some(HWND_TOP),
+        0,
+        0,
+        0,
+        0,
+        SWP_FRAMECHANGED
+            | SWP_NOMOVE
+            | SWP_NOSIZE
+            | SWP_NOACTIVATE
+            | SWP_NOZORDER
+            | SWP_NOOWNERZORDER,
     );
 
     // Remove all items from the system menu. Even though frame styles are
@@ -146,8 +160,15 @@ unsafe fn setup_frameless(hwnd_val: isize) {
     // can still appear on right-click; deleting the items makes it harmless.
     let sys_menu = GetSystemMenu(hwnd, false);
     if !sys_menu.is_invalid() {
-        for cmd in [SC_RESTORE, SC_MOVE, SC_SIZE, SC_MINIMIZE, SC_MAXIMIZE, SC_CLOSE] {
-            let _ = DeleteMenu(sys_menu, cmd as u32, MF_BYCOMMAND);
+        for cmd in [
+            SC_RESTORE,
+            SC_MOVE,
+            SC_SIZE,
+            SC_MINIMIZE,
+            SC_MAXIMIZE,
+            SC_CLOSE,
+        ] {
+            let _ = DeleteMenu(sys_menu, cmd, MF_BYCOMMAND);
         }
     }
 }
@@ -218,19 +239,13 @@ unsafe fn skin_subclass_proc_inner(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::UI::Shell::DefSubclassProc;
     use windows::Win32::UI::WindowsAndMessaging::{
-        WM_ACTIVATE, WM_WINDOWPOSCHANGING, WM_WINDOWPOSCHANGED,
-        WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOVING,
-        WM_NCCALCSIZE, WM_NCPAINT, WM_NCACTIVATE, WM_NCRBUTTONUP,
-        WM_CONTEXTMENU,
-        WM_STYLECHANGING, WM_STYLECHANGED, WM_NCHITTEST,
-        WM_SHOWWINDOW, WM_SYSCOMMAND, WM_GETMINMAXINFO,
-        WM_THEMECHANGED, WM_SETTINGCHANGE, WM_DISPLAYCHANGE,
-        GWL_STYLE, GWL_EXSTYLE, SetWindowLongPtrW, GetWindowLongPtrW,
-        STYLESTRUCT,
-        SetWindowPos, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOACTIVATE, SWP_NOZORDER, SWP_NOOWNERZORDER, HWND_TOP,
-        WS_POPUP, WS_EX_LAYERED,
-        HTCLIENT,
+        GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, HTCLIENT, HWND_TOP, STYLESTRUCT,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+        SetWindowLongPtrW, SetWindowPos, WM_ACTIVATE, WM_CONTEXTMENU, WM_DISPLAYCHANGE,
+        WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_MOVING, WM_NCACTIVATE,
+        WM_NCCALCSIZE, WM_NCHITTEST, WM_NCPAINT, WM_NCRBUTTONUP, WM_SETTINGCHANGE, WM_SHOWWINDOW,
+        WM_STYLECHANGED, WM_STYLECHANGING, WM_SYSCOMMAND, WM_THEMECHANGED, WM_WINDOWPOSCHANGED,
+        WM_WINDOWPOSCHANGING, WS_EX_LAYERED, WS_POPUP,
     };
     // DWM-specific window messages (may live under Graphics::Dwm in some crate versions)
     const WM_DWMCOMPOSITIONCHANGED: u32 = 0x031E;
@@ -243,7 +258,7 @@ unsafe fn skin_subclass_proc_inner(
     unsafe fn force_frameless(hwnd: windows::Win32::Foundation::HWND) -> bool {
         let mut changed = false;
         let s = GetWindowLongPtrW(hwnd, GWL_STYLE);
-        let clean_s = (s & FRAMELESS_STYLE as isize) | WS_POPUP.0 as isize;
+        let clean_s = (s & FRAMELESS_STYLE) | WS_POPUP.0 as isize;
         if s != clean_s {
             SetWindowLongPtrW(hwnd, GWL_STYLE, clean_s);
             changed = true;
@@ -252,9 +267,9 @@ unsafe fn skin_subclass_proc_inner(
         // 穿透登记窗口保留 TRANSPARENT|LAYERED（见 PASSTHROUGH_HWNDS），
         // 其余窗口照旧剥净。
         let clean_e = if is_passthrough(hwnd.0 as isize) {
-            e & FRAMELESS_EXSTYLE_PASSTHROUGH as isize
+            e & FRAMELESS_EXSTYLE_PASSTHROUGH
         } else {
-            e & FRAMELESS_EXSTYLE as isize & !(WS_EX_LAYERED.0 as isize)
+            e & FRAMELESS_EXSTYLE & !(WS_EX_LAYERED.0 as isize)
         };
         if e != clean_e {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, clean_e);
@@ -269,18 +284,21 @@ unsafe fn skin_subclass_proc_inner(
     // NOTE: no DwmExtendFrameIntoClientArea(-1) here — see setup_frameless.
     unsafe fn reassert_dwm(hwnd: windows::Win32::Foundation::HWND) {
         use windows::Win32::Graphics::Dwm::{
+            DWM_WINDOW_CORNER_PREFERENCE, DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY,
+            DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, DWMWA_WINDOW_CORNER_PREFERENCE,
             DwmSetWindowAttribute,
-            DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY,
-            DWMWA_WINDOW_CORNER_PREFERENCE, DWM_WINDOW_CORNER_PREFERENCE,
-            DWMWA_VISIBLE_FRAME_BORDER_THICKNESS,
         };
 
         let no_color: u32 = 0xFFFFFFFE;
         let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &no_color as *const _ as _, 4);
 
         let corner = DWM_WINDOW_CORNER_PREFERENCE(1);
-        let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
-            &corner as *const _ as _, std::mem::size_of_val(&corner) as u32);
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const _ as _,
+            std::mem::size_of_val(&corner) as u32,
+        );
 
         let ncrp: u32 = 1;
         let _ = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &ncrp as *const _ as _, 4);
@@ -288,17 +306,30 @@ unsafe fn skin_subclass_proc_inner(
         // Zero visible border thickness so DWM renders no border regardless
         // of NCRENDERING_POLICY state.
         let border_thickness: u32 = 0;
-        let _ = DwmSetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS,
-            &border_thickness as *const _ as _, 4);
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_VISIBLE_FRAME_BORDER_THICKNESS,
+            &border_thickness as *const _ as _,
+            4,
+        );
     }
 
     // Force a frame recalculation — ONLY call when a style actually changed,
     // otherwise it is just another DWM frame-reevaluation trigger.
     unsafe fn frame_changed(hwnd: windows::Win32::Foundation::HWND) {
         let _ = SetWindowPos(
-            hwnd, Some(HWND_TOP), 0, 0, 0, 0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
-                | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED
+                | SWP_NOMOVE
+                | SWP_NOSIZE
+                | SWP_NOACTIVATE
+                | SWP_NOZORDER
+                | SWP_NOOWNERZORDER,
         );
     }
 
@@ -331,9 +362,9 @@ unsafe fn skin_subclass_proc_inner(
         WM_ENTERSIZEMOVE => {
             force_frameless(hwnd);
             reassert_dwm(hwnd);
-            // 决定本次拖动是否开启 1 秒逃逸窗口（上次拖动以吸附结束且窗口
-            // 仍在原位）。注意不要在 WM_EXITSIZEMOVE 清理状态——跨拖动记忆
-            // （ended_snapped）要保留，「松手再拖 = 逃逸」依赖它。
+            // 重置吸附判定的原始拖动轨迹（raw/last_out）——系统 WM_MOVING
+            // 提议是相对上一步写回值的增量，吸附判定必须吃按增量累积的
+            // 原始轨迹，每次拖动开头重置（见 snap.rs 模块头注释）。
             crate::window::snap::begin_drag(hwnd.0 as isize);
             DefSubclassProc(hwnd, msg, w_param, l_param)
         }
@@ -398,8 +429,8 @@ unsafe fn skin_subclass_proc_inner(
         // Override AFTER DefSubclassProc so the default handling can't
         // overwrite our minimum.
         WM_GETMINMAXINFO => {
-            use windows::Win32::UI::WindowsAndMessaging::MINMAXINFO;
             use windows::Win32::UI::HiDpi::GetDpiForWindow;
+            use windows::Win32::UI::WindowsAndMessaging::MINMAXINFO;
             let result = DefSubclassProc(hwnd, msg, w_param, l_param);
             let dpi = GetDpiForWindow(hwnd) as i32;
             let mmi = &mut *(l_param.0 as *mut MINMAXINFO);
@@ -433,8 +464,7 @@ unsafe fn skin_subclass_proc_inner(
                     ((ss.styleNew as isize & FRAMELESS_STYLE) | WS_POPUP.0 as isize) as u32;
             } else if w_param.0 as i32 == GWL_EXSTYLE.0 {
                 if is_passthrough(hwnd.0 as isize) {
-                    ss.styleNew =
-                        (ss.styleNew as isize & FRAMELESS_EXSTYLE_PASSTHROUGH) as u32;
+                    ss.styleNew = (ss.styleNew as isize & FRAMELESS_EXSTYLE_PASSTHROUGH) as u32;
                 } else {
                     ss.styleNew &= !(WS_EX_LAYERED.0);
                     ss.styleNew = (ss.styleNew as isize & FRAMELESS_EXSTYLE) as u32;
@@ -447,8 +477,7 @@ unsafe fn skin_subclass_proc_inner(
         WM_STYLECHANGED => {
             let ss = &mut *(l_param.0 as *mut STYLESTRUCT);
             if w_param.0 as i32 == GWL_STYLE.0 {
-                let clean =
-                    ((ss.styleNew as isize & FRAMELESS_STYLE) | WS_POPUP.0 as isize) as u32;
+                let clean = ((ss.styleNew as isize & FRAMELESS_STYLE) | WS_POPUP.0 as isize) as u32;
                 if ss.styleNew != clean {
                     SetWindowLongPtrW(hwnd, GWL_STYLE, clean as isize);
                 }
@@ -548,8 +577,8 @@ unsafe fn skin_subclass_proc_inner(
 /// Returns true if the subclass is installed.
 #[cfg(target_os = "windows")]
 pub fn ensure_frameless_subclass(hwnd_val: isize) -> bool {
-    use windows::Win32::UI::Shell::SetWindowSubclass;
     use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::SetWindowSubclass;
 
     unsafe {
         SetWindowSubclass(
@@ -592,7 +621,11 @@ fn install_frameless(app: &AppHandle, hwnd_val: isize, skin_id: &str) {
         let ok = ensure_frameless_subclass(hwnd_val);
         let _ = tx.send(ok);
     }) {
-        log::error!("run_on_main_thread failed for skin '{}': {} — timer will retry", skin_id, e);
+        log::error!(
+            "run_on_main_thread failed for skin '{}': {} — timer will retry",
+            skin_id,
+            e
+        );
         return;
     }
     match rx.recv_timeout(std::time::Duration::from_secs(3)) {
@@ -603,7 +636,8 @@ fn install_frameless(app: &AppHandle, hwnd_val: isize, skin_id: &str) {
         ),
         Err(e) => log::error!(
             "subclass install timed out for skin '{}': {} — timer will retry",
-            skin_id, e
+            skin_id,
+            e
         ),
     }
 }
@@ -619,8 +653,8 @@ fn install_frameless(app: &AppHandle, hwnd_val: isize, skin_id: &str) {
 /// reassert_dwm + SetWindowPos(SWP_FRAMECHANGED).
 #[cfg(target_os = "windows")]
 pub fn force_clean_skin_window(window: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-    use windows::Win32::Foundation::{HWND, WPARAM, LPARAM};
 
     if let Ok(hwnd) = window.hwnd() {
         unsafe {
@@ -641,8 +675,8 @@ pub fn force_clean_skin_window(window: &tauri::WebviewWindow) {
 /// 竞态时句柄可能已失效，PostMessage 到死句柄没有意义）。
 #[cfg(target_os = "windows")]
 pub fn force_clean_skin_window_by_hwnd(hwnd_val: isize) {
-    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, IsWindow};
-    use windows::Win32::Foundation::{HWND, WPARAM, LPARAM};
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{IsWindow, PostMessageW};
 
     unsafe {
         let hwnd = HWND(hwnd_val as *mut _);
@@ -754,8 +788,9 @@ fn persistence_scale_factor(window: &tauri::WebviewWindow) -> f64 {
 /// 逻辑宽」）。与尺寸无关——resize 期间不再依赖已存旧值（那场事故的
 /// 根源）。销毁时摘除。
 #[cfg(target_os = "windows")]
-static SCALE_SNAPSHOTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, f64>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+static SCALE_SNAPSHOTS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, f64>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 /// 建窗时锁定换算尺快照：此刻物理客户区 = 逻辑宽 × 真实尺（刚按
 /// inner_size 建完窗，配对天然正确；且不受虚拟屏 DPI 虚报影响——
@@ -810,8 +845,8 @@ fn force_webview_rasterization_scale(window: &tauri::WebviewWindow) {
         }
     }
     let _ = window.with_webview(move |webview| unsafe {
-        use windows::core::Interface;
         use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller3;
+        use windows::core::Interface;
         if let Ok(c3) = webview.controller().cast::<ICoreWebView2Controller3>() {
             let _ = c3.SetRasterizationScale(scale);
         }
@@ -876,17 +911,21 @@ pub fn create_skin_window(
                 .map_err(|e| format!("Invalid entry url '{}': {}", entry, e))?,
         )
     } else {
-        let folder_name = skin.directory.file_name()
+        let folder_name = skin
+            .directory
+            .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| format!("Invalid skin directory: {:?}", skin.directory))?;
         let mut skin_url = tauri::Url::parse("skin://localhost")
             .map_err(|e| format!("Failed to build skin URL: {}", e))?;
         {
-            let mut segments = skin_url.path_segments_mut()
+            let mut segments = skin_url
+                .path_segments_mut()
                 .map_err(|_| "Cannot build skin URL path".to_string())?;
             segments.extend(&[folder_name, entry]);
         }
-        skin_url.query_pairs_mut()
+        skin_url
+            .query_pairs_mut()
             .append_pair("opacity", &config.opacity.to_string());
         if config.position_locked {
             // Position-lock state is served through the URL -> protocol handler
@@ -911,16 +950,14 @@ pub fn create_skin_window(
     // 缩放比例（zoom）：实际窗口 = 基础尺寸 × zoom，内容经 WebView2
     // ZoomFactor 同倍缩放——页面 CSS 视口保持设计尺寸，布局不重排，
     // 任何皮肤无需适配即可整体缩放。
-    let zoom = crate::commands::clamp_zoom(
-        config.zoom.unwrap_or(skin.manifest.window.zoom),
-    );
+    let zoom = crate::commands::clamp_zoom(config.zoom.unwrap_or(skin.manifest.window.zoom));
 
     // 2. Create window via Tauri (hidden until setup is done)
     // Coordinates are logical pixels, matching the values stored in config.
     let window = WebviewWindowBuilder::new(app, &label, webview_url)
         // 窗口标题（任务管理器/Alt+Tab 可见性有限的无框工具窗）：取当前默认
         // 语言的解析名，单语言皮肤回退后的名字也能正确出现
-        .title(&skin.manifest.display_name(crate::i18n::DEFAULT_LANG))
+        .title(skin.manifest.display_name(crate::i18n::DEFAULT_LANG))
         // 持久化配置的宽高同钳 [1,10000]——config.json 可手改，钳制不能只
         // 拦 manifest 默认值一侧（复审 B-F5：巨型表面吃 GPU 内存/建窗失败）
         .inner_size(
@@ -939,14 +976,15 @@ pub fn create_skin_window(
     // 的 opacity 已随协议 query 烘焙
     let window = if is_web {
         window
-            .initialization_script(&format!(
+            .initialization_script(format!(
                 "document.documentElement.style.opacity='{}';",
                 config.opacity
             ))
             .build()
             .map_err(|e| format!("Failed to create window: {}", e))?
     } else {
-        window.build()
+        window
+            .build()
             .map_err(|e| format!("Failed to create window: {}", e))?
     };
 
@@ -1065,11 +1103,15 @@ pub fn create_skin_window(
                     let x = (position.x as f64 / scale_factor).round() as i32;
                     let y = (position.y as f64 / scale_factor).round() as i32;
                     save_dragged_position(&app_handle, &sid, x, y);
-                    let _ = app_handle.emit_to("main", "skin-moved", serde_json::json!({
-                        "skinId": sid,
-                        "x": x,
-                        "y": y,
-                    }));
+                    let _ = app_handle.emit_to(
+                        "main",
+                        "skin-moved",
+                        serde_json::json!({
+                            "skinId": sid,
+                            "x": x,
+                            "y": y,
+                        }),
+                    );
                 }
                 // Border-drag resize (window.resizable): persist like Moved —
                 // in-memory config immediately, debounced disk flush — and
@@ -1107,11 +1149,15 @@ pub fn create_skin_window(
                     };
                     if !unchanged {
                         save_dragged_size(&app_handle, &sid, base_w, base_h);
-                        let _ = app_handle.emit_to("main", "skin-resized", serde_json::json!({
-                            "skinId": sid,
-                            "width": w,
-                            "height": h,
-                        }));
+                        let _ = app_handle.emit_to(
+                            "main",
+                            "skin-resized",
+                            serde_json::json!({
+                                "skinId": sid,
+                                "width": w,
+                                "height": h,
+                            }),
+                        );
                     }
                 }
                 // Alt+F4 / 系统关闭请求：皮肤窗不实现「关闭」语义——窗口生命
@@ -1142,7 +1188,8 @@ pub fn create_skin_window(
     if config.on_desktop {
         if let Ok(hwnd) = window.hwnd() {
             app.state::<crate::AppState>()
-                .pinner.pin(&skin.id, hwnd.0 as isize);
+                .pinner
+                .pin(&skin.id, hwnd.0 as isize);
         }
     }
 
@@ -1163,7 +1210,10 @@ pub fn skin_window_label(skin_id: &str) -> String {
 /// 是合法摆放（多屏拼接缝、刻意半掩），一律不动。坐标系统一物理像素
 /// （outer_position/outer_size 与 Monitor::work_area 同为物理）。
 #[cfg(target_os = "windows")]
-pub(crate) fn offscreen_target(app: &AppHandle, window: &tauri::WebviewWindow) -> Option<(i32, i32)> {
+pub(crate) fn offscreen_target(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Option<(i32, i32)> {
     // 借任一窗口枚举显示器（管理器窗常驻；皮肤全隐藏时它也在）
     let probe = app.get_webview_window("main")?;
     let monitors = probe.available_monitors().ok()?;
@@ -1443,7 +1493,10 @@ fn save_dragged_position(app: &AppHandle, skin_id: &str, x: i32, y: i32) {
     {
         let state = app.state::<crate::AppState>();
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = app_config.skin_settings.entry(skin_id.to_string()).or_default();
+        let entry = app_config
+            .skin_settings
+            .entry(skin_id.to_string())
+            .or_default();
         entry.x = Some(x);
         entry.y = Some(y);
     }
@@ -1456,7 +1509,10 @@ fn save_dragged_size(app: &AppHandle, skin_id: &str, width: u32, height: u32) {
     {
         let state = app.state::<crate::AppState>();
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = app_config.skin_settings.entry(skin_id.to_string()).or_default();
+        let entry = app_config
+            .skin_settings
+            .entry(skin_id.to_string())
+            .or_default();
         entry.width = width;
         entry.height = height;
     }
@@ -1570,8 +1626,8 @@ pub fn disable_browser_accelerator_keys(
     let applied = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = applied.clone();
     let _ = window.with_webview(move |webview| unsafe {
-        use windows::core::Interface;
         use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+        use windows::core::Interface;
         let ok = webview
             .controller()
             .CoreWebView2()
@@ -1644,13 +1700,13 @@ pub fn track_skin_popup_menu(
     quick: SkinQuickState,
     custom_items: &[SkinMenuItem],
 ) -> u32 {
-    use windows::core::{HSTRING, PCWSTR};
+    use crate::i18n::{Key, tr};
     use windows::Win32::Foundation::{HWND, POINT};
     use windows::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, SetForegroundWindow,
-        TrackPopupMenu, MF_CHECKED, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD,
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_CHECKED, MF_SEPARATOR,
+        MF_STRING, SetForegroundWindow, TPM_NONOTIFY, TPM_RETURNCMD, TrackPopupMenu,
     };
-    use crate::i18n::{tr, Key};
+    use windows::core::{HSTRING, PCWSTR};
 
     let Ok(hwnd) = window.hwnd() else {
         return 0;
@@ -1676,13 +1732,27 @@ pub fn track_skin_popup_menu(
         let click_through = HSTRING::from(tr(lang, Key::MenuClickThrough));
         let resizable = HSTRING::from(tr(lang, Key::MenuResizable));
         let edge_snap = HSTRING::from(tr(lang, Key::MenuEdgeSnap));
-        append(menu, MF_STRING, SKIN_MENU_OPEN_CONFIG as usize, &open_config);
+        append(
+            menu,
+            MF_STRING,
+            SKIN_MENU_OPEN_CONFIG as usize,
+            &open_config,
+        );
         append(menu, MF_STRING, SKIN_MENU_RELOAD as usize, &reload);
 
         // 窗口行为快捷开关段（勾选态 = 当前态；与编辑器「窗口」页同语义同文案）
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let mut quick_item = |on: bool, id: u32, text: &HSTRING| {
-            append(menu, if on { MF_STRING | MF_CHECKED } else { MF_STRING }, id as usize, text);
+            append(
+                menu,
+                if on {
+                    MF_STRING | MF_CHECKED
+                } else {
+                    MF_STRING
+                },
+                id as usize,
+                text,
+            );
         };
         quick_item(quick.on_top, SKIN_MENU_PLACE_TOP, &place_top);
         quick_item(quick.locked, SKIN_MENU_LOCK, &lock_pos);
@@ -1700,14 +1770,22 @@ pub fn track_skin_popup_menu(
             for (i, item) in custom_items.iter().enumerate() {
                 // 与 manifest 文案同规则：界面语言优先、缺失回退另一语言
                 let label = if zh {
-                    if item.label_zh.is_empty() { &item.label_en } else { &item.label_zh }
+                    if item.label_zh.is_empty() {
+                        &item.label_en
+                    } else {
+                        &item.label_zh
+                    }
                 } else if item.label_en.is_empty() {
                     &item.label_zh
                 } else {
                     &item.label_en
                 };
                 let text = HSTRING::from(label.as_str());
-                let flags = if item.checked { MF_STRING | MF_CHECKED } else { MF_STRING };
+                let flags = if item.checked {
+                    MF_STRING | MF_CHECKED
+                } else {
+                    MF_STRING
+                };
                 append(menu, flags, SKIN_MENU_CUSTOM_BASE as usize + i, &text);
             }
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());

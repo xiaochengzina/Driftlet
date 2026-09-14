@@ -6,7 +6,7 @@
 
 ## 中文版
 
-**生效日期：2026 年 2 月（随首个引用本政策的发布版生效）**
+**生效日期：2026 年 7 月 30 日**
 
 Driftlet（以下简称「本应用」）是一款开源的 Windows 桌面皮肤管理器（GPL v3，源码见 [GitHub 仓库](https://github.com/xiaochengzina/Driftlet)）。本政策说明本应用自身的信息处理行为。
 
@@ -37,7 +37,7 @@ Driftlet（以下简称「本应用」）是一款开源的 Windows 桌面皮肤
 
 ## English
 
-**Effective date: February 2026 (takes effect with the first release that references this policy).**
+**Effective date: July 30, 2026.**
 
 Driftlet ("the app") is an open-source Windows desktop skin manager (GPL v3; source code in the [GitHub repository](https://github.com/xiaochengzina/Driftlet)). This policy describes the information handling of the app itself.
 

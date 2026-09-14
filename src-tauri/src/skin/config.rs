@@ -1,7 +1,7 @@
+use crate::skin::types::AppConfig;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use crate::skin::types::AppConfig;
 
 const CONFIG_FILENAME: &str = "config.json";
 
@@ -99,34 +99,38 @@ pub(crate) fn normalize_mode_flags(config: &mut AppConfig) -> bool {
 /// and after a backup import (backup.rs).
 pub fn prune_stale_entries(config: &mut AppConfig, skins: &[crate::skin::types::Skin]) -> usize {
     let valid: std::collections::HashSet<&str> = skins.iter().map(|s| s.id.as_str()).collect();
-    let before = config.skin_settings.len() + config.loaded_skins.len() + config.skin_group_map.len();
-    config.skin_settings.retain(|id, _| valid.contains(id.as_str()));
+    let before =
+        config.skin_settings.len() + config.loaded_skins.len() + config.skin_group_map.len();
+    config
+        .skin_settings
+        .retain(|id, _| valid.contains(id.as_str()));
     config.loaded_skins.retain(|id| valid.contains(id.as_str()));
-    let group_ids: std::collections::HashSet<&str> = config.skin_groups.iter().map(|g| g.id.as_str()).collect();
-    config.skin_group_map.retain(|sid, gid| valid.contains(sid.as_str()) && group_ids.contains(gid.as_str()));
+    let group_ids: std::collections::HashSet<&str> =
+        config.skin_groups.iter().map(|g| g.id.as_str()).collect();
+    config
+        .skin_group_map
+        .retain(|sid, gid| valid.contains(sid.as_str()) && group_ids.contains(gid.as_str()));
     before - config.skin_settings.len() - config.loaded_skins.len() - config.skin_group_map.len()
 }
 
 /// Save config to disk atomically (write temp, then rename)
 pub fn save_config(config_dir: &Path, config: &AppConfig) -> Result<(), String> {
-    fs::create_dir_all(config_dir)
-        .map_err(|e| format!("Cannot create config dir: {}", e))?;
+    fs::create_dir_all(config_dir).map_err(|e| format!("Cannot create config dir: {}", e))?;
 
     let final_path = config_dir.join(CONFIG_FILENAME);
     let temp_path = config_dir.join(format!("{}.tmp", CONFIG_FILENAME));
 
-    let json = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("Serialization error: {}", e))?;
+    let json =
+        serde_json::to_string_pretty(config).map_err(|e| format!("Serialization error: {}", e))?;
 
-    let mut tmp = fs::File::create(&temp_path)
-        .map_err(|e| format!("Cannot create temp file: {}", e))?;
+    let mut tmp =
+        fs::File::create(&temp_path).map_err(|e| format!("Cannot create temp file: {}", e))?;
     tmp.write_all(json.as_bytes())
         .map_err(|e| format!("Cannot write config: {}", e))?;
     tmp.sync_all()
         .map_err(|e| format!("Cannot sync config: {}", e))?;
 
-    fs::rename(&temp_path, &final_path)
-        .map_err(|e| format!("Cannot finalize config: {}", e))?;
+    fs::rename(&temp_path, &final_path).map_err(|e| format!("Cannot finalize config: {}", e))?;
 
     Ok(())
 }
@@ -147,7 +151,9 @@ pub fn migrate_v1_custom_settings(config_dir: &Path, skin_dirs: &[(String, PathB
     let Ok(raw) = fs::read_to_string(&path) else {
         return; // 缺失或不可读：无需迁移（损坏交给 load_config 备份重置）
     };
-    let Ok(mut json) = serde_json::from_str::<serde_json::Value>(raw.trim_start_matches('\u{feff}')) else {
+    let Ok(mut json) =
+        serde_json::from_str::<serde_json::Value>(raw.trim_start_matches('\u{feff}'))
+    else {
         return; // 损坏：由 load_config 备份重置
     };
     // 合法 JSON 但非对象（如 `[]`）：结构不符，同样交给 load_config 兜底。
@@ -161,7 +167,10 @@ pub fn migrate_v1_custom_settings(config_dir: &Path, skin_dirs: &[(String, PathB
     }
 
     let mut all_ok = true;
-    if let Some(skin_settings) = json.get_mut("skin_settings").and_then(|v| v.as_object_mut()) {
+    if let Some(skin_settings) = json
+        .get_mut("skin_settings")
+        .and_then(|v| v.as_object_mut())
+    {
         for (id, entry) in skin_settings.iter_mut() {
             let custom = entry.get_mut("custom").and_then(|c| c.as_object_mut());
             let Some(custom) = custom else { continue };
@@ -210,18 +219,17 @@ fn write_raw_config(config_dir: &Path, json: &serde_json::Value) -> Result<(), S
     let final_path = config_dir.join(CONFIG_FILENAME);
     let temp_path = config_dir.join(format!("{}.tmp", CONFIG_FILENAME));
 
-    let text = serde_json::to_string_pretty(json)
-        .map_err(|e| format!("Serialization error: {}", e))?;
+    let text =
+        serde_json::to_string_pretty(json).map_err(|e| format!("Serialization error: {}", e))?;
 
-    let mut tmp = fs::File::create(&temp_path)
-        .map_err(|e| format!("Cannot create temp file: {}", e))?;
+    let mut tmp =
+        fs::File::create(&temp_path).map_err(|e| format!("Cannot create temp file: {}", e))?;
     tmp.write_all(text.as_bytes())
         .map_err(|e| format!("Cannot write config: {}", e))?;
     tmp.sync_all()
         .map_err(|e| format!("Cannot sync config: {}", e))?;
 
-    fs::rename(&temp_path, &final_path)
-        .map_err(|e| format!("Cannot finalize config: {}", e))?;
+    fs::rename(&temp_path, &final_path).map_err(|e| format!("Cannot finalize config: {}", e))?;
 
     Ok(())
 }
@@ -346,7 +354,10 @@ mod tests {
         migrate_v1_custom_settings(&dir, &[("my-skin".to_string(), skin_dir.clone())]);
 
         let values = crate::skin::settings::load_skin_settings(&skin_dir);
-        assert_eq!(values["accent"], "#ffffff", "existing settings.json must win");
+        assert_eq!(
+            values["accent"], "#ffffff",
+            "existing settings.json must win"
+        );
         let raw = read_raw(&dir);
         assert_eq!(raw["version"], 2);
         assert!(raw["skin_settings"]["my-skin"].get("custom").is_none());
@@ -391,7 +402,10 @@ mod tests {
         // 写入失败：custom 保留、版本不升，下次启动重试
         let raw = read_raw(&dir);
         assert_eq!(raw["version"], 1);
-        assert_eq!(raw["skin_settings"]["my-skin"]["custom"]["accent"], "#00ff00");
+        assert_eq!(
+            raw["skin_settings"]["my-skin"]["custom"]["accent"],
+            "#00ff00"
+        );
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&blocker);
@@ -400,14 +414,18 @@ mod tests {
     #[test]
     fn migrate_skips_v2_config() {
         let dir = unique_dir("v2");
-        let original = r##"{"version":2,"skin_settings":{"my-skin":{"custom":{"accent":"#00ff00"}}}}"##;
+        let original =
+            r##"{"version":2,"skin_settings":{"my-skin":{"custom":{"accent":"#00ff00"}}}}"##;
         fs::write(dir.join(CONFIG_FILENAME), original).unwrap();
 
         migrate_v1_custom_settings(&dir, &[]);
 
         // v2 直接返回，文件一字节不动（custom 键如出现也原样保留，
         // serde 读入 AppConfig 时会忽略它）
-        assert_eq!(fs::read_to_string(dir.join(CONFIG_FILENAME)).unwrap(), original);
+        assert_eq!(
+            fs::read_to_string(dir.join(CONFIG_FILENAME)).unwrap(),
+            original
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -5,14 +5,14 @@
 
 use super::VolumeInfo;
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-use windows::Win32::Media::Audio::{
-    eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
-};
+use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
 
-fn with_endpoint<T>(f: impl FnOnce(&IAudioEndpointVolume) -> Result<T, String>) -> Result<T, String> {
+fn with_endpoint<T>(
+    f: impl FnOnce(&IAudioEndpointVolume) -> Result<T, String>,
+) -> Result<T, String> {
     unsafe {
         // 每次成功的 CoInitializeEx 都要配对一次 CoUninitialize，而 S_FALSE
         // （本线程已按同一模型初始化过）同样是成功 HRESULT——只认 S_OK 会
@@ -21,8 +21,9 @@ fn with_endpoint<T>(f: impl FnOnce(&IAudioEndpointVolume) -> Result<T, String>) 
         let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
         let initialized_here = hr.is_ok();
         let result = (|| {
-            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                .map_err(|e| e.to_string())?;
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                    .map_err(|e| e.to_string())?;
             let device = enumerator
                 .GetDefaultAudioEndpoint(eRender, eConsole)
                 .map_err(|e| e.to_string())?;
@@ -51,7 +52,11 @@ pub fn get_volume() -> Result<VolumeInfo, String> {
 
 pub fn set_volume(volume_pct: f32) -> Result<(), String> {
     // NaN 防线：NaN 穿透 clamp 直达 COM——非有限值按 0 处理
-    let scalar = if volume_pct.is_finite() { (volume_pct / 100.0).clamp(0.0, 1.0) } else { 0.0 };
+    let scalar = if volume_pct.is_finite() {
+        (volume_pct / 100.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     with_endpoint(|ep| unsafe {
         ep.SetMasterVolumeLevelScalar(scalar, std::ptr::null())
             .map_err(|e| e.to_string())
@@ -60,7 +65,8 @@ pub fn set_volume(volume_pct: f32) -> Result<(), String> {
 
 pub fn set_mute(muted: bool) -> Result<(), String> {
     with_endpoint(|ep| unsafe {
-        ep.SetMute(muted, std::ptr::null()).map_err(|e| e.to_string())
+        ep.SetMute(muted, std::ptr::null())
+            .map_err(|e| e.to_string())
     })
 }
 

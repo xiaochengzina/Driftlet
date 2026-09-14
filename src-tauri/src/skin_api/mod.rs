@@ -41,6 +41,10 @@
 //! Rate-type readings (disk/network bps, GPU usage) keep a persistent
 //! sampler behind a Mutex: the first call primes the baseline and reports 0.
 
+// 上方模块文档的命令清单刻意按列对齐续行（仅源码阅读、不发布 rustdoc）——
+// 不对齐 clippy 的 doc 列表缩进规则，模块级放行
+#![allow(clippy::doc_overindented_list_items)]
+
 mod fs;
 mod shell;
 mod system;
@@ -64,12 +68,12 @@ mod status;
 #[cfg(target_os = "windows")]
 mod volume;
 
+use crate::AppState;
+use crate::i18n::{Key, tr, trf};
+use serde::Serialize;
 use std::sync::Mutex;
 use std::time::Instant;
-use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use crate::i18n::{tr, trf, Key};
-use crate::AppState;
 
 // ─── Shared output types ───
 
@@ -275,7 +279,11 @@ fn require_any_perm(
     {
         return Ok((skin.id, skin.directory));
     }
-    Err(trf(&lang, Key::PermissionDenied, &[skin.id.as_str(), perms[0]]))
+    Err(trf(
+        &lang,
+        Key::PermissionDenied,
+        &[skin.id.as_str(), perms[0]],
+    ))
 }
 
 #[cfg_attr(target_os = "windows", allow(dead_code))] // only the non-Windows arms call it
@@ -327,9 +335,8 @@ static CPU_PERF_PDH: Mutex<Option<pdh::PdhMultiCounter>> = Mutex::new(None);
 fn cpu_performance_pct() -> Option<f64> {
     let mut guard = CPU_PERF_PDH.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
-        *guard = pdh::PdhMultiCounter::new(
-            "\\Processor Information(_Total)\\% Processor Performance",
-        );
+        *guard =
+            pdh::PdhMultiCounter::new("\\Processor Information(_Total)\\% Processor Performance");
     }
     guard
         .as_mut()?
@@ -370,7 +377,10 @@ pub async fn get_cpu_info(
     let cpus = sys.cpus();
     let nominal_mhz = cpus.iter().map(|c| c.frequency()).max().unwrap_or(0);
     Ok(vec![CpuInfo {
-        name: cpus.first().map(|c| c.brand().to_string()).unwrap_or_default(),
+        name: cpus
+            .first()
+            .map(|c| c.brand().to_string())
+            .unwrap_or_default(),
         physical_cores: sys.physical_core_count().unwrap_or(0),
         logical_cores: cpus.len(),
         // 任务管理器同款：名义频率 × 实测性能百分比；PDH 未就绪回退静态名义值
@@ -421,10 +431,7 @@ pub struct MemoryInfo {
 }
 
 #[tauri::command]
-pub fn get_memory_info(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-) -> Result<MemoryInfo, String> {
+pub fn get_memory_info(app: AppHandle, window: tauri::WebviewWindow) -> Result<MemoryInfo, String> {
     let state = app.state::<AppState>();
     require_perm(&state, &window, PERM_SYS_INFO)?;
     let mut guard = CPU_SYS.lock().unwrap_or_else(|e| e.into_inner());
@@ -442,8 +449,10 @@ pub fn get_memory_info(
 #[cfg(target_os = "windows")]
 fn commit_group() -> Option<MemoryGroup> {
     use windows::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFORMATION};
-    let mut info = PERFORMANCE_INFORMATION::default();
-    info.cb = std::mem::size_of::<PERFORMANCE_INFORMATION>() as u32;
+    let mut info = PERFORMANCE_INFORMATION {
+        cb: std::mem::size_of::<PERFORMANCE_INFORMATION>() as u32,
+        ..Default::default()
+    };
     unsafe { GetPerformanceInfo(&mut info, info.cb) }.ok()?;
     let page = info.PageSize as u64;
     Some(MemoryGroup::new(
@@ -562,10 +571,7 @@ fn sample_disk_rates() -> std::collections::HashMap<String, (u64, u64)> {
 }
 
 #[cfg(target_os = "windows")]
-fn sample_pdh(
-    slot: &Mutex<Option<pdh::PdhMultiCounter>>,
-    path: &str,
-) -> Vec<(String, f64)> {
+fn sample_pdh(slot: &Mutex<Option<pdh::PdhMultiCounter>>, path: &str) -> Vec<(String, f64)> {
     let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         *guard = pdh::PdhMultiCounter::new(path);
@@ -578,7 +584,9 @@ fn sample_pdh(
 fn drive_letters_from_instance(name: &str) -> Vec<String> {
     name.split_whitespace()
         .filter(|t| {
-            t.len() == 2 && t.ends_with(':') && t.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            t.len() == 2
+                && t.ends_with(':')
+                && t.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
         })
         .map(str::to_ascii_uppercase)
         .collect()
@@ -621,12 +629,12 @@ pub fn get_disk_space(
         let hit = probe == mp
             || probe.starts_with(&format!("{}\\", mp))
             || probe.starts_with(&format!("{}/", mp));
-        if hit {
-            if best.map_or(true, |b| {
+        if hit
+            && best.is_none_or(|b| {
                 d.mount_point().as_os_str().len() > b.mount_point().as_os_str().len()
-            }) {
-                best = Some(d);
-            }
+            })
+        {
+            best = Some(d);
         }
     }
 
@@ -728,7 +736,10 @@ pub fn get_network_info(
 
     sampler.primed = true;
     sampler.last = Instant::now();
-    Ok(NetworkInfo { adapters, local_ips })
+    Ok(NetworkInfo {
+        adapters,
+        local_ips,
+    })
 }
 
 // ─── GPU (Windows) ───
@@ -822,10 +833,7 @@ pub fn get_battery_info(
 
 /// Milliseconds since the last keyboard/mouse input.
 #[tauri::command]
-pub fn get_idle_time(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-) -> Result<u64, String> {
+pub fn get_idle_time(app: AppHandle, window: tauri::WebviewWindow) -> Result<u64, String> {
     let state = app.state::<AppState>();
     require_perm(&state, &window, PERM_SYS_INFO)?;
     #[cfg(target_os = "windows")]
@@ -878,21 +886,22 @@ pub fn get_monitors(
 /// 归 sys_info 低危（与同组只读探针同闸）。系统主题变化不做
 /// 推送——皮肤在需要时调用，或配合定时轮询/窗口可见事件刷新。
 #[tauri::command]
-pub fn get_system_theme(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-) -> Result<String, String> {
+pub fn get_system_theme(app: AppHandle, window: tauri::WebviewWindow) -> Result<String, String> {
     let state = app.state::<AppState>();
     require_perm(&state, &window, PERM_SYS_INFO)?;
     #[cfg(target_os = "windows")]
     {
-        use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
+        use winreg::enums::HKEY_CURRENT_USER;
         let light = RegKey::predef(HKEY_CURRENT_USER)
             .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
             .and_then(|k| k.get_value::<u32, _>("AppsUseLightTheme"))
             .unwrap_or(1); // 读不到按浅色兜底（Windows 默认主题为浅）
-        Ok(if light == 0 { "dark".to_string() } else { "light".to_string() })
+        Ok(if light == 0 {
+            "dark".to_string()
+        } else {
+            "light".to_string()
+        })
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -973,7 +982,11 @@ pub async fn skin_get_setting(
     let lang = state.lang();
     let skin = caller_skin(&state, &window)?;
     if !skin.manifest.settings.iter().any(|d| d.key == key) {
-        return Err(trf(&lang, Key::SkinHasNoSetting, &[skin.id.as_str(), key.as_str()]));
+        return Err(trf(
+            &lang,
+            Key::SkinHasNoSetting,
+            &[skin.id.as_str(), key.as_str()],
+        ));
     }
 
     let overrides = crate::skin::settings::load_skin_settings(&skin.directory);
@@ -1026,7 +1039,9 @@ pub fn skin_set_menu_items(
         let id = it.id.trim().to_string();
         if id.is_empty()
             || id.len() > 32
-            || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
         {
             return invalid(format!("bad id '{id}' (1–32, a-z 0-9 - _)"));
         }
@@ -1036,8 +1051,12 @@ pub fn skin_set_menu_items(
         let mut label_zh = it.label_zh.unwrap_or_default().trim().to_string();
         let mut label_en = it.label_en.unwrap_or_default().trim().to_string();
         let label_plain = it.label.unwrap_or_default().trim().to_string();
-        if label_zh.is_empty() { label_zh = label_plain.clone(); }
-        if label_en.is_empty() { label_en = label_plain; }
+        if label_zh.is_empty() {
+            label_zh = label_plain.clone();
+        }
+        if label_en.is_empty() {
+            label_en = label_plain;
+        }
         if label_zh.is_empty() && label_en.is_empty() {
             return invalid(format!("item '{id}' has no label"));
         }
@@ -1075,15 +1094,27 @@ pub fn skin_set_setting(
     let state = app.state::<AppState>();
     let lang = state.lang();
     let skin = caller_skin(&state, &window)?;
-    let def = skin.manifest.settings.iter()
+    let def = skin
+        .manifest
+        .settings
+        .iter()
         .find(|d| d.key == key)
-        .ok_or_else(|| trf(&lang, Key::SkinHasNoSetting, &[skin.id.as_str(), key.as_str()]))?;
+        .ok_or_else(|| {
+            trf(
+                &lang,
+                Key::SkinHasNoSetting,
+                &[skin.id.as_str(), key.as_str()],
+            )
+        })?;
 
     let value = crate::commands::validate_custom_setting(def, &value, &lang)?;
 
     // 与 set_skin_custom_setting 同一把锁：settings.json 有两个写入方，
     // load→save 全程持锁防互相丢更新。
-    let _guard = state.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = state
+        .settings_lock
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let mut overrides = crate::skin::settings::load_skin_settings(&skin.directory);
     overrides.insert(key.clone(), value.clone());
     crate::skin::settings::save_skin_settings(&skin.directory, &overrides)
@@ -1094,11 +1125,15 @@ pub fn skin_set_setting(
 
     // Notify the manager panel so an open config page refreshes in place.
     // 定向发给管理器窗口：广播会把设置值（可能含 password）泄露给所有皮肤窗口。
-    let _ = app.emit_to("main", "skin-setting-changed", serde_json::json!({
-        "skinId": skin.id,
-        "key": key,
-        "value": value,
-    }));
+    let _ = app.emit_to(
+        "main",
+        "skin-setting-changed",
+        serde_json::json!({
+            "skinId": skin.id,
+            "key": key,
+            "value": value,
+        }),
+    );
 
     // Silently sync the caller's baked copy — WITHOUT dispatching
     // 'desk-setting-changed': the skin set this value itself, and an event
@@ -1107,7 +1142,8 @@ pub fn skin_set_setting(
     let val_json = serde_json::to_string(&value).map_err(|e| e.to_string())?;
     let script = format!(
         "(function(){{var k={key},v={val};var b=window.__DESK_PP__;if(b){{b.settings=b.settings||{{}};b.settings[k]=v;}}}})();",
-        key = key_json, val = val_json
+        key = key_json,
+        val = val_json
     );
     let _ = window.eval(&script);
 
@@ -1215,14 +1251,10 @@ pub async fn run_command(
     .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?
 }
 
-
 // ─── OS / processes（sys_info 低危，只读）───
 
 #[tauri::command]
-pub fn get_os_info(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-) -> Result<system::OsInfo, String> {
+pub fn get_os_info(app: AppHandle, window: tauri::WebviewWindow) -> Result<system::OsInfo, String> {
     let state = app.state::<AppState>();
     require_perm(&state, &window, PERM_SYS_INFO)?;
     Ok(system::os_info())
@@ -1242,7 +1274,10 @@ pub async fn get_processes(
     // CPU_SYS → CPU_SYS_BORN 与这里一致，且 CPU_SYS_BORN 仅此处触碰。
     {
         let mut born = CPU_SYS_BORN.lock().unwrap_or_else(|e| e.into_inner());
-        if born.map(|b| b.elapsed() >= CPU_SYS_REBUILD_INTERVAL).unwrap_or(false) {
+        if born
+            .map(|b| b.elapsed() >= CPU_SYS_REBUILD_INTERVAL)
+            .unwrap_or(false)
+        {
             *guard = None;
             *born = None;
         }
@@ -1261,10 +1296,7 @@ pub async fn get_processes(
 // ─── Volume (Windows; get 读取与 set/mute 控制同属 media 低危) ───
 
 #[tauri::command]
-pub fn get_volume(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-) -> Result<VolumeInfo, String> {
+pub fn get_volume(app: AppHandle, window: tauri::WebviewWindow) -> Result<VolumeInfo, String> {
     let state = app.state::<AppState>();
     require_perm(&state, &window, PERM_MEDIA)?;
     #[cfg(target_os = "windows")]
@@ -1279,7 +1311,11 @@ pub fn get_volume(
 }
 
 #[tauri::command]
-pub fn set_volume(app: AppHandle, window: tauri::WebviewWindow, volume_pct: f32) -> Result<(), String> {
+pub fn set_volume(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    volume_pct: f32,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
     require_perm(&state, &window, PERM_MEDIA)?;
@@ -1325,7 +1361,7 @@ pub async fn get_media_info(
     {
         let lang = state.lang();
         let lang_inner = lang.clone();
-        tauri::async_runtime::spawn_blocking(move || media::info())
+        tauri::async_runtime::spawn_blocking(media::info)
             .await
             .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?
             .map_err(|e| trf(&lang_inner, Key::MediaControlFailed, &[&e]))
@@ -1337,7 +1373,11 @@ pub async fn get_media_info(
 }
 
 #[tauri::command]
-pub async fn media_control(app: AppHandle, window: tauri::WebviewWindow, action: String) -> Result<bool, String> {
+pub async fn media_control(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    action: String,
+) -> Result<bool, String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
     require_perm(&state, &window, PERM_MEDIA)?;
@@ -1367,7 +1407,11 @@ pub async fn media_control(app: AppHandle, window: tauri::WebviewWindow, action:
 
 /// 拖动进度条寻址（绝对秒数）。源不支持寻址时返回 false（不是错误）。
 #[tauri::command]
-pub async fn media_seek(app: AppHandle, window: tauri::WebviewWindow, position_secs: f64) -> Result<bool, String> {
+pub async fn media_seek(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    position_secs: f64,
+) -> Result<bool, String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
     require_perm(&state, &window, PERM_MEDIA)?;
@@ -1401,7 +1445,11 @@ pub fn read_clipboard_text(app: AppHandle, window: tauri::WebviewWindow) -> Resu
 }
 
 #[tauri::command]
-pub fn write_clipboard_text(app: AppHandle, window: tauri::WebviewWindow, text: String) -> Result<(), String> {
+pub fn write_clipboard_text(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    text: String,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
     require_perm(&state, &window, PERM_CLIPBOARD)?;
@@ -1440,7 +1488,11 @@ fn open_external_required_perms(target: &str) -> &'static [&'static str] {
 }
 
 #[tauri::command]
-pub fn open_external(app: AppHandle, window: tauri::WebviewWindow, target: String) -> Result<(), String> {
+pub fn open_external(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    target: String,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let lang = state.lang();
     let target = target.trim();
@@ -1456,9 +1508,9 @@ pub fn open_external(app: AppHandle, window: tauri::WebviewWindow, target: Strin
 /// pub(crate)：管理器的「前往下载」（commands::open_release_page）也走这里。
 #[cfg(target_os = "windows")]
 pub(crate) fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
-    use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::PCWSTR;
 
     let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
     // Values ≤ 32 are failure codes (file not found, no association, ...).
@@ -1475,7 +1527,11 @@ pub(crate) fn open_target_impl(target: &str, lang: &str) -> Result<(), String> {
     if result.0 as usize > 32 {
         Ok(())
     } else {
-        Err(trf(lang, Key::OpenFailed, &[&format!("ShellExecute code {}", result.0 as usize)]))
+        Err(trf(
+            lang,
+            Key::OpenFailed,
+            &[&format!("ShellExecute code {}", result.0 as usize)],
+        ))
     }
 }
 
@@ -1699,7 +1755,7 @@ fn any_absolute_path(path: &str) -> Result<std::path::PathBuf, String> {
 /// 禁写根四个（审查 H2 后从两个扩到四个）：
 ///   - skins_dir / config_dir：防自我提权（上述原始动机）；
 ///   - update_dir（<数据根>/update）：宿主会**执行**其中的安装包
-///    （install_update），皮肤可写 = 借「立即安装」这个可信动作把写能力
+///     （install_update），皮肤可写 = 借「立即安装」这个可信动作把写能力
 ///     升级为代码执行；
 ///   - exe 所在目录（便携布局下是前三个根的父目录，冗余但显式）：覆盖
 ///     Driftlet.exe 本体 / WebView2Loader.dll / 卸载器——改写任一 = 下次
@@ -1713,8 +1769,7 @@ fn ensure_mutable_any_path(
     // `..` 分量会让 resolve_location 的「最深现存祖先 + 词法重拼尾段」
     // 失真（Windows 沿符号链接逐分量解析 `..`，非纯词法）——变更类目标
     // 一律拒绝，调用方传规范形式即可（与 fs.rs 沙箱拒 `..` 同口径）。
-    if p
-        .components()
+    if p.components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
         return Err(format!("path must not contain '..': {}", p.display()));
@@ -1797,14 +1852,22 @@ pub async fn skin_read_any_file(
         return Err(format!("not a regular file: {}", path));
     }
     if meta.len() > fs::MAX_READ_BYTES {
-        return Err(format!("file too large: {} bytes (max {})", meta.len(), fs::MAX_READ_BYTES));
+        return Err(format!(
+            "file too large: {} bytes (max {})",
+            meta.len(),
+            fs::MAX_READ_BYTES
+        ));
     }
     // TOCTOU 防线：metadata 检查后文件可能被换大——read_capped 按上限+1
     // 流式读、按实际字节再审，不做无界分配（与沙箱版同一函数，审查 M2）
     let bytes = match fs::read_capped(&p, fs::MAX_READ_BYTES) {
         Ok(b) => b,
         Err(fs::CapReadError::TooLarge) => {
-            return Err(format!("file too large: > {} bytes (max {})", fs::MAX_READ_BYTES, fs::MAX_READ_BYTES));
+            return Err(format!(
+                "file too large: > {} bytes (max {})",
+                fs::MAX_READ_BYTES,
+                fs::MAX_READ_BYTES
+            ));
         }
         Err(fs::CapReadError::Io(e)) => return Err(e),
     };
@@ -1835,7 +1898,11 @@ pub fn skin_write_any_file(
         data.into_bytes()
     };
     if bytes.len() > fs::MAX_WRITE_BYTES {
-        return Err(format!("data too large: {} bytes (max {})", bytes.len(), fs::MAX_WRITE_BYTES));
+        return Err(format!(
+            "data too large: {} bytes (max {})",
+            bytes.len(),
+            fs::MAX_WRITE_BYTES
+        ));
     }
     let p = any_absolute_path(&path)?;
     ensure_mutable_any_path(&state.skins_dir, &state.config_dir, &p)?;
@@ -1871,7 +1938,11 @@ pub fn skin_list_any_dir(
             size: if md.is_dir() { 0 } else { md.len() },
         });
     }
-    out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    out.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok(out)
 }
 
@@ -2026,7 +2097,12 @@ pub fn skin_set_window_config(
     let mut pos: (Option<i32>, Option<i32>) = (None, None);
     let mut size: (Option<u32>, Option<u32>) = (None, None);
     for (key, value) in &patch {
-        let bad = || format!("invalid value for '{}': {} (supported: {})", key, value, KEYS);
+        let bad = || {
+            format!(
+                "invalid value for '{}': {} (supported: {})",
+                key, value, KEYS
+            )
+        };
         match key.as_str() {
             "opacity" => ops.push(Op::Opacity(value.as_f64().ok_or_else(bad)?)),
             "placement" => {
@@ -2043,12 +2119,23 @@ pub fn skin_set_window_config(
             "edge_snap" => ops.push(Op::EdgeSnap(value.as_bool().ok_or_else(bad)?)),
             // 截断回绕防护：超大 JSON 数字在 impl 的 clamp 之前先 as 截断
             // 会静默回绕（4294967296_u64 as u32 = 0）——try_from 越界报错
-            "snap_gap" => ops.push(Op::SnapGap(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?)),
+            "snap_gap" => ops.push(Op::SnapGap(
+                u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?,
+            )),
             "x" => pos.0 = Some(i32::try_from(value.as_i64().ok_or_else(bad)?).map_err(|_| bad())?),
             "y" => pos.1 = Some(i32::try_from(value.as_i64().ok_or_else(bad)?).map_err(|_| bad())?),
-            "width" => size.0 = Some(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?),
-            "height" => size.1 = Some(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?),
-            other => return Err(format!("unknown config key: '{}' (supported: {})", other, KEYS)),
+            "width" => {
+                size.0 = Some(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?)
+            }
+            "height" => {
+                size.1 = Some(u32::try_from(value.as_u64().ok_or_else(bad)?).map_err(|_| bad())?)
+            }
+            other => {
+                return Err(format!(
+                    "unknown config key: '{}' (supported: {})",
+                    other, KEYS
+                ));
+            }
         }
     }
     // x/y、width/height 合并成单次调用；缺的一边取**当前实际几何**（已加载
@@ -2079,13 +2166,20 @@ pub fn skin_set_window_config(
             Op::Opacity(v) => crate::commands::set_skin_opacity_impl(&app, &skin_id, v)?,
             Op::Placement(v) => crate::commands::set_skin_placement_impl(&app, &skin_id, &v)?,
             Op::ClickThrough(v) => crate::commands::set_skin_click_through_impl(&app, &skin_id, v)?,
-            Op::PositionLocked(v) => crate::commands::set_skin_position_locked_impl(&app, &skin_id, v)?,
+            Op::PositionLocked(v) => {
+                crate::commands::set_skin_position_locked_impl(&app, &skin_id, v)?
+            }
             Op::Resizable(v) => crate::commands::set_skin_resizable_impl(&app, &skin_id, v)?,
             Op::EdgeSnap(v) => crate::commands::set_skin_edge_snap_impl(&app, &skin_id, v)?,
             Op::SnapGap(v) => crate::commands::set_skin_snap_gap_impl(&app, &skin_id, v)?,
         }
     }
-    log::info!("Skin window config patched: {} keys={:?} (by skin {})", skin_id, patch.keys().collect::<Vec<_>>(), window.label());
+    log::info!(
+        "Skin window config patched: {} keys={:?} (by skin {})",
+        skin_id,
+        patch.keys().collect::<Vec<_>>(),
+        window.label()
+    );
     Ok(())
 }
 
@@ -2098,7 +2192,11 @@ pub fn skin_set_window_config(
 // 菜单的刷新/卸载同一教训），此时返回值不可依赖。
 
 #[tauri::command]
-pub async fn skin_load(app: AppHandle, window: tauri::WebviewWindow, skin_id: Option<String>) -> Result<(), String> {
+pub async fn skin_load(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    skin_id: Option<String>,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let target = resolve_control_target(&state, &window, skin_id)?;
     // 生命周期互斥（与 load_skin 命令同一把锁；锁序 lifecycle → install）。
@@ -2109,7 +2207,11 @@ pub async fn skin_load(app: AppHandle, window: tauri::WebviewWindow, skin_id: Op
 }
 
 #[tauri::command]
-pub async fn skin_unload(app: AppHandle, window: tauri::WebviewWindow, skin_id: Option<String>) -> Result<(), String> {
+pub async fn skin_unload(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    skin_id: Option<String>,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let target = resolve_control_target(&state, &window, skin_id)?;
     if is_caller(&window, &target) {
@@ -2127,7 +2229,11 @@ pub async fn skin_unload(app: AppHandle, window: tauri::WebviewWindow, skin_id: 
 }
 
 #[tauri::command]
-pub async fn skin_reload(app: AppHandle, window: tauri::WebviewWindow, skin_id: Option<String>) -> Result<(), String> {
+pub async fn skin_reload(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    skin_id: Option<String>,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let target = resolve_control_target(&state, &window, skin_id)?;
     if is_caller(&window, &target) {
@@ -2169,7 +2275,10 @@ pub struct SkinListEntry {
 }
 
 #[tauri::command]
-pub fn skin_list_skins(app: AppHandle, window: tauri::WebviewWindow) -> Result<Vec<SkinListEntry>, String> {
+pub fn skin_list_skins(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Vec<SkinListEntry>, String> {
     let state = app.state::<AppState>();
     require_perm(&state, &window, PERM_CONTROL)?;
     let skins = crate::skin::loader::scan_skins_directory(&state.skins_dir);
@@ -2216,13 +2325,21 @@ fn is_private_host(url: &str) -> bool {
         return true; // 解析失败按拒绝处理
     };
     let host = u.host_str().unwrap_or("").to_ascii_lowercase();
-    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") {
+    if host.is_empty()
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+    {
         return true;
     }
     // IPv6 字面量在 URL 里带方括号（http://[::1]/x → host_str 可能带 []）——剥掉再解析
     let bare = host.trim_start_matches('[').trim_end_matches(']');
     let v4_blocked = |v4: std::net::Ipv4Addr| {
-        v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast()
+        v4.is_loopback()
+            || v4.is_private()
+            || v4.is_link_local()
+            || v4.is_unspecified()
+            || v4.is_broadcast()
             || v4.octets()[0] == 0 // 0.0.0.0/8「本网络」段（is_unspecified 只盖 0.0.0.0）
     };
     match bare.parse::<std::net::IpAddr>() {
@@ -2261,13 +2378,14 @@ fn parse_inet_aton(host: &str) -> Option<std::net::Ipv4Addr> {
     }
     let mut nums: Vec<u64> = Vec::with_capacity(parts.len());
     for p in parts {
-        let (digits, radix) = if let Some(hex) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
-            (hex, 16)
-        } else if p.len() > 1 && p.starts_with('0') {
-            (&p[1..], 8)
-        } else {
-            (p, 10)
-        };
+        let (digits, radix) =
+            if let Some(hex) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
+                (hex, 16)
+            } else if p.len() > 1 && p.starts_with('0') {
+                (&p[1..], 8)
+            } else {
+                (p, 10)
+            };
         if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
             return None;
         }
@@ -2306,10 +2424,16 @@ fn resolve_redirect_url(current: &str, location: &str) -> Result<String, String>
     let next_str = next.to_string();
     let lower = next_str.to_ascii_lowercase();
     if !lower.starts_with("https://") && !lower.starts_with("http://") {
-        return Err(format!("redirect to non-http(s) URL is not allowed: {}", next_str));
+        return Err(format!(
+            "redirect to non-http(s) URL is not allowed: {}",
+            next_str
+        ));
     }
     if is_private_host(&next_str) {
-        return Err(format!("redirect to local/private address is not allowed: {}", next_str));
+        return Err(format!(
+            "redirect to local/private address is not allowed: {}",
+            next_str
+        ));
     }
     Ok(next_str)
 }
@@ -2347,7 +2471,10 @@ fn headers_for_hop(
                 return false;
             }
             if cross_origin
-                && matches!(k.as_str(), "authorization" | "cookie" | "proxy-authorization")
+                && matches!(
+                    k.as_str(),
+                    "authorization" | "cookie" | "proxy-authorization"
+                )
             {
                 return false;
             }
@@ -2357,6 +2484,9 @@ fn headers_for_hop(
         .collect()
 }
 
+// 签名即皮肤 API 契约（入参 = 指南文档化的 invoke 参数表），不能收拢进 struct——
+// 收拢 = 破坏性变更，故允许超参
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn http_request(
     app: AppHandle,
@@ -2379,9 +2509,15 @@ pub async fn http_request(
     // 响应体一律不给出（页面 fetch 受 CORS 本就够不到这些内容，「低危」
     // 不覆盖这一增量）。
     if is_private_host(&url) {
-        return Err(format!("requests to local/private addresses are not allowed: {}", url));
+        return Err(format!(
+            "requests to local/private addresses are not allowed: {}",
+            url
+        ));
     }
-    let method = method.unwrap_or_else(|| "GET".into()).trim().to_ascii_uppercase();
+    let method = method
+        .unwrap_or_else(|| "GET".into())
+        .trim()
+        .to_ascii_uppercase();
     if !["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].contains(&method.as_str()) {
         return Err(format!("unsupported method: {}", method));
     }
@@ -2389,7 +2525,14 @@ pub async fn http_request(
     let headers: Vec<(String, String)> = headers
         .unwrap_or_default()
         .into_iter()
-        .map(|(k, v)| (k, v.as_str().map(String::from).unwrap_or_else(|| v.to_string())))
+        .map(|(k, v)| {
+            (
+                k,
+                v.as_str()
+                    .map(String::from)
+                    .unwrap_or_else(|| v.to_string()),
+            )
+        })
         .collect();
     let binary = binary.unwrap_or(false);
     // binary: 请求体是 base64；文本：原样 UTF-8 发送
@@ -2421,8 +2564,12 @@ pub async fn http_request(
         let mut hop_headers = headers;
         let mut hops = 0u32;
         let resp = loop {
-            let mut req = agent.request(&current_method, &current_url)
-                .set("User-Agent", concat!("Driftlet/", env!("CARGO_PKG_VERSION")))
+            let mut req = agent
+                .request(&current_method, &current_url)
+                .set(
+                    "User-Agent",
+                    concat!("Driftlet/", env!("CARGO_PKG_VERSION")),
+                )
                 .timeout(std::time::Duration::from_millis(timeout));
             for (k, v) in &hop_headers {
                 req = req.set(k, v);
@@ -2610,11 +2757,21 @@ fn current_geometry(state: &AppState, skin_id: &str) -> ((i32, i32), (u32, u32))
         let sf = w.scale_factor().unwrap_or(1.0);
         let pos = w
             .outer_position()
-            .map(|p| (((p.x as f64) / sf).round() as i32, ((p.y as f64) / sf).round() as i32))
+            .map(|p| {
+                (
+                    ((p.x as f64) / sf).round() as i32,
+                    ((p.y as f64) / sf).round() as i32,
+                )
+            })
             .unwrap_or((0, 0));
         let size = w
             .outer_size()
-            .map(|s| (((s.width as f64) / sf).round() as u32, ((s.height as f64) / sf).round() as u32))
+            .map(|s| {
+                (
+                    ((s.width as f64) / sf).round() as u32,
+                    ((s.height as f64) / sf).round() as u32,
+                )
+            })
             .unwrap_or((300, 200));
         return (pos, size);
     }
@@ -2648,7 +2805,9 @@ mod tests {
         assert!(super::is_private_host("http://10.1.2.3/x"));
         assert!(super::is_private_host("http://172.16.0.1/x"));
         assert!(super::is_private_host("http://192.168.1.1/x"));
-        assert!(super::is_private_host("http://169.254.169.254/latest/meta-data"));
+        assert!(super::is_private_host(
+            "http://169.254.169.254/latest/meta-data"
+        ));
         assert!(super::is_private_host("http://0.0.0.0/x"));
         assert!(!super::is_private_host("https://example.com/x"));
         assert!(!super::is_private_host("https://8.8.8.8/x"));
@@ -2686,14 +2845,26 @@ mod tests {
         assert_eq!(super::headers_for_hop(&h(), false, false).len(), 5);
         // 跨源：授权类剥掉，自定义保留
         let out = super::headers_for_hop(&h(), true, false);
-        assert!(!out.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+        assert!(
+            !out.iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+        );
         assert!(!out.iter().any(|(k, _)| k.eq_ignore_ascii_case("cookie")));
         assert!(out.iter().any(|(k, _)| k == "X-Custom"));
         // 丢体（含同源）：体头剥掉
         let out = super::headers_for_hop(&h(), false, true);
-        assert!(!out.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-length")));
-        assert!(!out.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")));
-        assert!(out.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+        assert!(
+            !out.iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        );
+        assert!(
+            !out.iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        );
+        assert!(
+            out.iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+        );
         // 跨源 + 丢体：两类都剥
         let out = super::headers_for_hop(&h(), true, true);
         assert_eq!(out.len(), 1);
@@ -2708,19 +2879,28 @@ mod tests {
             "https://example.com/a/c"
         );
         assert!(super::resolve_redirect_url("https://example.com/", "//cdn.example.com/x").is_ok());
-        assert!(super::resolve_redirect_url("https://example.com/", "https://cdn.example.com/x").is_ok());
+        assert!(
+            super::resolve_redirect_url("https://example.com/", "https://cdn.example.com/x")
+                .is_ok()
+        );
         // 跳本机/内网一律拒绝（含数字字面量跳板）
         assert!(super::resolve_redirect_url("https://example.com/", "http://127.0.0.1/x").is_err());
-        assert!(super::resolve_redirect_url(
-            "https://example.com/",
-            "http://169.254.169.254/latest/meta-data"
-        )
-        .is_err());
+        assert!(
+            super::resolve_redirect_url(
+                "https://example.com/",
+                "http://169.254.169.254/latest/meta-data"
+            )
+            .is_err()
+        );
         assert!(super::resolve_redirect_url("https://example.com/", "http://2130706433/").is_err());
-        assert!(super::resolve_redirect_url("https://example.com/", "http://localhost/admin").is_err());
+        assert!(
+            super::resolve_redirect_url("https://example.com/", "http://localhost/admin").is_err()
+        );
         // 非 http(s) scheme 拒绝
         assert!(super::resolve_redirect_url("https://example.com/", "file:///c:/windows").is_err());
-        assert!(super::resolve_redirect_url("https://example.com/", "javascript:alert(1)").is_err());
+        assert!(
+            super::resolve_redirect_url("https://example.com/", "javascript:alert(1)").is_err()
+        );
     }
 
     #[test]
@@ -2738,7 +2918,9 @@ mod tests {
         // 本地路径面整体裁撤（负枚举的黑名单追不上执行面）：文档、目录、
         // 可执行文件、UNC 一律拒绝——需要开本地文件的皮肤走 shell 权限
         assert!(!super::is_open_target_allowed("C:\\docs\\a.pdf"));
-        assert!(!super::is_open_target_allowed("C:\\no-such-file-driftlet.xyz"));
+        assert!(!super::is_open_target_allowed(
+            "C:\\no-such-file-driftlet.xyz"
+        ));
         assert!(!super::is_open_target_allowed("C:\\tools"));
         assert!(!super::is_open_target_allowed("\\\\server\\share\\doc.pdf"));
         assert!(!super::is_open_target_allowed("//server/share/doc.pdf"));
@@ -2773,7 +2955,8 @@ mod tests {
     }
 
     fn guard_temp_base(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("driftlet-guard-{}-{}", tag, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("driftlet-guard-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.canonicalize().unwrap()
@@ -2823,7 +3006,10 @@ mod tests {
 
         assert!(super::ensure_mutable_any_path(&skins, &config, &outside.join("ok.txt")).is_ok());
         // 尚不存在的深层目标（最深现存祖先重拼尾段）
-        assert!(super::ensure_mutable_any_path(&skins, &config, &outside.join("new").join("deep.txt")).is_ok());
+        assert!(
+            super::ensure_mutable_any_path(&skins, &config, &outside.join("new").join("deep.txt"))
+                .is_ok()
+        );
         // 前缀陷阱：分量级比较不会把 skins-evil / config.json 当成数据根
         assert!(super::ensure_mutable_any_path(&skins, &config, &base.join("skins-evil")).is_ok());
         assert!(super::ensure_mutable_any_path(&skins, &config, &base.join("config.json")).is_ok());
@@ -2831,10 +3017,8 @@ mod tests {
         // 必须从字符串构造测试路径：PathBuf::join("..") 在 verbatim 基底
         //（canonicalize 的产物）上会直接把 `..` 词法消掉（pop 尾部分量），
         // 生产路径无此问题——皮肤路径来自 JSON 字符串解析，`..` 原样进入
-        let dotdot = std::path::PathBuf::from(format!(
-            r"{}\outside\..\outside\ok.txt",
-            base.display()
-        ));
+        let dotdot =
+            std::path::PathBuf::from(format!(r"{}\outside\..\outside\ok.txt", base.display()));
         assert!(super::ensure_mutable_any_path(&skins, &config, &dotdot).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -2845,37 +3029,45 @@ mod tests {
         let base = guard_temp_base("case");
         let (skins, config) = make_data_roots(&base);
         // NTFS 大小写不敏感：现存分量经 canonicalize 拿真实大小写
-        assert!(super::ensure_mutable_any_path(
-            &skins,
-            &config,
-            &base.join("SKINS").join("clock").join("skin.json")
-        )
-        .is_err());
+        assert!(
+            super::ensure_mutable_any_path(
+                &skins,
+                &config,
+                &base.join("SKINS").join("clock").join("skin.json")
+            )
+            .is_err()
+        );
 
         // 数据根缺失（尚未创建）：现存祖先重拼后，尾段大小写变体也要拦
         //（否则皮肤可预植 skins/<id>/skin.json 绕过安装页权限确认）
         let gone = base.join("gone");
         let missing_skins = gone.join("skins");
         let missing_config = gone.join("config");
-        assert!(super::ensure_mutable_any_path(
-            &missing_skins,
-            &missing_config,
-            &gone.join("SKINS").join("planted").join("skin.json")
-        )
-        .is_err());
-        assert!(super::ensure_mutable_any_path(
-            &missing_skins,
-            &missing_config,
-            &gone.join("Config").join("config.json")
-        )
-        .is_err());
+        assert!(
+            super::ensure_mutable_any_path(
+                &missing_skins,
+                &missing_config,
+                &gone.join("SKINS").join("planted").join("skin.json")
+            )
+            .is_err()
+        );
+        assert!(
+            super::ensure_mutable_any_path(
+                &missing_skins,
+                &missing_config,
+                &gone.join("Config").join("config.json")
+            )
+            .is_err()
+        );
         // 缺失根的相邻路径不误伤
-        assert!(super::ensure_mutable_any_path(
-            &missing_skins,
-            &missing_config,
-            &gone.join("other").join("ok.txt")
-        )
-        .is_ok());
+        assert!(
+            super::ensure_mutable_any_path(
+                &missing_skins,
+                &missing_config,
+                &gone.join("other").join("ok.txt")
+            )
+            .is_ok()
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -2925,14 +3117,12 @@ mod tests {
 
         const NOMINAL_MHZ: f64 = 2808.0; // 本机 i5-8400，按实际机器调整
 
-        let mut freq = super::pdh::PdhMultiCounter::new(
-            "\\Processor Information(*)\\Processor Frequency",
-        )
-        .expect("freq counter");
-        let mut perf = super::pdh::PdhMultiCounter::new(
-            "\\Processor Information(*)\\% Processor Performance",
-        )
-        .expect("perf counter");
+        let mut freq =
+            super::pdh::PdhMultiCounter::new("\\Processor Information(*)\\Processor Frequency")
+                .expect("freq counter");
+        let mut perf =
+            super::pdh::PdhMultiCounter::new("\\Processor Information(*)\\% Processor Performance")
+                .expect("perf counter");
         let _ = freq.sample(); // 基线
         let _ = perf.sample();
 

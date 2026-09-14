@@ -3,7 +3,7 @@
 > [中文版](皮肤开发指南.md) | English
 
 > The complete API documentation and specification for skin creators. After reading this document you can develop, debug, package, and publish a Driftlet skin on your own.
-> This document covers Driftlet 1.x (currently 1.1.2). For internal implementation details (mechanisms that must not regress), see `docs/critical-mechanisms.md`.
+> This document covers Driftlet 1.x (currently 1.2.4). For internal implementation details (mechanisms that must not regress), see `docs/critical-mechanisms.md`.
 
 ---
 
@@ -203,7 +203,7 @@ Before a skin can call "sensitive capability" backend commands (§5.3), it must 
 | `media` | Low risk | `get_volume` / `get_media_info` / `get_audio_spectrum` (read volume, now-playing media info, and the system output spectrum) + `set_volume` / `set_mute` / `media_control` / `media_seek` (control volume and media playback/seek — one family of playback controls; reads and control share one permission) |
 | `notify` | Low risk | `show_notification` (pop a toast in the Windows notification center — visible annoyance only, no data exposure; split out of `system`) |
 | `sys_info` | Low risk | `get_cpu_info` / `get_gpu_info` / `get_memory_info` / `get_disks_info` / `get_disk_space` / `get_network_info` / `get_os_info` / `get_battery_info` / `get_monitors` / `get_system_theme` / `get_processes` / `get_idle_time` / `get_foreground_window_info` (read-only system and hardware status — including activity information such as the process list, foreground window title, and input idle time) |
-| `network` | Low risk | `http_request` (arbitrary HTTP requests — read responses beyond CORS with any method/headers; the page's restricted `fetch` channel stays ungated) |
+| `network` | Low risk | `http_request` (arbitrary public http(s) requests — read responses beyond CORS, custom methods/headers (six-method whitelist and local/private-network blocking in §5.3); the page's restricted `fetch` channel stays ungated) |
 | `open_link` | Low risk | `open_external` for http/https targets (opens web links in the default browser — a low-risk lane split out of `system`; `mailto:` / `ms-settings:` targets still require `system` — local paths are always rejected: `open_external` accepts only the URI whitelist (http(s)/mailto/ms-settings)) |
 
 "Risk" is the three-tier grading shown on the install wizard (see below) — display-only; backend enforcement remains a binary "declared / undeclared" check regardless of tier.
@@ -221,8 +221,9 @@ Rules:
 
 ### 3.1 Required Rules
 
+- **The floor for modern CSS = the host's runtime baseline, Chromium 111**: container queries (105+) and color-mix() (111+) are safe to use (the bundled isles skins are built on them); the installer and a startup check keep stale runtimes above the floor. Anything newer than 111 (e.g. the 125+ CSS math functions) needs your own `@supports` fallback.
 - **Keep all assets inside the skin folder** and reference them with relative paths (`<img src="bg.png">`). Skins are loaded via the `skin://` custom protocol and cannot access paths outside the folder.
-- Never write `skin://` asset references directly — on Windows, WebView2 does not support subresource loading over non-standard protocols and fails with `ERR_UNKNOWN_URL_SCHEME` (at runtime `skin://localhost/...` is rewritten into the `http://skin.localhost/...` form). The absolute form of a reference is `http://skin.localhost/<skin id>/<path>`, but it hardcodes the skin id into your code and renaming the folder means 404 — **always prefer relative paths**.
+- Never write `skin://` asset references directly — on Windows, WebView2 does not support subresource loading over non-standard protocols and fails with `ERR_UNKNOWN_URL_SCHEME` (at runtime `skin://localhost/...` is rewritten into the `http://skin.localhost/...` form). The absolute form of a reference is `http://skin.localhost/<skin folder name>/<path>` — the first segment is the **on-disk folder name** (not necessarily the skin id: with folder-drop installs the id may be a slugified derivative, and when the two differ, using the id is a guaranteed 404); it hardcodes the folder name into your code and renaming the folder means 404 — **always prefer relative paths**.
 - For transparency, set `body { background: transparent }` and paint the background on your own container.
 - **The layout must adapt to the window size**: no element may exceed the window's visible area — when the window shrinks, content must scale/reflow with it; neither overflow clipping nor window-level scrollbars are allowed. See §3.3 for how.
 - **Do not use `-webkit-app-region: drag`**. Use the `.drag-region` class for draggable areas instead (see §3.2).
@@ -240,11 +241,11 @@ Add the `.drag-region` class to an element, and the user can drag the window by 
 </div>
 ```
 
-Convention: make the whole shell a drag-region; interactive elements nested inside are unaffected — a press landing on `button` / `input` / `select` / `textarea` / `a` / `label` / `[contenteditable]` automatically skips dragging. Other elements that need exclusive `pointerdown` (e.g. list drag-sorting) should call `e.stopPropagation()` on that element to stop the bubbling.
+Convention: make the whole shell a drag-region; interactive elements nested inside are unaffected — a press landing on `button` / `input` / `select` / `textarea` / `a` / `label` / `[contenteditable="true"]` automatically skips dragging. Other elements that need exclusive `pointerdown` (e.g. list drag-sorting) should call `e.stopPropagation()` on that element to stop the bubbling.
 
 Note: with border drag-resize (`resizable`) enabled, the outermost 6px of the window is the resize hot zone and takes priority over dragging — pressing an element flush against the edge triggers resizing instead of moving (§2.2).
 
-Also: users can enable "Edge snapping" on the manager's "Window" tab — when a window is dragged near a screen edge or another skin window's edge it aligns automatically (screen edges win; the snap gap is customizable; after snapping, release and drag again to move away freely within 1 second, and the window won't leave the screen). Snapping is done at the app layer; skins need no adaptation.
+Also: users can enable "Edge snapping" on the manager's "Window" tab — when a window is dragged near a screen edge or another skin window's edge it aligns automatically (screen edges win; the snap gap is customizable; once snapped, keep dragging past the snap distance to detach). Snapping is done at the app layer; skins need no adaptation.
 
 ### 3.3 Size, DPI, and Responsive Layout
 
@@ -259,6 +260,17 @@ Also: users can enable "Edge snapping" on the manager's "Window" tab — when a 
   2. **Fill + internal scroll** (panels, lists): panel `height: 100%; overflow: hidden auto`; overly tall content scrolls inside the panel instead of stretching past the window. Reference: `demos/controls-demo`.
 - With many fixed blocks, use media queries as a fallback: hide decorative elements in short windows so the core functionality stays intact.
 - Self-check: in the manager, shrink the window to half and then double it — content should scale/reflow completely: no clipping, no overflow, no window-level scrollbars.
+
+### 3.5 Compatibility Authoring (Progressive Enhancement)
+
+The host's runtime floor is Chromium 111 (§3.1), but older runtimes always exist in the field (an offline machine can't update) — the right posture for a skin is **full fidelity above the floor, readable and usable below it** (degrade, don't collapse). Conventions (the bundled isles skins all follow them — use them as the reference implementation):
+
+- **Declaration order = fallback first, modern second**: write the same CSS property twice — the legacy-syntax fallback first, the modern version after. An old runtime judges the modern declaration invalid → the fallback applies; a new runtime overrides the fallback with the later one → zero behavior change.
+- **Container-query units**: a `font-size: clamp(13px, min(4.6vw, 9vh), 22px);` fallback line followed by the `min(4.6cqw, 9cqh)` modern line (the skin card IS the window, so vw/vh ≈ cqw/cqh, off only by the card padding's percent or two).
+- **`@container` layout breakpoints**: duplicate the block as an `@media` block with the same condition, placed first (old runtimes ignore @container wholesale; @media approximates it with window width — equivalent in the skin scenario).
+- **`color-mix()`**: fall back to a plain variable or a neutral `rgba(128,128,128,x)` gray (works in both light and dark themes); for photo-card scrims use a universal `rgba(0,0,0,x)` black veil.
+- **Features newer than the floor** (e.g. the 125+ CSS math functions, new JS APIs): probe with `@supports` or `'X' in window`, or gate on `__DESK_PP__.hostVersion`;
+- The degradation target is "layout holds, text readable, core function usable" — not pixel-parity with the new runtime.
 
 ### 3.4 Network and Security
 
@@ -317,7 +329,7 @@ Declare a `settings` array in `skin.json` and the manager's "Skin Settings" tab 
 | `datetime` | Date-time picker | `"YYYY-MM-DD HH:MM:SS"` | Second precision; empty string = unset; for countdown-target-style scenarios |
 | `password` | Password input | `"string"` | Masked display (with show/hide toggle), ≤256 characters, good for API keys. **The value is never injected into pages**; see §4.3 for how to read it |
 | `timerange` | Time range | `{ "start": "YYYY-MM-DD HH:MM:SS", "end": "..." }` | Second precision; empty string = unset |
-| `palette` | Color palette | `"#rrggbb"` or `"#rrggbbaa"` | Preset colors + custom color picking (the color panel has a built-in screen eyedropper) + opacity slider; `options` can customize the preset colors (values must be `#hex` — invalid values are filtered out by the manager and not rendered) |
+| `palette` | Color palette | `"#rrggbb"` or `"#rrggbbaa"` | Preset colors + custom color picking + opacity slider; `options` can customize the preset colors (values must be `#hex` — invalid values are filtered out by the manager and not rendered) |
 | `font` | Font picker | `"Microsoft YaHei UI"` | Enumerates installed system fonts; empty string = default |
 | `file` | File picker | `"D:\\pics\\cat.png"` | Manager-hosted system dialog; value is an absolute path (≤1024 chars), empty string = unset; `filters` restricts extensions (no dots); the skin can reference the file via the `file_system` permission's `__fs__` endpoint (§5.3) |
 | `directory` | Folder picker | `"D:\\data"` | Same, picking a folder; `filters` ignored |
@@ -461,7 +473,7 @@ Injected by the app before the page loads; ready to use when skin scripts run. T
 | `read_clipboard_text` / `write_clipboard_text` | `clipboard` | Clipboard read / write |
 | `get_mic_spectrum` | `mic` | Microphone spectrum |
 | `skin_read_any_file` / `skin_write_any_file` / `skin_list_any_dir` / `skin_create_any_dir` / `skin_delete_any_path` | `file_system` | Arbitrary-path file read / write / list / mkdir / delete (high risk) |
-| `skin_list_skins` | `control` | Enumerate installed skins (id/name/version/loaded/hidden) |
+| `skin_list_skins` | `control` | Enumerate installed skins (id/name_zh/name_en/version/author/loaded/hidden) |
 | `skin_get_window_config` / `skin_set_window_config` | self: free / `control` (others) | Read / modify a skin's window config (omit id = self) |
 | `skin_load` / `skin_unload` / `skin_reload` | self: free / `control` (others) | Load / unload / reload a skin (omit id = self) |
 
@@ -489,7 +501,7 @@ The public commands a skin can call fall into three groups: §5.2 system info (r
 
 ### 5.2 System Info (Read-Only) — Low-Risk Permissions `sys_info` / `media`
 
-Every command in this section is read-only and changes no system state, gated by two low-risk permissions (an undeclared call rejects with e.g. `皮肤 'my-skin' 未声明权限 'sys_info'`):
+Every command in this section is read-only and changes no system state, gated by two low-risk permissions (an undeclared call rejects with e.g. `Skin 'my-skin' has not declared the 'sys_info' permission` — the actual message follows the manager's UI language):
 
 - **`sys_info`**: every command in this section except the three below — hardware and system status (including activity information such as the process list, foreground window title, and input idle time);
 - **`media`**: `get_audio_spectrum`, `get_volume`, and `get_media_info` — audio and playback-state reads (same permission as the media control commands in §5.3: reads and control share it, both low risk).
@@ -518,6 +530,7 @@ Returns an array (reserved for multi-socket CPUs; always 1 entry on ordinary mac
 const gpus = await window.__DESK_PP__.invoke('get_gpu_info');
 // [{
 //   name: "NVIDIA GeForce RTX 3060",
+//   luid: "0x0001A2B3_0x0000F0E1",  // adapter LUID (the stable identifier — the value of the gpu_adapter control)
 //   gpu_type: "discrete",          // adapter type: "discrete" | "integrated"
 //   usage: 12.0,               // usage % (summed across engines, capped at 100)
 //   vram_total: 12884901888,   // VRAM total (bytes): discrete = dedicated, integrated = shared system memory
@@ -642,7 +655,7 @@ const m = await window.__DESK_PP__.invoke('get_media_info');
 // }
 ```
 
-Fields the player didn't report are empty strings; progress may likewise be 0. `position_secs` is a snapshot of the player's last report and does not advance on its own during playback (reporting cadence varies by player — interpolate yourself if you need a smooth progress bar). **Session picking = enumerate + prefer** (playing > has progress > has metadata), not what Windows considers the "current" session — in multi-session scenarios (e.g. a browser plus NetEase Cloud Music) you get the real one.
+Fields the player didn't report are empty strings; progress may likewise be 0. `position_secs` is advanced by the backend during playback (last-reported snapshot + time since that report × playback rate, then clamped to [0, duration]) — each call returns a current estimate, so plain polling drives a progress bar. **Session picking = enumerate + prefer** (playing > has progress > has metadata), not what Windows considers the "current" session — in multi-session scenarios (e.g. a browser plus NetEase Cloud Music) you get the real one.
 
 **Progress-bar seeking** (`media` permission, `media_seek`): positions by absolute seconds (input clamped to 0–86400 s, non-finite values become 0); when `seekable` is false (media-center-style controls often disable seeking) it returns `false` — not an error — so a skin should keep the progress bar read-only in that case:
 
@@ -681,7 +694,7 @@ const w = await window.__DESK_PP__.invoke('get_foreground_window_info');
 // { title: "Document - Word", pid: 12345, process_name: "WINWORD.EXE" }
 ```
 
-`title` is capped at 512 characters (truncated beyond that); `process_name` is an empty string when it can't be determined (e.g. protected processes without sufficient privileges).
+`title` is capped at 511 characters (truncated beyond that); `process_name` is an empty string when it can't be determined (e.g. protected processes without sufficient privileges).
 
 #### `get_monitors`
 
@@ -731,6 +744,12 @@ const entries = await window.__DESK_PP__.invoke('skin_list_dir', { path: 'data' 
 // delete a file (files only; cannot delete directories)
 await window.__DESK_PP__.invoke('skin_delete_file', { path: 'data/cache.json' });
 ```
+
+**The text channel is always UTF-8 (no BOM)**: writes store your JS string as UTF-8 bytes; reads decode strictly as UTF-8 and reject anything that isn't valid UTF-8 (typically GBK/ANSI-encoded files) with a "not a text file" error. Watch out when exchanging text files with external tools — many Windows tools (PowerShell 5.1's `Get-Content`/`Set-Content` default encoding, legacy Notepad, batch scripts) interpret **BOM-less text as ANSI/GBK**, garbling non-ASCII text. Practical advice:
+
+- Files your skin writes and reads itself: nothing to do — UTF-8 round-trips losslessly;
+- Export files meant for legacy tools: prepend `\uFEFF` (a BOM) so they detect UTF-8 (`skin_write_file` writes it verbatim; strip it on read-back with `text.replace(/^\uFEFF/, '')` before `JSON.parse`);
+- Reading GBK files produced externally: the text channel rejects them — use `binary: true` and transcode the base64 yourself.
 
 Limits:
 
@@ -863,6 +882,7 @@ await window.__DESK_PP__.invoke('skin_delete_any_path', { path: 'D:\\notes\\arch
 - Unlike the permission-free `skin_read_file` sandbox: these five have **no directory boundary** — the whole disk is reachable, so use them only when genuinely needed;
 - Failures reject with the raw system error (file not found, access denied, …) without wrapping — a skin may surface it to the user as-is;
 - Missing parent directories are created automatically on write (to create an empty directory use `skin_create_any_dir`);
+- The text channel is likewise **UTF-8 (no BOM)** with strict decoding — for the mojibake pitfalls and BOM trick when exchanging text files with external tools, see the encoding note in "File Read/Write" above;
 - Deletion is irreversible: a directory tree requires explicit `recursive: true` (so one command can't wipe a subtree by accident);
 - **Display references go through the `__fs__` endpoint**: a skin declaring `file_system` can reference external files by URL without touching JS memory (base64 is for data processing; images/video belong here)——
 
@@ -876,7 +896,7 @@ await window.__DESK_PP__.invoke('skin_delete_any_path', { path: 'D:\\notes\\arch
 Read/modify **any** skin's (including your own) window configuration — the same set the manager's "Window" tab edits:
 
 ```js
-// Enumeration entry: get all installed skins first (id/name/version/author/loaded/hidden)
+// Enumeration entry: get all installed skins first (id/name_zh/name_en/version/author/loaded/hidden)
 const list = await window.__DESK_PP__.invoke('skin_list_skins');
 
 const cfg = await window.__DESK_PP__.invoke('skin_get_window_config', { skinId: 'pomodoro' });
@@ -953,7 +973,7 @@ Writes the value of a custom setting item into `settings.json` in its own folder
 
 #### Console Output — Forwarded to the Host Log Automatically (Zero Integration)
 
-F12 DevTools is disabled by the platform in skin windows, so the injected bridge automatically forwards the page's console output to the host log — no code needed:
+F12 DevTools is disabled by the platform in skin windows (enable Settings → Advanced → Developer Mode for on-device debugging, then F12 / Ctrl+Shift+I opens it), so the injected bridge automatically forwards the page's console output to the host log — no code needed:
 
 - `console.log/info/debug` are recorded as info, `console.warn` as warning, `console.error` as error;
 - uncaught script exceptions (with file and line), unhandled Promise rejections, resource load failures (img/script/link), and CSP violations also land in the log as errors;
@@ -1002,7 +1022,7 @@ document.addEventListener('desk-skin-message', (e) => {
 });
 ```
 
-- `channel` is 1–64 chars; `payload` is any JSON value (≤16KB serialized);
+- `channel` is 1–64 bytes (UTF-8 byte count — non-ASCII names cap out lower, e.g. 3 bytes per CJK character); `payload` is any JSON value (≤16KB serialized);
 - you also receive your own broadcasts (filter by `from` when needed);
 - it only delivers DOM events and touches no host state, hence permission-free; a skin being unloaded won't receive (its window is gone from the registry).
 - **Permission-free means unauthenticated: channel names are public to every loaded skin, and any skin can post to any channel** — don't treat broadcast content as trusted input (don't act on a channel name alone); validate `from` and `payload` like any other event source on the page.
@@ -1017,7 +1037,7 @@ document.addEventListener('desk-skin-message', (e) => {
 
 ### 5.6 Error-Handling Conventions
 
-- When a command fails, the rejection value is a **human-readable message** (its language follows the manager UI) — fine for displaying in place or logging, but never branch your program logic on the message text.
+- When a command fails, the rejection value is a **human-readable message** (almost always in the manager's UI language; a few parameter-validation messages — e.g. from `skin_broadcast` / `skin_set_menu_items` / `http_request` — are hardcoded English) — fine for displaying in place or logging, but never branch your program logic on the message text.
 - "No data" is expressed through return values, not errors: queries return `null` or a flag (`get_media_info` resolves `null` with no playback session, `get_battery_info` uses `has_battery`, `get_foreground_window_info` is `null` in rare cases); only actions reject on failure (`media_control` with no session, `set_volume` failures, and so on).
 - To branch on host capabilities, read `__DESK_PP__.hostVersion` and compare numeric version segments — don't call-then-catch to probe whether a feature exists.
 
@@ -1087,7 +1107,7 @@ A skin is essentially a web page — layout, styles, and most logic can be debug
 | Command errors "has not declared the '...' permission" | Add the permission to `permissions` in `skin.json`, then **reload the skin** (permissions are read live on every call; no reinstall needed) |
 | Command errors "can only be called from the manager window" | You called a manager-only command — see §5.5; switch to the skin commands listed in this document |
 | Window position/size not as expected | Trust the "Position & Size" section of the config panel (logical pixels); check whether any element has a fixed size exceeding the window |
-| File read/write errors "invalid path" | Paths must be relative to the skin folder; no `..`, drive letters, or colons |
+| File read/write errors "Invalid path" | Paths must be relative to the skin folder; no `..`, drive letters, or colons |
 | Want to see a skin's output while it runs in the manager | Open Manager → Settings → Advanced → Logs and filter by your skin — console output and errors land in the log automatically (§5.4); use `skin_log` for explicit business events |
 
 ---
@@ -1109,7 +1129,7 @@ Pre-pack validation uses **exactly the same rules** as the install side (strongl
 
 - Structural errors (e.g. `window.width` written as a string, a nonexistent setting item `type`) are rejected outright with line/column positions;
 - a missing `version` prints a warning (not blocking, but update detection degrades — recommended to add it);
-- a malformed `min_host_version` (must be a numeric-segment version like `"1.0.5"`) is rejected outright;
+- a non-numeric-dotted `min_host_version` (e.g. `"1.2-beta"`) only prints a notice and does not block (same rule as the install side; a numeric-segment version like `"1.0.5"` is recommended);
 - auto-excluded: `settings.json*` (user data), `.git` / `.svn` / `node_modules` directories, existing `*.dskin` artifacts, `.DS_Store` / `Thumbs.db` / `desktop.ini`;
 - over-limit is rejected outright: 256 MB archive / 1 GB extracted / 10000 files.
 
@@ -1138,18 +1158,18 @@ The preview image is the user's first impression of your skin in the manager's l
 
 **Dimension facts** (why you don't need to fuss over capture pixels):
 
-- A capture = **the skin window's current physical pixel size** (logical window width/height × the current display's DPI scale), not a fixed value. For a good capture: size and stage the window the way you want it shown, then capture. Before writing, the manager automatically downscales the longest side to **640 px** (the list display area is only 226×112 — a full-size bitmap just wastes memory) — no need to shrink a large capture by hand, but **still compose for the display area's aspect ratio**.
-- The manager's list displays it in a fixed area of about **226 × 112 CSS px** (aspect ratio ≈ 2:1), scaled with `contain` — any excess margin reveals the dotted canvas underneath. **Images of any size display correctly**; the closer to 2:1, the less letterboxing.
+- A capture = **the skin window's current physical pixel size** (logical window width/height × the current display's DPI scale), not a fixed value. For a good capture: size and stage the window the way you want it shown, then capture. Before writing, the manager automatically downscales the longest side to **640 px** (the list display area is only 226×96 — a full-size bitmap just wastes memory) — no need to shrink a large capture by hand, but **still compose for the display area's aspect ratio**.
+- The manager's list displays it in a fixed area of about **226 × 96 CSS px** (aspect ratio ≈ 2.35:1), scaled with `contain` — any excess margin reveals the dotted canvas underneath. **Images of any size display correctly**; the closer to 2.35:1, the less letterboxing.
 
 **Recommended specs for a hand-designed image**:
 
 | Item | Recommendation |
 | --- | --- |
-| Aspect ratio | Around 2:1 (almost no letterboxing under `contain`) |
-| Resolution | **904 × 448** (4× the display area — crisp on high-DPI screens; 452 × 224 is the floor) |
+| Aspect ratio | Around 2.35:1 (almost no letterboxing under `contain`) |
+| Resolution | **904 × 384** (4× the display area — crisp on high-DPI screens; 452 × 192 is the floor) |
 | Format | PNG (transparency allowed) or JPG (smaller when you don't need transparency) |
 | File size | ≤ 200 KB (smooth decoding while the list scrolls; oversized files stutter) |
-| Dimension cap | Longest side ≤ **1280 px** — a hard check at both install and packaging, rejected beyond it (decoded pixels ≈ width×height×4 bytes stay resident in the manager process; a 112px-tall card never needs a giant original) |
+| Dimension cap | Longest side ≤ **1280 px** — a hard check at both install and packaging, rejected beyond it (decoded pixels ≈ width×height×4 bytes stay resident in the manager process; a 96px-tall card never needs a giant original) |
 | Content | The skin's most representative state (the preview is shown pure in the manager — no text overlaid on it) |
 
 Design note: at 226 px wide in the manager, full-desktop-screenshot detail turns to mush. **A zoomed-in fragment, a simplified composition, one clear subject** reads as your skin far better than a pixel-faithful 4K capture.
@@ -1166,7 +1186,7 @@ Go through these one by one before packaging:
 - [ ] No opaque background covering the desktop under transparency
 - [ ] Drag areas use `.drag-region`; no `-webkit-app-region: drag`
 - [ ] Verified in the manager by shrinking the window to half and doubling it: content adapts fully — no clipping, no window-level scrollbars (§3.3)
-- [ ] If `settings` is declared: `key`s all unique, types correct (one of the 22), `default`s match their types
+- [ ] If `settings` is declared: `key`s all unique, types correct (one of the 23), `default`s match their types
 - [ ] Group text: either skip `group_en` entirely or set it for **every** control in the group (avoids two split cards in the English UI, §4.5); every field that needs bilingual has its `*_en` (§4.5)
 - [ ] Setting reads have fallbacks (`?.` + `??`), and `desk-setting-changed` is listened to for live application
 - [ ] `password`-type values are read via `skin_get_setting`, not relying on values in `__DESK_PP__.settings` (always empty strings at serve time; a manager-side save syncs them into this window at runtime — never trust the baked copy)
@@ -1190,7 +1210,7 @@ The repo ships seven example skins. `controls-demo` is the reference implementat
 | `demos/media-hub` | Volume read/set/mute, SMTC media info (cover / progress / status / seekable; 1s polling, paused while the page is hidden with a catch-up poll when it becomes visible again) and playback control (play_pause/next/previous) + draggable progress-bar seeking (`media_seek`, locks read-only when the source doesn't support it), dual-source spectrum from system loopback and microphone (live canvas bars + peak line, paused while hidden, device auto-released ~30s after polling stops), toast notifications; permissions `media` + `mic` + `notify` |
 | `demos/toolbox` | Clipboard read/write, skin-directory file write/read/list/delete, read-only registry (preset + custom keys), command execution (preset `ver`/`ipconfig` + custom, showing code/stdout/stderr), opening links (URI whitelist http(s)/mailto/ms-settings, including a rejected local-path demo), `skin_get_setting` / `skin_set_setting` (the only read channel for `password` values, writing settings back, syncing manager-side edits via `desk-setting-changed`); permissions `registry` / `shell` / `clipboard` / `system` |
 | `demos/deepseek-balance` | Reference for networked skins: direct `fetch` of an external REST API (DeepSeek balance query — the server returns CORS allow headers, §3.4), the API key stored in a `password` setting and read via `skin_get_setting` (§4.3), the official whale logo (icon region cropped out of the wordmark SVG, inlined with `currentColor` so it tints with the theme), scheduled auto-queries (configurable interval) + pause while hidden / catch-up query on becoming visible + a manual refresh button, a configurable low-balance warning line (amber figure + badge), a Windows notification on dropping below the line (edge-triggered, re-arms after recovery), one-click top-up page via `open_external`, OK / low-balance / query-failed / unconfigured status badge, live-applied accent color and topped-up-balance toggle (granted balance shown only when present), Chinese/English bilingual; permissions `open_link` + `notify` (all low risk) |
-| `demos/power-tools` | Demo of the two high-risk permissions: arbitrary absolute-path file read/write (`skin_read_any_file` / `skin_write_any_file` — failures reject with the raw system error; binary via base64), and reading/patching any skin's window config (`skin_get_window_config` / `skin_set_window_config` — whole-patch validation, one-sided position/size merging, zoom before size); permissions `file_system` (high-risk red) + `control` (medium-risk yellow) |
+| `demos/power-tools` | Demo of the two elevated permissions — `file_system` (high risk) + `control` (medium risk): arbitrary absolute-path file read/write (`skin_read_any_file` / `skin_write_any_file` — failures reject with the raw system error; binary via base64), and reading/patching any skin's window config (`skin_get_window_config` / `skin_set_window_config` — whole-patch validation, one-sided position/size merging, zoom before size); permissions `file_system` (high-risk red) + `control` (medium-risk yellow) |
 | `demos/web-view` | Reference for iframe-embedded web skins (zero permissions): a local shell (drag-bar title strip + refresh button + status dot) embedding any site page in an iframe — the site URL is a setting (switching it in the manager swaps the page live), the bridge is fully functional (dragging / right-click menu / settings), cookies are shared with the WebView2 user-data folder (persist after one login), timed reload by reassigning the same src (cross-origin frames can't touch contentWindow) + an auto-refresh toggle (off = manual refresh only), pause while hidden / catch-up on visible, and a guidance empty state when unconfigured; requires the target site to allow framing (no `X-Frame-Options` / `frame-ancestors` restriction) |
 
 The seven skins `controls-demo` / `sys-monitor` / `media-hub` / `toolbox` / `deepseek-balance` / `power-tools` / `web-view` also follow: bilingual UI that follows the manager language, dynamic content rendered exclusively via `textContent` / DOM APIs, no crashes when the bridge is missing (plain-browser preview), and rejected-command error text displayed inline in the corresponding card.

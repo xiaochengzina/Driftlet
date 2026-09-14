@@ -96,9 +96,11 @@ pub fn processes(sys: &mut sysinfo::System, sort: &str, limit: usize) -> Process
         .collect();
 
     match sort {
-        "memory" => list.sort_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes)),
+        "memory" => list.sort_by_key(|p| std::cmp::Reverse(p.memory_bytes)),
         _ => list.sort_by(|a, b| {
-            b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal)
+            b.cpu
+                .partial_cmp(&a.cpu)
+                .unwrap_or(std::cmp::Ordering::Equal)
         }),
     }
     list.truncate(limit.clamp(1, 100));
@@ -144,9 +146,10 @@ mod tests {
         assert!(list.total > 0);
         assert!(list.processes.len() <= 5);
         // Memory sort: descending
-        assert!(list
-            .processes
-            .windows(2)
-            .all(|w| w[0].memory_bytes >= w[1].memory_bytes));
+        assert!(
+            list.processes
+                .windows(2)
+                .all(|w| w[0].memory_bytes >= w[1].memory_bytes)
+        );
     }
 }

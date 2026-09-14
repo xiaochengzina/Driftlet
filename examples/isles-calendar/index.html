@@ -9,9 +9,12 @@
   .card {
     flex-direction: row;
     align-items: stretch;
+    gap: clamp(10px, min(4vw, 8vh), 22px); /* 旧运行时后备（无容器查询），下同 */
     gap: clamp(10px, min(4cqw, 8cqh), 22px);
     /* 文字深浅副色按卡面主色重新派生（自定义属性继承声明处计算值的经典坑） */
+    --isles-fg-2: var(--isles-fg); /* 旧运行时后备（无 color-mix）：副色取主色 */
     --isles-fg-2: color-mix(in srgb, var(--isles-fg) 62%, transparent);
+    --isles-fg-3: var(--isles-fg);
     --isles-fg-3: color-mix(in srgb, var(--isles-fg) 45%, transparent);
   }
 
@@ -19,12 +22,15 @@
     flex: none;
     /* 宽度上限：农历长行（星期一 · 七月廿六 · 白露）会把右区月历挤出卡——
        钉 42cqw + 省略号（无头截图实证：右区被顶出卡缘、末两列被裁） */
+    width: clamp(112px, 42vw, 170px);
     width: clamp(112px, 42cqw, 170px);
     display: flex;
     flex-direction: column;
     justify-content: space-between;
     min-width: 0;
+    padding-right: clamp(12px, min(4vw, 8vh), 20px);
     padding-right: clamp(12px, min(4cqw, 8cqh), 20px);
+    border-right: 1px solid rgba(128, 128, 128, 0.25);
     border-right: 1px solid color-mix(in srgb, var(--isles-fg) 8%, transparent);
   }
   #ym, #lunar { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -42,6 +48,7 @@
     display: flex;
     flex-direction: column;
     /* 导航行/星期头/网格三段之间给足呼吸（原 1.2cqh 过紧，实机反馈间距） */
+    gap: clamp(4px, 2.4vh, 8px);
     gap: clamp(4px, 2.4cqh, 8px);
   }
   .mhead { display: flex; align-items: center; }
@@ -58,9 +65,11 @@
     font-family: inherit;
     transition: background 0.15s ease;
   }
-  #mtitle:hover { background: color-mix(in srgb, var(--isles-fg) 7%, transparent); }   /* 可点性可视化 */
+  #mtitle:hover { background: rgba(128, 128, 128, 0.12); background: color-mix(in srgb, var(--isles-fg) 7%, transparent); }   /* 可点性可视化 */
   .mnav {
+    width: clamp(20px, min(8vw, 16vh), 26px);
     width: clamp(20px, min(8cqw, 16cqh), 26px);
+    height: clamp(20px, min(8vw, 16vh), 26px);
     height: clamp(20px, min(8cqw, 16cqh), 26px);
     flex: none;
     /* 幽灵化：默认无钮底，悬停才浮现 chip（实机反馈） */
@@ -68,6 +77,7 @@
     color: var(--isles-fg-3);
   }
   .mnav:hover {
+    background: rgba(128, 128, 128, 0.12);
     background: color-mix(in srgb, var(--isles-ink) 8%, transparent);
     color: var(--isles-fg-2);
   }
@@ -77,11 +87,13 @@
   }
   .whead span {
     text-align: center;
+    font-size: clamp(9px, min(3vw, 6vh), 12px);
     font-size: clamp(9px, min(3cqw, 6cqh), 12px);
     letter-spacing: 0.08em;
     color: var(--isles-fg-3);
   }
-  .grid { flex: 1; grid-auto-rows: 1fr; min-height: 0; row-gap: clamp(1px, 1cqh, 3px); }
+  .grid { flex: 1; grid-auto-rows: 1fr; min-height: 0; row-gap: clamp(1px, 1vh, 3px);
+    row-gap: clamp(1px, 1cqh, 3px); }
   .cell {
     display: grid;
     place-items: center;
@@ -101,6 +113,7 @@
     width: 1.7em;
     height: 1.7em;
     border-radius: 50%;
+    font-size: clamp(9px, min(3.2vw, 6.5vh), 13px);
     font-size: clamp(9px, min(3.2cqw, 6.5cqh), 13px);
     font-variant-numeric: tabular-nums;
     color: var(--isles-fg-2);
@@ -109,7 +122,7 @@
   .cell.other > span { color: var(--isles-fg-3); opacity: 0.55; }
   /* 周末两列弱化（今天/选中/节日态让位） */
   .cell.weekend:not(.today):not(.sel):not(.fest-day) > span { color: var(--isles-fg-3); }
-  .cell:hover > span { background: color-mix(in srgb, var(--isles-fg) 8%, transparent); }
+  .cell:hover > span { background: rgba(128, 128, 128, 0.12); background: color-mix(in srgb, var(--isles-fg) 8%, transparent); }
   .cell:active > span { transform: scale(0.85); }   /* 按压回弹（与族工具钮同律） */
   /* 节日日 = accent 数字（被选中/今天态另有所属时让位） */
   .cell.fest-day:not(.today):not(.sel) > span { color: var(--isles-accent); font-weight: 600; }
@@ -130,6 +143,7 @@
     background: transparent;
     padding: 0;
     font-family: inherit;
+    font-size: clamp(11px, min(3.6vw, 7vh), 15px);
     font-size: clamp(11px, min(3.6cqw, 7cqh), 15px);
     letter-spacing: 0.1em;
     color: var(--isles-accent);
@@ -142,6 +156,23 @@
   .mtop, .mbot { display: none; }
 
   /* ── M 小方（≤240px 宽）：只看今天——大日子居中、顶/底行悬浮，月历隐藏 ── */
+  /* 旧运行时后备：无容器查询时按视口宽降级（皮肤卡即窗口，vw≈cqw） */
+  @media (max-width: 240px) {
+    .side { position: absolute; inset: 0; width: auto; padding-right: 0; border-right: none; align-items: center; justify-content: center; z-index: 1; }
+    #day { font-weight: 500; }
+    #ym, #lunar, #fest { display: none; }
+    .month { display: none; }
+    .mtop, .mbot {
+      display: block;
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      text-align: center;
+      z-index: 1;
+    }
+    .mtop { top: 12px; }
+    .mbot { bottom: 12px; }
+  }
   @container (max-width: 240px) {
     .side { position: absolute; inset: 0; width: auto; padding-right: 0; border-right: none; align-items: center; justify-content: center; z-index: 1; }
     #day { font-weight: 500; }   /* 小档数字加重 */

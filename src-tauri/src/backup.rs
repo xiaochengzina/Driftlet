@@ -19,9 +19,9 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use zip::write::SimpleFileOptions;
 
-use crate::i18n::{tr, trf, Key};
-use crate::skin::{config, loader, package};
 use crate::AppState;
+use crate::i18n::{Key, tr, trf};
+use crate::skin::{config, loader, package};
 
 const MANIFEST_NAME: &str = "driftlet-backup.json";
 const BACKUP_FORMAT: u64 = 1;
@@ -36,7 +36,12 @@ const MAX_FILES: usize = 5000;
 /// `AppState.install_lock`（guard 由异步命令获取并持有到本函数返回）——
 /// 导入 Phase 2/3 的 rename+copy 窗口期 skins/ 缺失或半拷贝，此刻并发
 /// 导出会产出不完整备份。
-pub fn export_backup(config_dir: &Path, skins_dir: &Path, dest: &Path, lang: &str) -> Result<(), String> {
+pub fn export_backup(
+    config_dir: &Path,
+    skins_dir: &Path,
+    dest: &Path,
+    lang: &str,
+) -> Result<(), String> {
     // 导出目标不得位于两个源目录内：add_dir 会把正在写入的 zip 自身包进去
     //（自包含、体积失控、产物损坏）。canonicalize dest 的父目录做包含性判定
     //（dest 尚不存在，比父目录）。
@@ -47,8 +52,11 @@ pub fn export_backup(config_dir: &Path, skins_dir: &Path, dest: &Path, lang: &st
         for src in [config_dir, skins_dir] {
             let src_c = canon(src);
             if parent_c == src_c || parent_c.starts_with(&src_c) {
-                return Err(trf(lang, Key::ExportBackupFailed,
-                    &["destination must not be inside config/ or skins/"]));
+                return Err(trf(
+                    lang,
+                    Key::ExportBackupFailed,
+                    &["destination must not be inside config/ or skins/"],
+                ));
             }
         }
     }
@@ -58,7 +66,8 @@ pub fn export_backup(config_dir: &Path, skins_dir: &Path, dest: &Path, lang: &st
         let file = fs::File::create(&tmp)
             .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
         let mut zip = zip::ZipWriter::new(file);
-        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         let manifest = serde_json::json!({
             "format": BACKUP_FORMAT,
@@ -128,7 +137,10 @@ fn add_dir(
             let entry = entry.map_err(fail)?;
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(".staging-") || name.ends_with(".old") || name.ends_with(".import-old") {
+            if name.starts_with(".staging-")
+                || name.ends_with(".old")
+                || name.ends_with(".import-old")
+            {
                 continue;
             }
             // reparse point（junction/symlink）不跟随：跳过整个目录/文件
@@ -158,12 +170,18 @@ fn add_dir(
             files += 1;
             total = total.saturating_add(meta.len());
             if files > MAX_FILES {
-                return Err(trf(lang, Key::ExportBackupFailed,
-                    &[&format!("too many files (> {})", MAX_FILES)]));
+                return Err(trf(
+                    lang,
+                    Key::ExportBackupFailed,
+                    &[&format!("too many files (> {})", MAX_FILES)],
+                ));
             }
             if total > MAX_TOTAL_BYTES {
-                return Err(trf(lang, Key::ExportBackupFailed,
-                    &[&format!("backup too large (> {} bytes)", MAX_TOTAL_BYTES)]));
+                return Err(trf(
+                    lang,
+                    Key::ExportBackupFailed,
+                    &[&format!("backup too large (> {} bytes)", MAX_TOTAL_BYTES)],
+                ));
             }
             zip.start_file(format!("{}/{}", prefix, rel_slash), opts)
                 .map_err(|e| trf(lang, Key::ExportBackupFailed, &[&e.to_string()]))?;
@@ -226,9 +244,9 @@ pub fn inspect_backup(package_path: &Path, lang: &str) -> Result<BackupInspectio
                 Ok(t) if t.len() <= loader::MAX_MANIFEST_BYTES as usize => t,
                 _ => continue,
             };
-            let Ok(manifest) =
-                serde_json::from_str::<crate::skin::types::SkinManifest>(text.trim_start_matches('\u{feff}'))
-            else {
+            let Ok(manifest) = serde_json::from_str::<crate::skin::types::SkinManifest>(
+                text.trim_start_matches('\u{feff}'),
+            ) else {
                 continue;
             };
             skins.push(BackupSkinInfo {
@@ -277,7 +295,11 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
                 return Err(e);
             }
             let ids = unloaded.join(", ");
-            return Err(format!("{} {}", e, trf(&lang, Key::ImportPartialUnloaded, &[&ids])));
+            return Err(format!(
+                "{} {}",
+                e,
+                trf(&lang, Key::ImportPartialUnloaded, &[&ids])
+            ));
         }
         unloaded.push(id);
     }
@@ -290,8 +312,16 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
     let lang2 = lang.clone();
     let phase3 = tauri::async_runtime::spawn_blocking(move || {
         let state2 = app2.state::<AppState>();
-        let _settings_guard = state2.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
-        replace_data_dirs(&state2.config_dir, &state2.skins_dir, &extracted_path, &lang2)
+        let _settings_guard = state2
+            .settings_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        replace_data_dirs(
+            &state2.config_dir,
+            &state2.skins_dir,
+            &extracted_path,
+            &lang2,
+        )
     })
     .await
     .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?;
@@ -300,7 +330,11 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
             return Err(e);
         }
         let ids = unloaded.join(", ");
-        return Err(format!("{} {}", e, trf(&lang, Key::ImportPartialUnloaded, &[&ids])));
+        return Err(format!(
+            "{} {}",
+            e,
+            trf(&lang, Key::ImportPartialUnloaded, &[&ids])
+        ));
     }
 
     // Phase 4: rebuild runtime state from the imported files.  Individual
@@ -319,6 +353,7 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
 ///   布局方案（按 id 并集、备份版胜——维护者实机定案：备份 = 用户全量
 ///   数据，方案不随选择性导入丢失；引用未导入皮肤的条目保留，应用时
 ///   skipped 提示）；分组归属不导入（本地组保留，选中皮肤落「未分组」）。
+///
 /// 返回（成功导入的 id 列表，选中但备份中不存在的 id 列表）。
 pub async fn import_backup_selective(
     app: AppHandle,
@@ -392,7 +427,11 @@ pub async fn import_backup_selective(
                 return Err(e);
             }
             let ids = unloaded.join(", ");
-            return Err(format!("{} {}", e, trf(&lang, Key::ImportPartialUnloaded, &[&ids])));
+            return Err(format!(
+                "{} {}",
+                e,
+                trf(&lang, Key::ImportPartialUnloaded, &[&ids])
+            ));
         }
         unloaded.push(id);
     }
@@ -405,7 +444,10 @@ pub async fn import_backup_selective(
     let lang2 = lang.clone();
     let phase3 = tauri::async_runtime::spawn_blocking(move || {
         let state2 = app2.state::<AppState>();
-        let _settings_guard = state2.settings_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _settings_guard = state2
+            .settings_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         swap_selected_skins(&state2.skins_dir, &to_import2, &lang2)
     })
     .await
@@ -415,7 +457,11 @@ pub async fn import_backup_selective(
             return Err(e);
         }
         let ids = unloaded.join(", ");
-        return Err(format!("{} {}", e, trf(&lang, Key::ImportPartialUnloaded, &[&ids])));
+        return Err(format!(
+            "{} {}",
+            e,
+            trf(&lang, Key::ImportPartialUnloaded, &[&ids])
+        ));
     }
 
     // Phase 4: config 只并入选中项（skin_settings 覆盖、loaded_skins 并集），
@@ -424,8 +470,9 @@ pub async fn import_backup_selective(
     // 并集、备份版胜——方案引用未导入皮肤的条目保留，应用时 skipped 机制
     // 单列提示，不在这里剃掉。
     let loaded_now: Vec<String> = {
-        let backup_cfg_text = fs::read_to_string(extracted.path().join("config").join("config.json"))
-            .map_err(|e| trf(&lang, Key::ImportBackupFailed, &[&e.to_string()]))?;
+        let backup_cfg_text =
+            fs::read_to_string(extracted.path().join("config").join("config.json"))
+                .map_err(|e| trf(&lang, Key::ImportBackupFailed, &[&e.to_string()]))?;
         let mut backup_cfg: crate::skin::types::AppConfig =
             serde_json::from_str(backup_cfg_text.trim_start_matches('\u{feff}'))
                 .map_err(|e| trf(&lang, Key::ImportBackupFailed, &[&e.to_string()]))?;
@@ -588,8 +635,8 @@ fn extract_backup(package_path: &Path, lang: &str) -> Result<TempDirGuard, Strin
         return Err(tr(lang, Key::BackupTooLarge).to_string());
     }
 
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|_| tr(lang, Key::BackupNotZip).to_string())?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|_| tr(lang, Key::BackupNotZip).to_string())?;
     if archive.len() > MAX_FILES {
         return Err(tr(lang, Key::BackupTooManyFiles).to_string());
     }
@@ -602,7 +649,8 @@ fn extract_backup(package_path: &Path, lang: &str) -> Result<TempDirGuard, Strin
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    fs::create_dir_all(&temp_dir).map_err(|e| trf(lang, Key::CreateTempDirFailed, &[&e.to_string()]))?;
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| trf(lang, Key::CreateTempDirFailed, &[&e.to_string()]))?;
 
     let guard = TempDirGuard(temp_dir.clone());
     let mut total: u64 = 0;
@@ -648,7 +696,11 @@ fn validate_backup(dir: &Path, lang: &str) -> Result<(), String> {
             serde_json::from_str(&text).map_err(|_| tr(lang, Key::InvalidBackup).to_string())?;
         let format = value.get("format").and_then(|f| f.as_u64()).unwrap_or(0);
         if format != BACKUP_FORMAT {
-            return Err(trf(lang, Key::BackupFormatUnsupported, &[&format.to_string()]));
+            return Err(trf(
+                lang,
+                Key::BackupFormatUnsupported,
+                &[&format.to_string()],
+            ));
         }
     }
     Ok(())
@@ -657,7 +709,12 @@ fn validate_backup(dir: &Path, lang: &str) -> Result<(), String> {
 /// Swap both data dirs with the extracted backup.  Both live dirs are first
 /// renamed aside (`<name>.import-old`); any failure removes the partials and
 /// renames them back, so a failed import leaves the original state intact.
-fn replace_data_dirs(config_dir: &Path, skins_dir: &Path, extracted: &Path, lang: &str) -> Result<(), String> {
+fn replace_data_dirs(
+    config_dir: &Path,
+    skins_dir: &Path,
+    extracted: &Path,
+    lang: &str,
+) -> Result<(), String> {
     let fail = |e: io::Error| trf(lang, Key::ImportBackupFailed, &[&e.to_string()]);
     let cfg_old = import_old_sibling(config_dir);
     let sk_old = import_old_sibling(skins_dir);
@@ -706,7 +763,9 @@ fn replace_data_dirs(config_dir: &Path, skins_dir: &Path, extracted: &Path, lang
 fn import_old_sibling(dir: &Path) -> PathBuf {
     dir.with_file_name(format!(
         "{}.import-old",
-        dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+        dir.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
     ))
 }
 
@@ -733,7 +792,10 @@ pub fn rollback_interrupted_import(config_dir: &Path, skins_dir: &Path) -> usize
         match fs::rename(&old, dir) {
             Ok(()) => {
                 rolled += 1;
-                log::warn!("import rollback: {:?} restored from interrupted import", dir);
+                log::warn!(
+                    "import rollback: {:?} restored from interrupted import",
+                    dir
+                );
             }
             Err(e) => log::error!("import rollback failed for {:?}: {}", dir, e),
         }
@@ -771,7 +833,9 @@ async fn rebuild_runtime(app: &AppHandle) {
     let hot_reload = cfg.hot_reload;
     let to_load = cfg.loaded_skins.clone();
     *state.config.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
-    state.hot_reload_enabled.store(hot_reload, std::sync::atomic::Ordering::Relaxed);
+    state
+        .hot_reload_enabled
+        .store(hot_reload, std::sync::atomic::Ordering::Relaxed);
     *state.language.lock().unwrap_or_else(|e| e.into_inner()) = language.clone();
     crate::tray::rebuild_tray_menu(app, &language);
 
@@ -824,7 +888,10 @@ mod tests {
         fs::create_dir_all(&old_cfg).unwrap();
         fs::write(old_cfg.join("config.json"), r#"{"version":2}"#).unwrap();
         assert_eq!(rollback_interrupted_import(&config_dir, &skins_dir), 1);
-        assert!(config_dir.join("config.json").is_file(), "旧数据必须回滚就位");
+        assert!(
+            config_dir.join("config.json").is_file(),
+            "旧数据必须回滚就位"
+        );
         assert!(!old_cfg.exists(), "回滚后 .import-old 必须消失");
 
         // 形态 2：②中途崩——半成品新目录与完好旧副本并存（旧语义会删旧留半）
@@ -832,7 +899,10 @@ mod tests {
         fs::create_dir_all(&old_cfg).unwrap();
         fs::write(old_cfg.join("config.json"), r#"{"version":2}"#).unwrap();
         assert_eq!(rollback_interrupted_import(&config_dir, &skins_dir), 1);
-        assert!(config_dir.join("config.json").is_file(), "半成品必须被旧副本覆盖");
+        assert!(
+            config_dir.join("config.json").is_file(),
+            "半成品必须被旧副本覆盖"
+        );
         assert!(!old_cfg.exists());
 
         // 形态 3：③删旧前崩——新目录完好、旧副本也在（回滚旧副本=丢已完成
@@ -842,7 +912,10 @@ mod tests {
         fs::write(old_cfg.join("config.json"), r#"{"version":2}"#).unwrap();
         assert_eq!(rollback_interrupted_import(&config_dir, &skins_dir), 1);
         let text = fs::read_to_string(config_dir.join("config.json")).unwrap();
-        assert!(text.contains("\"version\":2"), "并存时旧副本优先（安全方向）");
+        assert!(
+            text.contains("\"version\":2"),
+            "并存时旧副本优先（安全方向）"
+        );
 
         // 无残留 = 零动作
         assert_eq!(rollback_interrupted_import(&config_dir, &skins_dir), 0);
@@ -856,9 +929,13 @@ mod tests {
         let (config_dir, skins_dir) = make_data_dirs(&root.0);
         let dest = root.0.join("backup.zip");
         export_backup(&config_dir, &skins_dir, &dest, "zh-CN").unwrap();
-        let info = inspect_backup(&dest, "zh-CN").unwrap_or_else(|e| panic!("inspect failed: {}", e));
+        let info =
+            inspect_backup(&dest, "zh-CN").unwrap_or_else(|e| panic!("inspect failed: {}", e));
         assert_eq!(info.path, dest.to_string_lossy());
-        assert!(info.skins.iter().any(|s| s.id == "clock"), "包内皮肤必须列出");
+        assert!(
+            info.skins.iter().any(|s| s.id == "clock"),
+            "包内皮肤必须列出"
+        );
         assert_eq!(
             info.app_version.as_deref(),
             Some(env!("CARGO_PKG_VERSION")),
@@ -911,7 +988,11 @@ mod tests {
         fs::create_dir_all(&config_dir).unwrap();
         fs::create_dir_all(&skins_dir).unwrap();
         fs::write(config_dir.join("config.json"), r#"{"version":2}"#).unwrap();
-        fs::write(skins_dir.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(
+            skins_dir.join("skin.json"),
+            r#"{"id":"clock","name":"Clock"}"#,
+        )
+        .unwrap();
         fs::write(skins_dir.join("index.html"), "<html></html>").unwrap();
         fs::write(skins_dir.join("settings.json"), r#"{"city":"shanghai"}"#).unwrap();
         // 应被跳过的暂存残留
@@ -932,7 +1013,11 @@ mod tests {
         while let Some(dir) = stack.pop() {
             for entry in fs::read_dir(&dir).unwrap().flatten() {
                 let path = entry.path();
-                let rel = path.strip_prefix(src).unwrap().to_string_lossy().replace('\\', "/");
+                let rel = path
+                    .strip_prefix(src)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 if path.is_dir() {
                     stack.push(path);
                 } else {
@@ -982,11 +1067,29 @@ mod tests {
 
         // 重新打开校验条目名
         let archive = zip::ZipArchive::new(fs::File::open(&zip_path).unwrap()).unwrap();
-        let names: Vec<String> = (0..archive.len()).map(|i| archive.name_for_index(i).unwrap().to_string()).collect();
-        assert!(names.contains(&"config/config.json".to_string()), "{:?}", names);
-        assert!(names.contains(&"skins/clock/skin.json".to_string()), "{:?}", names);
-        assert!(names.contains(&"skins/clock/settings.json".to_string()), "{:?}", names);
-        assert!(!names.iter().any(|n| n.contains(".staging-")), "{:?}", names);
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.name_for_index(i).unwrap().to_string())
+            .collect();
+        assert!(
+            names.contains(&"config/config.json".to_string()),
+            "{:?}",
+            names
+        );
+        assert!(
+            names.contains(&"skins/clock/skin.json".to_string()),
+            "{:?}",
+            names
+        );
+        assert!(
+            names.contains(&"skins/clock/settings.json".to_string()),
+            "{:?}",
+            names
+        );
+        assert!(
+            !names.iter().any(|n| n.contains(".staging-")),
+            "{:?}",
+            names
+        );
         assert!(!names.iter().any(|n| n.contains(".old")), "{:?}", names);
     }
 
@@ -1028,7 +1131,11 @@ mod tests {
         let (config_dir, skins_dir) = make_data_dirs(&root.0);
         let extracted = root.0.join("extracted");
         fs::create_dir_all(extracted.join("config")).unwrap();
-        fs::write(extracted.join("config").join("config.json"), r#"{"version":3}"#).unwrap();
+        fs::write(
+            extracted.join("config").join("config.json"),
+            r#"{"version":3}"#,
+        )
+        .unwrap();
         // skins 里埋一个超过 32 层的嵌套，触发 copy_dir_recursive 限深失败
         let mut deep = extracted.join("skins");
         for _ in 0..40 {
@@ -1039,7 +1146,10 @@ mod tests {
 
         assert!(replace_data_dirs(&config_dir, &skins_dir, &extracted, "zh-CN").is_err());
         // 回滚：原数据原样恢复，无暂存残留
-        assert_eq!(fs::read_to_string(config_dir.join("config.json")).unwrap(), r#"{"version":2}"#);
+        assert_eq!(
+            fs::read_to_string(config_dir.join("config.json")).unwrap(),
+            r#"{"version":2}"#
+        );
         assert!(skins_dir.join("clock").join("skin.json").is_file());
         assert!(!import_old_sibling(&config_dir).exists());
         assert!(!import_old_sibling(&skins_dir).exists());
@@ -1052,11 +1162,22 @@ mod tests {
         let extracted = root.0.join("extracted");
         fs::create_dir_all(extracted.join("config")).unwrap();
         fs::create_dir_all(extracted.join("skins").join("dock")).unwrap();
-        fs::write(extracted.join("config").join("config.json"), r#"{"version":3}"#).unwrap();
-        fs::write(extracted.join("skins").join("dock").join("skin.json"), r#"{"id":"dock"}"#).unwrap();
+        fs::write(
+            extracted.join("config").join("config.json"),
+            r#"{"version":3}"#,
+        )
+        .unwrap();
+        fs::write(
+            extracted.join("skins").join("dock").join("skin.json"),
+            r#"{"id":"dock"}"#,
+        )
+        .unwrap();
 
         replace_data_dirs(&config_dir, &skins_dir, &extracted, "zh-CN").unwrap();
-        assert_eq!(fs::read_to_string(config_dir.join("config.json")).unwrap(), r#"{"version":3}"#);
+        assert_eq!(
+            fs::read_to_string(config_dir.join("config.json")).unwrap(),
+            r#"{"version":3}"#
+        );
         assert!(skins_dir.join("dock").join("skin.json").is_file());
         assert!(!skins_dir.join("clock").exists());
         assert!(!import_old_sibling(&config_dir).exists());
@@ -1133,7 +1254,12 @@ mod tests {
         merge_backup_layouts(&mut cfg, backup);
 
         assert_eq!(cfg.layouts.len(), 3);
-        let name = |id: &str| cfg.layouts.iter().find(|l| l.id == id).map(|l| l.name.as_str());
+        let name = |id: &str| {
+            cfg.layouts
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| l.name.as_str())
+        };
         assert_eq!(name("l-1"), Some("本地方案"), "本地独有方案保留");
         assert_eq!(name("l-2"), Some("备份版"), "同 id 备份版胜");
         assert_eq!(name("l-3"), Some("备份独有"), "备份独有方案并入");
@@ -1148,14 +1274,22 @@ mod tests {
         // 本地：文件夹名与 id 不同名的既有皮肤（替换时必须保这个命名）
         let local_dir = skins_dir.join("clock-old");
         fs::create_dir_all(&local_dir).unwrap();
-        fs::write(local_dir.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(
+            local_dir.join("skin.json"),
+            r#"{"id":"clock","name":"Clock"}"#,
+        )
+        .unwrap();
         fs::write(local_dir.join("index.html"), "<html>local</html>").unwrap();
         fs::write(local_dir.join("local.txt"), "keep-out").unwrap();
         // 备份内容：同 id（clock）+ 一个新皮肤（dock）
         let pkg = root.0.join("pkg");
         let pkg_clock = pkg.join("clock-pkg");
         fs::create_dir_all(&pkg_clock).unwrap();
-        fs::write(pkg_clock.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(
+            pkg_clock.join("skin.json"),
+            r#"{"id":"clock","name":"Clock"}"#,
+        )
+        .unwrap();
         fs::write(pkg_clock.join("index.html"), "<html>pkg</html>").unwrap();
         let pkg_dock = pkg.join("dock");
         fs::create_dir_all(&pkg_dock).unwrap();
@@ -1164,13 +1298,19 @@ mod tests {
 
         swap_selected_skins(
             &skins_dir,
-            &[("clock".to_string(), pkg_clock), ("dock".to_string(), pkg_dock)],
+            &[
+                ("clock".to_string(), pkg_clock),
+                ("dock".to_string(), pkg_dock),
+            ],
             "zh-CN",
         )
         .unwrap();
 
         // clock：本地文件夹名保留、内容换为备份版、本地旧文件被替掉、暂存清空
-        assert_eq!(fs::read_to_string(local_dir.join("index.html")).unwrap(), "<html>pkg</html>");
+        assert_eq!(
+            fs::read_to_string(local_dir.join("index.html")).unwrap(),
+            "<html>pkg</html>"
+        );
         assert!(!local_dir.join("local.txt").exists());
         assert!(!skins_dir.join(".clock-old.old").exists());
         // dock：备份文件夹名落位
@@ -1185,13 +1325,22 @@ mod tests {
         let skins_dir = root.0.join("skins");
         let local_dir = skins_dir.join("clock");
         fs::create_dir_all(&local_dir).unwrap();
-        fs::write(local_dir.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(
+            local_dir.join("skin.json"),
+            r#"{"id":"clock","name":"Clock"}"#,
+        )
+        .unwrap();
         fs::write(local_dir.join("index.html"), "<html>local</html>").unwrap();
         let missing = root.0.join("no-such-dir");
 
-        assert!(swap_selected_skins(&skins_dir, &[("clock".to_string(), missing)], "zh-CN").is_err());
+        assert!(
+            swap_selected_skins(&skins_dir, &[("clock".to_string(), missing)], "zh-CN").is_err()
+        );
         // 原皮肤原样恢复，暂存无残留
-        assert_eq!(fs::read_to_string(local_dir.join("index.html")).unwrap(), "<html>local</html>");
+        assert_eq!(
+            fs::read_to_string(local_dir.join("index.html")).unwrap(),
+            "<html>local</html>"
+        );
         assert!(!skins_dir.join(".clock.old").exists());
     }
 
@@ -1204,18 +1353,29 @@ mod tests {
         // 本地：文件夹 clock 承载 id=my-clock（文件夹名 ≠ id 的直装皮肤）
         let local_dir = skins_dir.join("clock");
         fs::create_dir_all(&local_dir).unwrap();
-        fs::write(local_dir.join("skin.json"), r#"{"id":"my-clock","name":"My Clock"}"#).unwrap();
+        fs::write(
+            local_dir.join("skin.json"),
+            r#"{"id":"my-clock","name":"My Clock"}"#,
+        )
+        .unwrap();
         fs::write(local_dir.join("index.html"), "<html>mine</html>").unwrap();
         // 备份：id=clock、文件夹 clock（本地无 id=clock → 走回退落位 skins/clock）
         let pkg_clock = root.0.join("pkg").join("clock");
         fs::create_dir_all(&pkg_clock).unwrap();
-        fs::write(pkg_clock.join("skin.json"), r#"{"id":"clock","name":"Clock"}"#).unwrap();
+        fs::write(
+            pkg_clock.join("skin.json"),
+            r#"{"id":"clock","name":"Clock"}"#,
+        )
+        .unwrap();
         fs::write(pkg_clock.join("index.html"), "<html>pkg</html>").unwrap();
 
         let result = swap_selected_skins(&skins_dir, &[("clock".to_string(), pkg_clock)], "zh-CN");
         assert!(result.is_err(), "撞名必须报错");
         // 被占文件夹原样保留（内容、结构均未动）
-        assert_eq!(fs::read_to_string(local_dir.join("index.html")).unwrap(), "<html>mine</html>");
+        assert_eq!(
+            fs::read_to_string(local_dir.join("index.html")).unwrap(),
+            "<html>mine</html>"
+        );
         let manifest = fs::read_to_string(local_dir.join("skin.json")).unwrap();
         assert!(manifest.contains("my-clock"), "占用者 manifest 不得被改写");
         assert!(!skins_dir.join(".clock.old").exists(), "不得产生让位残留");

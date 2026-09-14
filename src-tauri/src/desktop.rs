@@ -41,7 +41,6 @@
 ///     unpinning clears BOTH bits — tao never sets WS_EX_APPWINDOW on a
 ///     skip_taskbar window, so "restoring" it would add a bit the window
 ///     never had and the skin would appear in the taskbar / Alt+Tab.
-
 #[cfg(target_os = "windows")]
 mod imp {
     use std::ffi::OsString;
@@ -51,16 +50,17 @@ mod imp {
     use std::time::Duration;
 
     use tauri::AppHandle;
-    use windows::core::w;
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowExW, GetClassNameW, GetForegroundWindow, GetShellWindow, GetSystemMetrics,
-        GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
-        IsWindowVisible, SetWindowLongPtrW, SetWindowPos, ShowWindow, GW_CHILD, GW_HWNDNEXT,
-        GW_HWNDPREV, GWL_EXSTYLE, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, SET_WINDOW_POS_FLAGS,
-        SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-        SWP_NOSENDCHANGING, SWP_NOSIZE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        FindWindowExW, GW_CHILD, GW_HWNDNEXT, GW_HWNDPREV, GWL_EXSTYLE, GetClassNameW,
+        GetForegroundWindow, GetShellWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW,
+        GetWindowRect, GetWindowThreadProcessId, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, IsIconic,
+        IsWindow, IsWindowVisible, SET_WINDOW_POS_FLAGS, SW_HIDE, SW_RESTORE, SW_SHOW,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSENDCHANGING, SWP_NOSIZE,
+        SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST,
     };
+    use windows::core::w;
 
     /// How often the enforcement loop re-verifies that every pinned skin
     /// sits directly above the desktop-icons host.  Same cadence Rainmeter
@@ -97,14 +97,16 @@ mod imp {
             let inner = Arc::new(Mutex::new(Inner { skins: Vec::new() }));
 
             let i = inner.clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(Duration::from_millis(ENFORCE_INTERVAL_MS));
-                // 值守线程 panic 防护：enforce 一 panic 置底功能静默永久
-                // 死亡（线程直接退出、无人知晓）——捕获并记录，下轮继续
-                if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    enforce_desktop_layer(&i);
-                })) {
-                    log::error!("pinner enforce panic: {:?}", e);
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_millis(ENFORCE_INTERVAL_MS));
+                    // 值守线程 panic 防护：enforce 一 panic 置底功能静默永久
+                    // 死亡（线程直接退出、无人知晓）——捕获并记录，下轮继续
+                    if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        enforce_desktop_layer(&i);
+                    })) {
+                        log::error!("pinner enforce panic: {:?}", e);
+                    }
                 }
             });
 
@@ -183,7 +185,11 @@ mod imp {
     /// The core loop: keep every pinned skin glued directly above the
     /// desktop-icons host.  Self-healing — safe to call at any time.
     fn enforce_desktop_layer(inner: &Arc<Mutex<Inner>>) {
-        let skins = inner.lock().unwrap_or_else(|e| e.into_inner()).skins.clone();
+        let skins = inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .skins
+            .clone();
         if skins.is_empty() {
             return;
         }
@@ -247,8 +253,7 @@ mod imp {
                 // covered skin would never be lifted.
                 let next = GetWindow(hwnd, GW_HWNDNEXT).unwrap_or(HWND(null_mut()));
                 let in_place = !next.0.is_null()
-                    && (next.0 == host.0
-                        || skins.iter().any(|(_, h)| *h == next.0 as isize));
+                    && (next.0 == host.0 || skins.iter().any(|(_, h)| *h == next.0 as isize));
                 if !in_place {
                     let prev = GetWindow(host, GW_HWNDPREV).unwrap_or(HWND(null_mut()));
                     let after = if prev.0.is_null() { HWND_TOP } else { prev };
@@ -314,8 +319,13 @@ mod imp {
             let mut candidates: Vec<HWND> = Vec::new();
 
             // Candidate 1: the shell window itself hosts the icons.
-            let shell_dv = FindWindowExW(Some(shell), Some(HWND(null_mut())), w!("SHELLDLL_DefView"), None)
-                .unwrap_or(HWND(null_mut()));
+            let shell_dv = FindWindowExW(
+                Some(shell),
+                Some(HWND(null_mut())),
+                w!("SHELLDLL_DefView"),
+                None,
+            )
+            .unwrap_or(HWND(null_mut()));
             if !shell_dv.0.is_null() && IsWindowVisible(shell_dv).as_bool() {
                 candidates.push(shell);
             }
@@ -334,8 +344,13 @@ mod imp {
                 if !belong_to_same_process(shell, workerw) {
                     continue;
                 }
-                let dv = FindWindowExW(Some(workerw), Some(HWND(null_mut())), w!("SHELLDLL_DefView"), None)
-                    .unwrap_or(HWND(null_mut()));
+                let dv = FindWindowExW(
+                    Some(workerw),
+                    Some(HWND(null_mut())),
+                    w!("SHELLDLL_DefView"),
+                    None,
+                )
+                .unwrap_or(HWND(null_mut()));
                 if !dv.0.is_null() && IsWindowVisible(dv).as_bool() {
                     candidates.push(workerw);
                 }
@@ -413,7 +428,10 @@ mod imp {
                 }
                 for s in surfaces {
                     if IsWindow(Some(s)).as_bool() {
-                        log::info!("migration: repaint wallpaper surface {:p} (hide->show)", s.0);
+                        log::info!(
+                            "migration: repaint wallpaper surface {:p} (hide->show)",
+                            s.0
+                        );
                         let _ = ShowWindow(s, SW_HIDE);
                         std::thread::sleep(Duration::from_millis(60));
                         let _ = ShowWindow(s, SW_SHOW);
@@ -434,8 +452,10 @@ mod imp {
             if GetWindowRect(h, &mut rc).is_err() {
                 return false;
             }
-            (rc.right - rc.left) >= GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN)
-                && (rc.bottom - rc.top) >= GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN)
+            (rc.right - rc.left)
+                >= GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN)
+                && (rc.bottom - rc.top)
+                    >= GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN)
         }
     }
 
@@ -446,11 +466,10 @@ mod imp {
             n > 0 && String::from_utf16_lossy(&buf[..n as usize]) == name
         }
     }
-
 }
 
 #[cfg(target_os = "windows")]
-pub use imp::{repaint_wallpaper_surfaces_once, Pinner};
+pub use imp::{Pinner, repaint_wallpaper_surfaces_once};
 
 #[cfg(not(target_os = "windows"))]
 pub struct Pinner;

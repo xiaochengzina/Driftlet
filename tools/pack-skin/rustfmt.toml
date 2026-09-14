@@ -1,0 +1,3 @@
+# 与 src-tauri/rustfmt.toml 同口径（镜像代码两侧同风格，对拍不受格式漂移干扰）
+edition = "2021"
+style_edition = "2024"

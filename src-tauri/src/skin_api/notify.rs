@@ -11,9 +11,9 @@
 //! from Microsoft's DesktopToastsSample; the shortcut is created once at
 //! %APPDATA%\Microsoft\Windows\Start Menu\Programs\Driftlet.lnk.
 
-use windows::core::{HSTRING, PCWSTR};
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+use windows::core::{HSTRING, PCWSTR};
 
 const AUMID: &str = "Driftlet";
 const MAX_TITLE: usize = 64;
@@ -21,8 +21,7 @@ const MAX_BODY: usize = 256;
 
 /// ensure_aumid_shortcut 是 COM + 文件 IO，且本身是幂等自检——进程内
 /// 成功一次即可，后续调用直接跳过；失败不置位，下次调用重试。
-static SHORTCUT_CHECKED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static SHORTCUT_CHECKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn show(title: &str, body: &str) -> Result<(), String> {
     if !SHORTCUT_CHECKED.load(std::sync::atomic::Ordering::Relaxed) {
@@ -39,7 +38,8 @@ pub fn show(title: &str, body: &str) -> Result<(), String> {
     );
 
     let doc = XmlDocument::new().map_err(|e| e.to_string())?;
-    doc.LoadXml(&HSTRING::from(&xml)).map_err(|e| e.to_string())?;
+    doc.LoadXml(&HSTRING::from(&xml))
+        .map_err(|e| e.to_string())?;
     let toast = ToastNotification::CreateToastNotification(&doc).map_err(|e| e.to_string())?;
     let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(AUMID))
         .map_err(|e| e.to_string())?;
@@ -69,7 +69,9 @@ fn shortcut_path() -> Option<std::path::PathBuf> {
 }
 
 pub fn ensure_aumid_shortcut() -> Result<(), String> {
-    let Some(lnk) = shortcut_path() else { return Ok(()) };
+    let Some(lnk) = shortcut_path() else {
+        return Ok(());
+    };
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     // Cargo test binaries (target/**/deps/driftlet_lib-*.exe) must never own
     // the shortcut: they have no icon and would poison the taskbar/Start
@@ -106,15 +108,18 @@ pub fn ensure_aumid_shortcut() -> Result<(), String> {
 /// Read the shortcut's target path (IPersistFile::Load + IShellLink::GetPath).
 #[cfg(target_os = "windows")]
 fn shortcut_target(lnk: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    use windows::core::Interface;
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_ALL, COINIT_MULTITHREADED,
+        CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
     };
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    use windows::core::Interface;
 
     let lnk_w: Vec<u16> = {
         use std::os::windows::ffi::OsStrExt;
-        lnk.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+        lnk.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     };
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED); // see create_shortcut: never uninit
@@ -132,9 +137,9 @@ fn shortcut_target(lnk: &std::path::Path) -> Result<std::path::PathBuf, String> 
         link.GetPath(&mut buf, &mut find_data, 0)
             .map_err(|e| e.to_string())?;
         let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        Ok(std::path::PathBuf::from(
-            String::from_utf16_lossy(&buf[..end]),
-        ))
+        Ok(std::path::PathBuf::from(String::from_utf16_lossy(
+            &buf[..end],
+        )))
     }
 }
 
@@ -143,19 +148,22 @@ fn shortcut_target(lnk: &std::path::Path) -> Result<std::path::PathBuf, String> 
 /// is Err — the caller then rewrites the shortcut, always the safe move.
 #[cfg(target_os = "windows")]
 fn shortcut_aumid(lnk: &std::path::Path) -> Result<String, String> {
-    use windows::core::Interface;
     use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_ALL, COINIT_MULTITHREADED,
+        CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
     };
     use windows::Win32::System::Variant::VT_LPWSTR;
     use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    use windows::core::Interface;
 
     let lnk_w: Vec<u16> = {
         use std::os::windows::ffi::OsStrExt;
-        lnk.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+        lnk.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     };
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED); // see create_shortcut: never uninit
@@ -188,17 +196,17 @@ fn shortcut_aumid(lnk: &std::path::Path) -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn create_shortcut(exe: &std::path::Path, lnk: &std::path::Path) -> Result<(), String> {
-    use windows::core::Interface;
     use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
     use windows::Win32::System::Com::StructuredStorage::{
         PROPVARIANT, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
     };
-    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_ALL, COINIT_MULTITHREADED,
+        CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
     };
     use windows::Win32::System::Variant::VT_LPWSTR;
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    use windows::core::Interface;
 
     let to_wide = |s: &std::ffi::OsStr| -> Vec<u16> {
         use std::os::windows::ffi::OsStrExt;
@@ -210,8 +218,11 @@ fn create_shortcut(exe: &std::path::Path, lnk: &std::path::Path) -> Result<(), S
     // string via our pointer after SetValue/Commit return (freeing it would
     // be a use-after-free — seen as heap corruption at teardown).  20 bytes
     // once per process is a fair price for certainty.
-    let aumid_w: &'static [u16] =
-        AUMID.encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>().leak();
+    let aumid_w: &'static [u16] = AUMID
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>()
+        .leak();
 
     unsafe {
         // CoInitializeEx is required for CoCreateInstance; we deliberately
@@ -268,7 +279,11 @@ mod tests {
     #[test]
     #[ignore = "hardware probe — shows a real notification"]
     fn probe_show_toast() {
-        show("Driftlet 通知测试", "如果你在屏幕上看到这条通知，接口工作正常。").unwrap();
+        show(
+            "Driftlet 通知测试",
+            "如果你在屏幕上看到这条通知，接口工作正常。",
+        )
+        .unwrap();
     }
 
     /// Rewrite ONLY the AUMID property of an existing shortcut — mimics what
@@ -276,24 +291,30 @@ mod tests {
     /// SetLnkAppUserModelId stamps the bundle id, not "Driftlet").
     #[cfg(target_os = "windows")]
     fn restamp_aumid(lnk: &std::path::Path, id: &str) {
-        use windows::core::Interface;
         use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
         use windows::Win32::System::Com::StructuredStorage::{
             PROPVARIANT, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
         };
         use windows::Win32::System::Com::{
-            CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_ALL, COINIT_MULTITHREADED,
+            CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
         };
         use windows::Win32::System::Variant::VT_LPWSTR;
         use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
         use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+        use windows::core::Interface;
 
         let lnk_w: Vec<u16> = {
             use std::os::windows::ffi::OsStrExt;
-            lnk.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+            lnk.as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
         };
-        let id_w: &'static [u16] =
-            id.encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>().leak();
+        let id_w: &'static [u16] = id
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+            .leak();
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_ALL).unwrap();

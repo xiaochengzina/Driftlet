@@ -24,6 +24,9 @@ const REPO: &str = "xiaochengzina/Driftlet";
 /// 后端写死、不接受前端入参
 pub const RELEASES_LATEST_URL: &str = "https://github.com/xiaochengzina/Driftlet/releases/latest";
 
+/// 公开仓库主页（关于页「仓库地址」），后端写死、不接受前端入参
+pub const REPO_URL: &str = "https://github.com/xiaochengzina/Driftlet";
+
 #[derive(Serialize, Clone, Debug)]
 pub struct UpdateCheckResult {
     pub current_version: String,
@@ -65,7 +68,10 @@ struct GithubAsset {
 pub fn fetch_latest_release(config_dir: &Path) -> Result<UpdateCheckResult, String> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
     let body = ureq::get(&url)
-        .set("User-Agent", concat!("Driftlet/", env!("CARGO_PKG_VERSION")))
+        .set(
+            "User-Agent",
+            concat!("Driftlet/", env!("CARGO_PKG_VERSION")),
+        )
         .set("Accept", "application/vnd.github+json")
         .timeout(Duration::from_secs(10))
         .call()
@@ -75,7 +81,11 @@ pub fn fetch_latest_release(config_dir: &Path) -> Result<UpdateCheckResult, Stri
     let release: GithubRelease = serde_json::from_str(&body).map_err(|e| e.to_string())?;
 
     let current = env!("CARGO_PKG_VERSION").to_string();
-    let latest = release.tag_name.trim().trim_start_matches(['v', 'V']).to_string();
+    let latest = release
+        .tag_name
+        .trim()
+        .trim_start_matches(['v', 'V'])
+        .to_string();
     // 挑 NSIS 安装包资产（命名固定 <Product>_X.Y.Z_x64-setup.exe）
     let installer_url = release
         .assets
@@ -171,10 +181,7 @@ const MAX_INSTALLER_BYTES: u64 = 256 * 1024 * 1024;
 /// 更新下载目录：固定文件名的安装包 + 版本标记 + 瞬时分段残留
 /// （`.s<源>.part`，任何下载尝试起手全清，不堆积）
 pub fn update_dir(config_dir: &std::path::Path) -> std::path::PathBuf {
-    config_dir
-        .parent()
-        .unwrap_or(config_dir)
-        .join("update")
+    config_dir.parent().unwrap_or(config_dir).join("update")
 }
 
 /// GitHub release 加速镜像前缀（用法：`{前缀}{github 直链}`）。公共镜像
@@ -250,7 +257,7 @@ fn plan_ranges(total: u64, first_end: u64) -> Vec<(u64, u64)> {
         return ranges;
     }
     let remaining = total - (first_end + 1);
-    let n = ((remaining + PROBE_BYTES - 1) / PROBE_BYTES).min(SEGMENTS as u64) as usize;
+    let n = remaining.div_ceil(PROBE_BYTES).min(SEGMENTS as u64) as usize;
     let mut start = first_end + 1;
     for k in 0..n {
         let end = if k == n - 1 {
@@ -355,13 +362,15 @@ pub fn download_installer(
         }
         // 进度心跳：节流下发快照；胜者诞生或全部源出局即停（借用捕获，
         // winner/states/snapshot 出 scope 后还要用，不能 move）
-        scope.spawn(|| loop {
-            std::thread::sleep(PROGRESS_TICK);
-            on_progress(snapshot(ProgressStage::Downloading));
-            if winner.load(Ordering::Relaxed) != usize::MAX
-                || states.iter().all(|s| s.done.load(Ordering::Relaxed))
-            {
-                break;
+        scope.spawn(|| {
+            loop {
+                std::thread::sleep(PROGRESS_TICK);
+                on_progress(snapshot(ProgressStage::Downloading));
+                if winner.load(Ordering::Relaxed) != usize::MAX
+                    || states.iter().all(|s| s.done.load(Ordering::Relaxed))
+                {
+                    break;
+                }
             }
         });
     });
@@ -374,10 +383,7 @@ pub fn download_installer(
             .iter()
             .filter_map(|(_, r)| r.as_ref().err().cloned())
             .collect();
-        return Err(format!(
-            "all download sources failed: {}",
-            errs.join(" | ")
-        ));
+        return Err(format!("all download sources failed: {}", errs.join(" | ")));
     }
     let hash = outcomes
         .iter()
@@ -399,7 +405,9 @@ pub fn download_installer(
 
 /// 清掉更新目录里全部分段残留（`.s<源>.part`）
 fn clear_part_files(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let name = e.file_name();
         let name = name.to_string_lossy();
@@ -457,7 +465,9 @@ fn download_one(
                 }
                 let mut got = first_end + 1;
                 for h in handles {
-                    got += h.join().map_err(|_| "segment thread panicked".to_string())??;
+                    got += h
+                        .join()
+                        .map_err(|_| "segment thread panicked".to_string())??;
                 }
                 if got != total {
                     return Err(format!("short download: {got}/{total} bytes"));
@@ -509,7 +519,10 @@ fn get_range_follow(
     for _ in 0..=MAX_REDIRECTS {
         let resp = agent
             .get(&cur)
-            .set("User-Agent", concat!("Driftlet/", env!("CARGO_PKG_VERSION")))
+            .set(
+                "User-Agent",
+                concat!("Driftlet/", env!("CARGO_PKG_VERSION")),
+            )
             .set("Range", &format!("bytes={start}-{end}"))
             .timeout(REQUEST_TIMEOUT)
             .call()
@@ -587,7 +600,8 @@ fn write_range_at(
         .write(true)
         .open(path)
         .map_err(|e| e.to_string())?;
-    file.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| e.to_string())?;
     let mut buf = [0u8; 64 * 1024];
     let mut got = 0u64;
     while got < want {
@@ -789,7 +803,11 @@ mod tests {
         // 无版本标记 → 拒（安装包可能来自任何途径）
         assert!(super::verified_installer(&config).is_err());
         // 旧版下载的标记没有 sha256 字段 → fail closed（重新下载自愈）
-        std::fs::write(&marker, serde_json::json!({ "version": future }).to_string()).unwrap();
+        std::fs::write(
+            &marker,
+            serde_json::json!({ "version": future }).to_string(),
+        )
+        .unwrap();
         assert!(super::verified_installer(&config).is_err());
         // 哈希不符（安装包被改写）→ 拒
         std::fs::write(
@@ -913,7 +931,11 @@ mod tests {
             "https://objects.githubusercontent.com/x/y"
         );
         assert_eq!(
-            absolutize(base, "/xiaochengzina/Driftlet/releases/download/v9.9.9/x.exe").unwrap(),
+            absolutize(
+                base,
+                "/xiaochengzina/Driftlet/releases/download/v9.9.9/x.exe"
+            )
+            .unwrap(),
             "https://github.com/xiaochengzina/Driftlet/releases/download/v9.9.9/x.exe"
         );
     }
@@ -939,10 +961,18 @@ mod tests {
         // 文件在、标记缺 → false
         assert!(!super::installer_ready(&upd, "9.9.9"));
         // 版本不符 → false
-        std::fs::write(&marker, serde_json::json!({ "version": "8.8.8", "sha256": sha }).to_string()).unwrap();
+        std::fs::write(
+            &marker,
+            serde_json::json!({ "version": "8.8.8", "sha256": sha }).to_string(),
+        )
+        .unwrap();
         assert!(!super::installer_ready(&upd, "9.9.9"));
         // 文件被改写（哈希不符）→ false
-        std::fs::write(&marker, serde_json::json!({ "version": "9.9.9", "sha256": sha }).to_string()).unwrap();
+        std::fs::write(
+            &marker,
+            serde_json::json!({ "version": "9.9.9", "sha256": sha }).to_string(),
+        )
+        .unwrap();
         std::fs::write(&installer, b"fake-installer!").unwrap();
         assert!(!super::installer_ready(&upd, "9.9.9"));
         // 全部一致 → true

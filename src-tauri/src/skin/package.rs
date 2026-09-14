@@ -4,12 +4,12 @@
 //! 打包分发时 skin.json 必须声明合法的 `id` 字段 —— 它决定安装文件夹名
 //! 和用户数据的归属键，保证更新时用户数据能保留下来。
 
+use serde::Serialize;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use serde::Serialize;
 
-use crate::i18n::{tr, trf, Key};
+use crate::i18n::{Key, tr, trf};
 use crate::skin::loader::{self, validate_skin_id};
 use crate::skin::types::{Skin, SkinManifest};
 
@@ -68,7 +68,11 @@ pub enum VersionRelation {
 
 /// 检查一个皮肤包：解析并校验，返回包信息与安装状态。
 /// 不是合法皮肤包时返回错误提示。
-pub fn inspect_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Result<PackageInfo, String> {
+pub fn inspect_package(
+    package_path: &Path,
+    skins_dir: &Path,
+    lang: &str,
+) -> Result<PackageInfo, String> {
     let extracted = extract_package(package_path, lang)?;
     let result = (|| {
         let base = find_skin_root(extracted.path(), lang)?;
@@ -81,10 +85,7 @@ pub fn inspect_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
         let (status, installed_version) = match &installed {
             None => ("new", None),
             Some(inst) => {
-                let rel = compare_versions(
-                    manifest.version.as_deref(),
-                    inst.version.as_deref(),
-                );
+                let rel = compare_versions(manifest.version.as_deref(), inst.version.as_deref());
                 let status = match rel {
                     VersionRelation::Same => "reinstall",
                     VersionRelation::Newer => "update",
@@ -154,7 +155,10 @@ pub fn recover_interrupted_folder_ops(skins_dir: &Path) -> usize {
         match fs::rename(&path, &target) {
             Ok(()) => {
                 recovered += 1;
-                log::warn!("folder-op recovery: {:?} restored from interrupted replace", target);
+                log::warn!(
+                    "folder-op recovery: {:?} restored from interrupted replace",
+                    target
+                );
             }
             Err(e) => log::error!("folder-op recovery failed for {:?}: {}", path, e),
         }
@@ -171,7 +175,8 @@ pub fn recover_interrupted_folder_ops(skins_dir: &Path) -> usize {
 /// ② 已存在的 `<id>` rename 为 `.<id>.old`；
 /// ③ staging rename 为 `<id>`（失败则把 .old rename 回去）；
 /// ④ 从 .old 恢复 settings.json，删除 .old。
-pub fn install_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Result<Skin, String> {    let extracted = extract_package(package_path, lang)?;
+pub fn install_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Result<Skin, String> {
+    let extracted = extract_package(package_path, lang)?;
     let base = find_skin_root(extracted.path(), lang)?;
     let manifest = read_manifest(&base, lang)?;
     let id = require_package_id(&manifest, lang)?;
@@ -254,7 +259,9 @@ pub fn install_package(package_path: &Path, skins_dir: &Path, lang: &str) -> Res
             Err(e) => {
                 log::warn!(
                     "Failed to read old settings.json for skin '{}' ({}), keeping {:?} for manual recovery",
-                    id, e, old
+                    id,
+                    e,
+                    old
                 );
             }
         }
@@ -278,8 +285,8 @@ fn extract_package(package_path: &Path, lang: &str) -> Result<TempDirGuard, Stri
         return Err(tr(lang, Key::PackageTooLarge).to_string());
     }
 
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|_| tr(lang, Key::NotValidZip).to_string())?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|_| tr(lang, Key::NotValidZip).to_string())?;
     if archive.len() > MAX_FILES {
         return Err(tr(lang, Key::TooManyFiles).to_string());
     }
@@ -292,12 +299,14 @@ fn extract_package(package_path: &Path, lang: &str) -> Result<TempDirGuard, Stri
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    fs::create_dir_all(&temp_dir).map_err(|e| trf(lang, Key::CreateTempDirFailed, &[&e.to_string()]))?;
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| trf(lang, Key::CreateTempDirFailed, &[&e.to_string()]))?;
 
     let guard = TempDirGuard(temp_dir.clone());
     let mut total: u64 = 0;
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i)
+        let mut entry = archive
+            .by_index(i)
             .map_err(|e| trf(lang, Key::ReadPackageFailed, &[&e.to_string()]))?;
         // enclosed_name 拒绝绝对路径与 ".."，防 zip slip
         let Some(rel) = entry.enclosed_name() else {
@@ -353,7 +362,8 @@ fn read_manifest(base: &Path, lang: &str) -> Result<SkinManifest, String> {
     if size > loader::MAX_MANIFEST_BYTES {
         return Err(format!(
             "skin.json too large ({} bytes, limit {} bytes)",
-            size, loader::MAX_MANIFEST_BYTES
+            size,
+            loader::MAX_MANIFEST_BYTES
         ));
     }
     let content = fs::read_to_string(&path)
@@ -364,7 +374,9 @@ fn read_manifest(base: &Path, lang: &str) -> Result<SkinManifest, String> {
 
 /// 打包分发的皮肤必须声明合法 id —— 它是更新时保留用户数据的关键
 fn require_package_id(manifest: &SkinManifest, lang: &str) -> Result<String, String> {
-    let id = manifest.id.as_deref()
+    let id = manifest
+        .id
+        .as_deref()
         .ok_or_else(|| tr(lang, Key::PackageMissingId).to_string())?;
     validate_skin_id(id, lang)?;
     Ok(id.to_string())
@@ -401,7 +413,12 @@ fn check_preview_limits(base: &Path, lang: &str) -> Result<(), String> {
             Some((w, h)) if w.max(h) > MAX_PREVIEW_DIMENSION => Err(trf(
                 lang,
                 Key::PreviewTooLarge,
-                &[&name, &w.to_string(), &h.to_string(), &MAX_PREVIEW_DIMENSION.to_string()],
+                &[
+                    name,
+                    &w.to_string(),
+                    &h.to_string(),
+                    &MAX_PREVIEW_DIMENSION.to_string(),
+                ],
             )),
             Some(_) => Ok(()),
             None => {
@@ -530,7 +547,10 @@ pub fn create_package(skin_dir: &Path, out_path: &Path, lang: &str) -> Result<us
                         // 子目录里出现排除条目多半是误放（pack-skin 会提示）——
                         // 应用侧无终端，记日志
                         if dir != base {
-                            log::info!("package: skipping excluded entry in subdir {}", p.display());
+                            log::info!(
+                                "package: skipping excluded entry in subdir {}",
+                                p.display()
+                            );
                         }
                         continue;
                     }
@@ -556,7 +576,10 @@ pub fn create_package(skin_dir: &Path, out_path: &Path, lang: &str) -> Result<us
         return Err(trf(
             lang,
             Key::PackageCreateFailed,
-            &[&format!("文件总体积超过安装上限（{} MB）", MAX_TOTAL_BYTES / 1024 / 1024)],
+            &[&format!(
+                "文件总体积超过安装上限（{} MB）",
+                MAX_TOTAL_BYTES / 1024 / 1024
+            )],
         ));
     }
 
@@ -564,8 +587,8 @@ pub fn create_package(skin_dir: &Path, out_path: &Path, lang: &str) -> Result<us
     let result: Result<(), String> = (|| -> Result<(), String> {
         let file = fs::File::create(&tmp).map_err(|e| e.to_string())?;
         let mut zw = zip::ZipWriter::new(file);
-        let opts = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         for rel in &files {
             // zip 内路径统一用正斜杠；非 ASCII 文件名 zip crate 自动置 UTF-8 标志
             let rel_unix = rel.to_string_lossy().replace('\\', "/");
@@ -617,13 +640,21 @@ pub fn compare_versions(a: Option<&str>, b: Option<&str>) -> VersionRelation {
                     let x = pa.get(i).copied().unwrap_or(0);
                     let y = pb.get(i).copied().unwrap_or(0);
                     if x != y {
-                        return if x > y { VersionRelation::Newer } else { VersionRelation::Older };
+                        return if x > y {
+                            VersionRelation::Newer
+                        } else {
+                            VersionRelation::Older
+                        };
                     }
                 }
                 VersionRelation::Same
             }
             _ => {
-                if a == b { VersionRelation::Same } else { VersionRelation::Newer }
+                if a == b {
+                    VersionRelation::Same
+                } else {
+                    VersionRelation::Newer
+                }
             }
         },
         (Some(_), None) => VersionRelation::Newer,
@@ -664,7 +695,10 @@ fn copy_dir_recursive_inner(src: &Path, dst: &Path, depth: u32) -> io::Result<()
             // junction 在 Windows 上不被 is_symlink 标记，须按属性位判
             //（reparse point 成环可穿越出暂存树）
             if meta.file_attributes() & 0x400 != 0 {
-                log::warn!("Skipping junction/reparse point during skin copy: {:?}", src_path);
+                log::warn!(
+                    "Skipping junction/reparse point during skin copy: {:?}",
+                    src_path
+                );
                 continue;
             }
         }
@@ -680,7 +714,9 @@ fn copy_dir_recursive_inner(src: &Path, dst: &Path, depth: u32) -> io::Result<()
 /// RAII 守卫：临时解压目录在离开作用域时清理
 struct TempDirGuard(PathBuf);
 impl TempDirGuard {
-    fn path(&self) -> &Path { &self.0 }
+    fn path(&self) -> &Path {
+        &self.0
+    }
 }
 impl Drop for TempDirGuard {
     fn drop(&mut self) {
@@ -718,7 +754,11 @@ mod tests {
         let dst = unique_dir("deep-dst");
 
         let err = copy_dir_recursive(&src, &dst).unwrap_err();
-        assert!(err.to_string().contains("nesting"), "unexpected error: {}", err);
+        assert!(
+            err.to_string().contains("nesting"),
+            "unexpected error: {}",
+            err
+        );
 
         let _ = fs::remove_dir_all(&src);
         let _ = fs::remove_dir_all(&dst);
@@ -729,7 +769,12 @@ mod tests {
         write_package_named(dir, "test.dskin", skin_json, wrap_folder)
     }
 
-    fn write_package_named(dir: &Path, filename: &str, skin_json: &str, wrap_folder: bool) -> PathBuf {
+    fn write_package_named(
+        dir: &Path,
+        filename: &str,
+        skin_json: &str,
+        wrap_folder: bool,
+    ) -> PathBuf {
         let pkg = dir.join(filename);
         let file = fs::File::create(&pkg).unwrap();
         let mut zw = zip::ZipWriter::new(file);
@@ -738,7 +783,8 @@ mod tests {
         let prefix = if wrap_folder { "myskin/" } else { "" };
         zw.start_file(format!("{}skin.json", prefix), opts).unwrap();
         io::Write::write_all(&mut zw, skin_json.as_bytes()).unwrap();
-        zw.start_file(format!("{}index.html", prefix), opts).unwrap();
+        zw.start_file(format!("{}index.html", prefix), opts)
+            .unwrap();
         io::Write::write_all(&mut zw, b"<html></html>").unwrap();
         zw.finish().unwrap();
         pkg
@@ -773,7 +819,11 @@ mod tests {
     #[test]
     fn inspect_valid_package_at_root() {
         let dir = unique_dir("root");
-        let pkg = write_package(&dir, r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#, false);
+        let pkg = write_package(
+            &dir,
+            r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#,
+            false,
+        );
         let skins = unique_dir("skins");
         let info = inspect_package(&pkg, &skins, "zh-CN").unwrap();
         assert_eq!(info.id, "my-skin");
@@ -842,13 +892,23 @@ mod tests {
     fn install_then_update_detects_status() {
         let dir = unique_dir("upd");
         let skins = unique_dir("skins");
-        let pkg1 = write_package_named(&dir, "v1.dskin", r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#, false);
+        let pkg1 = write_package_named(
+            &dir,
+            "v1.dskin",
+            r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#,
+            false,
+        );
         let skin = install_package(&pkg1, &skins, "zh-CN").unwrap();
         assert_eq!(skin.id, "my-skin");
         assert!(skins.join("my-skin").join("index.html").exists());
 
         // 更新版本 → "update"
-        let pkg2 = write_package_named(&dir, "v2.dskin", r#"{"id":"my-skin","name":"My Skin","version":"1.1.0"}"#, false);
+        let pkg2 = write_package_named(
+            &dir,
+            "v2.dskin",
+            r#"{"id":"my-skin","name":"My Skin","version":"1.1.0"}"#,
+            false,
+        );
         let info = inspect_package(&pkg2, &skins, "zh-CN").unwrap();
         assert_eq!(info.status, "update");
         assert_eq!(info.installed_version.as_deref(), Some("1.0.0"));
@@ -872,7 +932,12 @@ mod tests {
     fn install_update_preserves_settings_json() {
         let dir = unique_dir("pres");
         let skins = unique_dir("skins");
-        let pkg1 = write_package_named(&dir, "v1.dskin", r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#, false);
+        let pkg1 = write_package_named(
+            &dir,
+            "v1.dskin",
+            r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#,
+            false,
+        );
         install_package(&pkg1, &skins, "zh-CN").unwrap();
 
         // 模拟用户在「皮肤设置」页改过的值
@@ -882,11 +947,19 @@ mod tests {
         )
         .unwrap();
 
-        let pkg2 = write_package_named(&dir, "v2.dskin", r#"{"id":"my-skin","name":"My Skin","version":"1.1.0"}"#, false);
+        let pkg2 = write_package_named(
+            &dir,
+            "v2.dskin",
+            r#"{"id":"my-skin","name":"My Skin","version":"1.1.0"}"#,
+            false,
+        );
         install_package(&pkg2, &skins, "zh-CN").unwrap();
 
         let content = fs::read_to_string(skins.join("my-skin").join("settings.json")).unwrap();
-        assert_eq!(content, r##"{"accent":"#00ff00"}"##, "settings.json must survive update");
+        assert_eq!(
+            content, r##"{"accent":"#00ff00"}"##,
+            "settings.json must survive update"
+        );
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&skins);
@@ -896,7 +969,11 @@ mod tests {
     fn install_cleans_staging_dirs_and_leaves_none() {
         let dir = unique_dir("stg");
         let skins = unique_dir("skins");
-        let pkg = write_package(&dir, r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#, false);
+        let pkg = write_package(
+            &dir,
+            r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#,
+            false,
+        );
 
         // 上次安装失败留下的暂存目录：安装前必须被清理，不干扰本次安装
         fs::create_dir_all(skins.join(".staging-my-skin")).unwrap();
@@ -906,9 +983,18 @@ mod tests {
         install_package(&pkg, &skins, "zh-CN").unwrap();
 
         assert!(skins.join("my-skin").join("index.html").exists());
-        assert!(!skins.join(".staging-my-skin").exists(), "staging must be gone after install");
-        assert!(!skins.join(".my-skin.old").exists(), "old dir must be gone after install");
-        assert!(!skins.join("my-skin").join("junk.txt").exists(), "staging junk must not leak into dest");
+        assert!(
+            !skins.join(".staging-my-skin").exists(),
+            "staging must be gone after install"
+        );
+        assert!(
+            !skins.join(".my-skin.old").exists(),
+            "old dir must be gone after install"
+        );
+        assert!(
+            !skins.join("my-skin").join("junk.txt").exists(),
+            "staging junk must not leak into dest"
+        );
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&skins);
@@ -921,18 +1007,35 @@ mod tests {
     fn failed_replace_keeps_existing_skin_intact() {
         let dir = unique_dir("lock");
         let skins = unique_dir("skins");
-        let pkg1 = write_package_named(&dir, "v1.dskin", r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#, false);
+        let pkg1 = write_package_named(
+            &dir,
+            "v1.dskin",
+            r#"{"id":"my-skin","name":"My Skin","version":"1.0.0"}"#,
+            false,
+        );
         install_package(&pkg1, &skins, "zh-CN").unwrap();
 
         // 持有已安装皮肤里的文件句柄 → Windows 下 rename 旧目录必失败
         let _open = fs::File::open(skins.join("my-skin").join("index.html")).unwrap();
 
-        let pkg2 = write_package_named(&dir, "v2.dskin", r#"{"id":"my-skin","name":"My Skin","version":"9.9.9"}"#, false);
-        assert!(install_package(&pkg2, &skins, "zh-CN").is_err(), "rename of in-use dir must fail");
+        let pkg2 = write_package_named(
+            &dir,
+            "v2.dskin",
+            r#"{"id":"my-skin","name":"My Skin","version":"9.9.9"}"#,
+            false,
+        );
+        assert!(
+            install_package(&pkg2, &skins, "zh-CN").is_err(),
+            "rename of in-use dir must fail"
+        );
 
         // 原皮肤未被替换，暂存目录已清理
         let manifest = loader::load_skin_manifest(&skins.join("my-skin")).unwrap();
-        assert_eq!(manifest.version.as_deref(), Some("1.0.0"), "existing skin must stay intact");
+        assert_eq!(
+            manifest.version.as_deref(),
+            Some("1.0.0"),
+            "existing skin must stay intact"
+        );
         assert!(!skins.join(".staging-my-skin").exists());
         assert!(!skins.join(".my-skin.old").exists());
 
@@ -951,7 +1054,10 @@ mod tests {
         );
         let skins = unique_dir("skins");
         let info = inspect_package(&pkg, &skins, "zh-CN").unwrap();
-        assert_eq!(info.permissions, vec!["registry".to_string(), "shell".to_string()]);
+        assert_eq!(
+            info.permissions,
+            vec!["registry".to_string(), "shell".to_string()]
+        );
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&skins);
     }
@@ -980,7 +1086,10 @@ mod tests {
         }
         let skins = unique_dir("skins");
         let err = inspect_package(&pkg, &skins, "zh-CN").unwrap_err();
-        assert_eq!(err, "皮肤包解压后过大", "zip bomb must hit the extracted-size limit");
+        assert_eq!(
+            err, "皮肤包解压后过大",
+            "zip bomb must hit the extracted-size limit"
+        );
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&skins);
@@ -1011,9 +1120,17 @@ mod tests {
     fn jpeg_header(w: u16, h: u16) -> Vec<u8> {
         // SOI + SOF0（段布局：长度(2) 精度(1) 高(2) 宽(2) 分量数(1)）
         vec![
-            0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08,
-            (h >> 8) as u8, (h & 0xff) as u8,
-            (w >> 8) as u8, (w & 0xff) as u8,
+            0xff,
+            0xd8,
+            0xff,
+            0xc0,
+            0x00,
+            0x11,
+            0x08,
+            (h >> 8) as u8,
+            (h & 0xff) as u8,
+            (w >> 8) as u8,
+            (w & 0xff) as u8,
             0x03,
         ]
     }
@@ -1022,12 +1139,18 @@ mod tests {
     fn preview_dimensions_parse_from_headers() {
         assert_eq!(png_dimensions(&png_header(4000, 3000)), Some((4000, 3000)));
         assert_eq!(png_dimensions(&png_header(100, 60)), Some((100, 60)));
-        assert_eq!(jpeg_dimensions(&jpeg_header(1920, 1080)), Some((1920, 1080)));
+        assert_eq!(
+            jpeg_dimensions(&jpeg_header(1920, 1080)),
+            Some((1920, 1080))
+        );
         assert_eq!(jpeg_dimensions(&jpeg_header(320, 200)), Some((320, 200)));
         // 非图片/截断输入一律 None（放行路径，由浏览器解码兜底）
         assert_eq!(png_dimensions(b"not an image at all"), None);
         assert_eq!(jpeg_dimensions(b"\xff\xd8\xff"), None);
-        assert_eq!(image_dimensions(&std::env::temp_dir().join("definitely-missing.png")), None);
+        assert_eq!(
+            image_dimensions(&std::env::temp_dir().join("definitely-missing.png")),
+            None
+        );
     }
 
     #[test]
@@ -1106,7 +1229,11 @@ mod tests {
     fn create_package_rejects_oversized_preview() {
         // 创作者直装目录打包：自带超大预览应在打包侧被拦（与安装侧同口径）
         let skin = unique_dir("pkgskin");
-        fs::write(skin.join("skin.json"), r#"{"id":"my-skin","name":"My Skin","entry":"index.html"}"#).unwrap();
+        fs::write(
+            skin.join("skin.json"),
+            r#"{"id":"my-skin","name":"My Skin","entry":"index.html"}"#,
+        )
+        .unwrap();
         fs::write(skin.join("index.html"), "<html></html>").unwrap();
         fs::write(skin.join("preview.png"), png_header(5000, 5000)).unwrap();
         let out = unique_dir("pkgout").join("out.dskin");
@@ -1121,25 +1248,59 @@ mod tests {
         let skins = unique_dir("skins-recover");
         // 形态 1：目标缺失 + .old 唯一副本（让位后、拷入前崩）
         fs::create_dir_all(skins.join(".clock.old")).unwrap();
-        fs::write(skins.join(".clock.old").join("skin.json"), r#"{"id":"clock"}"#).unwrap();
-        fs::write(skins.join(".clock.old").join("settings.json"), r#"{"city":"tokyo"}"#).unwrap();
+        fs::write(
+            skins.join(".clock.old").join("skin.json"),
+            r#"{"id":"clock"}"#,
+        )
+        .unwrap();
+        fs::write(
+            skins.join(".clock.old").join("settings.json"),
+            r#"{"city":"tokyo"}"#,
+        )
+        .unwrap();
         // 形态 2：半成品目标 + 完好 .old（拷入中途崩——旧副本优先还原）
         fs::create_dir_all(skins.join("dock")).unwrap(); // 半成品（无 skin.json）
         fs::create_dir_all(skins.join(".dock.old")).unwrap();
-        fs::write(skins.join(".dock.old").join("skin.json"), r#"{"id":"dock"}"#).unwrap();
+        fs::write(
+            skins.join(".dock.old").join("skin.json"),
+            r#"{"id":"dock"}"#,
+        )
+        .unwrap();
         // 纯垃圾：.staging-*；正常目录：不得触碰
         fs::create_dir_all(skins.join(".staging-junk")).unwrap();
         fs::write(skins.join(".staging-junk").join("x"), "x").unwrap();
         fs::create_dir_all(skins.join("fine-skin")).unwrap();
-        fs::write(skins.join("fine-skin").join("skin.json"), r#"{"id":"fine"}"#).unwrap();
+        fs::write(
+            skins.join("fine-skin").join("skin.json"),
+            r#"{"id":"fine"}"#,
+        )
+        .unwrap();
 
         assert_eq!(recover_interrupted_folder_ops(&skins), 2);
-        assert!(skins.join("clock").join("skin.json").is_file(), "缺失目标必须还原");
-        assert!(skins.join("clock").join("settings.json").is_file(), "用户设置必须随还原保留");
-        assert!(skins.join("dock").join("skin.json").is_file(), "半成品必须被旧副本覆盖");
-        assert!(!skins.join(".clock.old").exists() && !skins.join(".dock.old").exists(), "还原后暂存必须消失");
-        assert!(!skins.join(".staging-junk").exists(), "staging 垃圾必须清理");
-        assert!(skins.join("fine-skin").join("skin.json").is_file(), "正常目录不得被碰");
+        assert!(
+            skins.join("clock").join("skin.json").is_file(),
+            "缺失目标必须还原"
+        );
+        assert!(
+            skins.join("clock").join("settings.json").is_file(),
+            "用户设置必须随还原保留"
+        );
+        assert!(
+            skins.join("dock").join("skin.json").is_file(),
+            "半成品必须被旧副本覆盖"
+        );
+        assert!(
+            !skins.join(".clock.old").exists() && !skins.join(".dock.old").exists(),
+            "还原后暂存必须消失"
+        );
+        assert!(
+            !skins.join(".staging-junk").exists(),
+            "staging 垃圾必须清理"
+        );
+        assert!(
+            skins.join("fine-skin").join("skin.json").is_file(),
+            "正常目录不得被碰"
+        );
 
         let _ = fs::remove_dir_all(&skins);
     }

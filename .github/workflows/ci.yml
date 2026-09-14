@@ -14,8 +14,24 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # 仓库卫生闸：版本号四处一致 / i18n 中英键对等 / 三对双版文档结构对拍
+      # / CHANGELOG 顶部形态 / 约定 #1 点名文件存在——文档漂移从人肉审查降级为构建失败
+      - name: Repo hygiene checks
+        run: node tools/check-repo-hygiene.mjs
       - name: Frontend build
         run: npm ci && npm run build
+      # 格式化门禁（rustfmt.toml 钉住 edition/style_edition，不随工具链漂移）
+      - name: Rust fmt check
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          cargo fmt --manifest-path tools/pack-skin/Cargo.toml --check
+      # 静态检查门禁：双 crate 零告警基线（2026-09 摸底 67→0 修毕），新告警即失败
+      - name: Rust clippy
+        run: |
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path tools/pack-skin/Cargo.toml --all-targets -- -D warnings
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
       # AGENTS.md 约定 #2 的护栏：pack-skin 镜像漂移即失败（字段/上限/校验函数

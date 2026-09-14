@@ -43,7 +43,7 @@ pub enum Gate {
     CallerSkin,
     /// 皮肤窗口 label 身份校验（strip_prefix "skin-"）：无害自作用命令
     /// 与高频日志/DevTools 通道（身份不扫盘重验；open_skin_devtools 另有
-    /// 运行时 dev 开关，release 构建恒 no-op）
+    /// 运行时 dev 开关——全构建生效，设置页开启）
     SkinLabel,
     /// 无闸无害：函数体只作用于调用方自身窗口，连身份校验都无必要
     ///（仅 start_skin_drag / start_skin_resize 两条——拖动/缩放自己）
@@ -70,9 +70,10 @@ impl Gate {
     }
 }
 
-use crate::skin_api::{PERM_CLIPBOARD, PERM_CONTROL, PERM_FILE_SYSTEM, PERM_MEDIA, PERM_MIC,
-    PERM_NETWORK, PERM_NOTIFY, PERM_OPEN_LINK, PERM_REGISTRY, PERM_SHELL, PERM_SYS_INFO,
-    PERM_SYSTEM};
+use crate::skin_api::{
+    PERM_CLIPBOARD, PERM_CONTROL, PERM_FILE_SYSTEM, PERM_MEDIA, PERM_MIC, PERM_NETWORK,
+    PERM_NOTIFY, PERM_OPEN_LINK, PERM_REGISTRY, PERM_SHELL, PERM_SYS_INFO, PERM_SYSTEM,
+};
 
 /// 权限常量名 → 权限值。表行 `Gate::Perm` 存的是常量名（与源码文本一致），
 /// 此映射把名字锚回真实常量：表里的名字拼错会在测试期 panic，常量被
@@ -153,6 +154,8 @@ pub const COMMAND_POLICIES: &[(&str, Gate)] = &[
     ("check_update", Gate::ManagerOnly),
     ("set_update_check", Gate::ManagerOnly),
     ("open_release_page", Gate::ManagerOnly),
+    ("open_repo_page", Gate::ManagerOnly),
+    ("get_user_agreement", Gate::ManagerOnly),
     ("download_update", Gate::ManagerOnly),
     ("install_update", Gate::ManagerOnly),
     ("take_hotkey_error", Gate::ManagerOnly),
@@ -164,6 +167,13 @@ pub const COMMAND_POLICIES: &[(&str, Gate)] = &[
     ("list_gpu_adapters", Gate::ManagerOnly),
     ("capture_skin_preview", Gate::ManagerOnly),
     ("take_pending_package_install", Gate::ManagerOnly),
+    ("take_pending_open_config", Gate::ManagerOnly),
+    ("take_update_auto_checked", Gate::ManagerOnly),
+    ("get_focus_mode_state", Gate::ManagerOnly),
+    ("toggle_focus_mode", Gate::ManagerOnly),
+    ("set_focus_exempt", Gate::ManagerOnly),
+    ("set_focus_mode_action", Gate::ManagerOnly),
+    ("set_focus_mode_auto_fullscreen", Gate::ManagerOnly),
     ("export_config", Gate::ManagerOnly),
     ("inspect_backup", Gate::ManagerOnly),
     ("import_config", Gate::ManagerOnly),
@@ -171,7 +181,7 @@ pub const COMMAND_POLICIES: &[(&str, Gate)] = &[
     ("get_app_log", Gate::LogWindow),
     ("clear_app_log", Gate::LogWindow),
     // 皮肤 F12 转发通道：SkinLabel 身份 + 运行时 dev 开关双重门槛
-    //（release 构建恒 no-op），不是管理器命令
+    //（全构建生效，无 cfg 门），不是管理器命令
     ("open_skin_devtools", Gate::SkinLabel),
     // ─── skin_api：皮肤命令（权限闸 / 免权限基线） ───
     ("get_cpu_info", Gate::Perm("PERM_SYS_INFO")),
@@ -280,11 +290,14 @@ mod tests {
             .find(&sig)
             .unwrap_or_else(|| panic!("command fn '{}' not found in module source", name));
         let rest = &src[start..];
-        let end = ["\nfn ", "\npub", "\nstatic", "\nconst", "\nstruct", "\nimpl", "\nmod", "\n///", "\n//", "\n#["]
-            .iter()
-            .filter_map(|m| rest[1..].find(m).map(|i| i + 1))
-            .min()
-            .unwrap_or(rest.len());
+        let end = [
+            "\nfn ", "\npub", "\nstatic", "\nconst", "\nstruct", "\nimpl", "\nmod", "\n///",
+            "\n//", "\n#[",
+        ]
+        .iter()
+        .filter_map(|m| rest[1..].find(m).map(|i| i + 1))
+        .min()
+        .unwrap_or(rest.len());
         rest[..end]
             .lines()
             .map(|l| l.split("//").next().unwrap_or(""))
@@ -311,20 +324,24 @@ mod tests {
         );
         let mut handler_sorted: Vec<&(String, String)> = entries.iter().collect();
         handler_sorted.sort_by(|a, b| a.1.cmp(&b.1));
-        handler_sorted.windows(2).for_each(|w| {
-            assert_ne!(w[0].1, w[1].1, "duplicate handler entry '{}'", w[0].1)
-        });
+        handler_sorted
+            .windows(2)
+            .for_each(|w| assert_ne!(w[0].1, w[1].1, "duplicate handler entry '{}'", w[0].1));
         let mut table_sorted: Vec<&str> = COMMAND_POLICIES.iter().map(|(n, _)| *n).collect();
         table_sorted.sort_unstable();
-        table_sorted.windows(2).for_each(|w| {
-            assert_ne!(w[0], w[1], "duplicate policy row '{}'", w[0])
-        });
+        table_sorted
+            .windows(2)
+            .for_each(|w| assert_ne!(w[0], w[1], "duplicate policy row '{}'", w[0]));
         for (module, name) in &entries {
             let row = COMMAND_POLICIES
                 .iter()
                 .find(|(n, _)| n == name)
-                .unwrap_or_else(|| panic!("command '{}' is registered but has no policy row", name));
-            let Some(marker) = row.1.marker() else { continue };
+                .unwrap_or_else(|| {
+                    panic!("command '{}' is registered but has no policy row", name)
+                });
+            let Some(marker) = row.1.marker() else {
+                continue;
+            };
             let seg = fn_segment(module_source(module), name);
             assert!(
                 seg.contains(&marker),
@@ -359,8 +376,9 @@ mod tests {
     /// 会被计数变化钉出来。改档位时同步更新这些数字。
     #[test]
     fn gate_distribution_snapshot() {
-        let count = |pred: fn(&Gate) -> bool| COMMAND_POLICIES.iter().filter(|(_, g)| pred(g)).count();
-        assert_eq!(count(|g| matches!(g, Gate::ManagerOnly)), 55);
+        let count =
+            |pred: fn(&Gate) -> bool| COMMAND_POLICIES.iter().filter(|(_, g)| pred(g)).count();
+        assert_eq!(count(|g| matches!(g, Gate::ManagerOnly)), 64);
         assert_eq!(count(|g| matches!(g, Gate::LogWindow)), 2);
         assert_eq!(count(|g| matches!(g, Gate::Ungated)), 2);
         assert_eq!(count(|g| matches!(g, Gate::SkinLabel)), 4);
@@ -368,6 +386,6 @@ mod tests {
         assert_eq!(count(|g| matches!(g, Gate::ControlTarget)), 7);
         assert_eq!(count(|g| matches!(g, Gate::AnyPerm)), 1);
         assert_eq!(count(|g| matches!(g, Gate::Perm(_))), 38);
-        assert_eq!(COMMAND_POLICIES.len(), 117);
+        assert_eq!(COMMAND_POLICIES.len(), 126);
     }
 }

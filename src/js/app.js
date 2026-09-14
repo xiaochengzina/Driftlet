@@ -10,6 +10,8 @@ import SkinList from './skin-list.js';
 import SkinEditor from './skin-editor.js';
 import InstallWizard from './install-wizard.js';
 import LayoutPanel from './layouts.js';
+import AboutPanel from './about.js';
+import FocusPanel from './focus.js';
 import Settings, { initTheme, refreshOpenSettings, applyTheme } from './settings.js';
 import { initUpdateCheck } from './update-check.js';
 import { t, initI18n } from './i18n.js';
@@ -69,6 +71,8 @@ class App {
         }
       },
     });
+    this.about = new AboutPanel();
+    this.focusPanel = new FocusPanel();
     this.bindToolbar();
     this.bindSearch();
     this.bindBackendEvents();
@@ -76,12 +80,24 @@ class App {
     await initTheme();
     await this.skinList.refresh();
 
+    // 专注模式信标初态（模式激活时常亮）
+    API.getFocusModeState().then(s => this.updateFocusBeacon(s.active)).catch(() => {});
+
     // 双击 .dskin 冷启动：后端暂存的待安装包，取出来进入安装引导
     try {
       const pending = await API.takePendingPackageInstall();
       if (pending) this.wizard.open(pending);
     } catch (err) {
       console.error('takePendingPackageInstall failed:', err);
+    }
+
+    // 管理器销毁重建期间点过皮肤右键「打开皮肤配置」：事件已在页面就绪前
+    // 丢失，后端暂存的待选皮肤在这里幂等拉取（与待安装包同一约定）
+    try {
+      const pendingSkin = await API.takePendingOpenConfig();
+      if (pendingSkin) this.skinList.select(pendingSkin);
+    } catch (err) {
+      console.error('takePendingOpenConfig failed:', err);
     }
 
     // 启动时全局快捷键被其他程序占用：只记日志用户无感知，取出后 toast 提醒
@@ -101,16 +117,18 @@ class App {
       .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   }
 
-  /** 按当前生效主题填充主题切换钮的图标与标题（亮显月亮→深、暗显太阳→浅） */
+  /** 按当前生效主题填充主题切换钮的图标与标题（亮显月亮→深、暗显太阳→浅）。
+      只换 .nav-ico 内的图标——按钮上还有静态文字标签，不能动 innerHTML */
   updateThemeToggleIcon() {
-    const btn = document.getElementById('btn-theme-toggle');
-    if (!btn) return;
+    const ico = document.querySelector('#btn-theme-toggle .nav-ico');
+    if (!ico) return;
     const dark = document.documentElement.dataset.theme === 'dark';
     // 官方 Feather moon / sun（全量官方化后的图标纪律）
-    btn.innerHTML = dark
-      ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
-      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-    btn.title = t(dark ? 'app.themeToLight' : 'app.themeToDark');
+    ico.innerHTML = dark
+      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
+      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+    const btn = document.getElementById('btn-theme-toggle');
+    if (btn) btn.title = t(dark ? 'app.themeToLight' : 'app.themeToDark');
   }
 
   // Backend-originated events: the skin right-click menu and the tray can
@@ -141,6 +159,29 @@ class App {
         await this.skinEditor.load(this.skinEditor.skinId);
       }
     });
+    // 专注模式变更（热键/托盘/全屏/面板同一事件单点）：toast 统一在这里
+    // 弹（面板内操作不再各自弹，双通道会双 toast）；导航项激活态与开着
+    // 的面板联动刷新
+    listen('focus-mode-changed', (event) => {
+      const p = event.payload || {};
+      const active = p.active === true;
+      this.updateFocusBeacon(active);
+      const count = active ? (p.affected ?? 0) : (p.restored ?? 0);
+      if (active) {
+        if (count === 0) showToast(t('focus.enteredEmpty'), 'info');
+        else if (p.trigger === 'fullscreen') showToast(t('focus.enteredAuto', { count }), 'info');
+        else showToast(t(p.action === 'unload' ? 'focus.enteredUnload' : 'focus.enteredHide', { count }), 'info');
+      } else {
+        showToast(t(p.action === 'unload' ? 'focus.exitedUnload' : 'focus.exitedHide', { count }), 'success');
+        if ((p.skipped ?? 0) > 0) showToast(t('focus.exitedSkipped', { count: p.skipped }), 'info');
+      }
+      this.focusPanel?.refreshState();
+    });
+  }
+
+  /** 导航栏「专注模式」激活态常亮（模式激活 = 信标；与面板开关无关） */
+  updateFocusBeacon(active) {
+    document.getElementById('btn-focus')?.classList.toggle('focus-active', active);
   }
 
   renderShell() {
@@ -162,26 +203,38 @@ class App {
         </div>
       </div>
       <div class="app-body">
-        <!-- 竖排图标栏（VS Code Activity Bar 式）：全局工具从上到下，
-             设置钉底（margin-top:auto）。按钮 id 不变，bindToolbar 零改动 -->
-        <nav class="icon-rail">
-          <button id="btn-layouts" class="icon-btn" title="${t('layout.title')}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+        <!-- 导航栏（图标 + 文字标签）：全局功能入口自上而下，主题/设置
+             钉底（.nav-bottom 起）。新小功能的落位规则见 docs/设计规范.md
+             §2.2——导航项 + 功能面板是默认答案；列表级操作（刷新/打开
+             文件夹）在侧栏头部，不进导航栏 -->
+        <nav class="nav-rail">
+          <button id="btn-layouts" class="nav-item" title="${t('layout.title')}">
+            <span class="nav-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span>
+            <span class="nav-label">${t('layout.title')}</span>
           </button>
-          <button id="btn-refresh" class="icon-btn" title="${t('app.refreshList')}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-          </button>
-          <button id="btn-open-folder" class="icon-btn" title="${t('app.openFolder')}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <!-- 专注模式（feather target 准星；模式激活时常亮，见
+               updateFocusBeacon / focus-mode-changed） -->
+          <button id="btn-focus" class="nav-item" title="${t('focus.title')}">
+            <span class="nav-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span>
+            <span class="nav-label">${t('focus.navLabel')}</span>
           </button>
           <!-- 亮暗主题快速切换：亮显月亮（→深）、暗显太阳（→浅）。图标由
-               updateThemeToggleIcon 按 data-theme 实态填充；与设置钮同钉底 -->
-          <button id="btn-theme-toggle" class="icon-btn rail-bottom"></button>
-          <button id="btn-settings" class="icon-btn" title="${t('settings.title')}">
+               updateThemeToggleIcon 按 data-theme 实态填充；标签静态「主题」，
+               与设置同钉底 -->
+          <button id="btn-theme-toggle" class="nav-item nav-bottom">
+            <span class="nav-ico"></span>
+            <span class="nav-label">${t('app.theme')}</span>
+          </button>
+          <button id="btn-about" class="nav-item" title="${t('about.title')}">
+            <span class="nav-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+            <span class="nav-label">${t('about.title')}</span>
+          </button>
+          <button id="btn-settings" class="nav-item" title="${t('settings.title')}">
             <!-- feathericons.dev 现行官方 settings 齿轮（维护者提供路径替换）：
                  库内旧路径是手写近似的异版（单弧扫描齿形，与官方双弧齿形不同——
-                 14px 下齿缘渲染毛糙的根因）；官方路径 + 官方 stroke 2 -->
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                 齿缘渲染毛糙的根因）；官方路径 + 官方 stroke 2 -->
+            <span class="nav-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+            <span class="nav-label">${t('settings.title')}</span>
           </button>
         </nav>
         <aside class="sidebar">
@@ -192,7 +245,15 @@ class App {
             </div>
             <div class="sidebar-tools">
               <span class="sidebar-count" id="skin-count"></span>
-              <button id="skin-search-toggle" class="search-toggle" title="${t('list.searchToggle')}">
+              <!-- 列表级操作回到列表身边（原在导航栏，语义割裂）：刷新 /
+                   打开文件夹 / 搜索三枚同族小图标钮（.tool-btn 共享基样式） -->
+              <button id="btn-refresh" class="tool-btn" title="${t('app.refreshList')}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              </button>
+              <button id="btn-open-folder" class="tool-btn" title="${t('app.openFolder')}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              </button>
+              <button id="skin-search-toggle" class="tool-btn search-toggle" title="${t('list.searchToggle')}">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               </button>
             </div>
@@ -313,7 +374,10 @@ class App {
     }
 
     if (closeBtn) {
-      closeBtn.onclick = () => { closeBtn.blur(); setHoverEnabled(false); win.hide(); };  // hide to tray, not quit
+      // close（非直接 hide）：走后端 CloseRequested 统一漏斗——管理器
+      // 关窗即销毁回收内存（~80MB 渲染进程），唤回时重建（机制见
+      // lib.rs create_manager_window 头注）
+      closeBtn.onclick = () => { closeBtn.blur(); setHoverEnabled(false); win.close(); };
     }
   }
 
@@ -406,6 +470,18 @@ class App {
         // 防叠开由 settings.js 模块级 openSettings 负责，此处无需簿记
         await new Settings().open();
       };
+    }
+
+    // 关于面板（版本/仓库/协议/检查更新）
+    const aboutBtn = document.getElementById('btn-about');
+    if (aboutBtn) {
+      aboutBtn.onclick = () => this.about.open();
+    }
+
+    // 专注模式面板（状态卡 + 动作档 + 全屏自动 + 白名单集中一处）
+    const focusBtn = document.getElementById('btn-focus');
+    if (focusBtn) {
+      focusBtn.onclick = () => this.focusPanel.open();
     }
   }
 

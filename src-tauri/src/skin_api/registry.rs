@@ -1,13 +1,13 @@
 //! Read-only registry access (the `registry` permission, Windows only).
 
 use super::RegistryValue;
-use crate::i18n::{trf, Key};
+use crate::i18n::{Key, trf};
 
 #[cfg(target_os = "windows")]
 pub fn read(root: &str, path: &str, name: &str, lang: &str) -> Result<RegistryValue, String> {
     use base64::Engine;
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
 
     let hive = match root.to_ascii_uppercase().as_str() {
         "HKCU" | "HKEY_CURRENT_USER" => HKEY_CURRENT_USER,

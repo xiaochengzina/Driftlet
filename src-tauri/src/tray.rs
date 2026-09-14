@@ -1,10 +1,10 @@
+use crate::i18n::{Key, tr};
 use tauri::{
     AppHandle, Manager,
     image::Image,
     menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
-use crate::i18n::{tr, Key};
 
 /// Tray icon artwork at every size the Windows notification area uses for
 /// the standard DPI scales (100/125/150/175/200/250/300% → 16/20/24/28/32/
@@ -62,14 +62,17 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
         .id("reload_all")
         .build(app)?;
 
-    // Checked while every skin window is hidden (via the global hotkey or
-    // this item itself). The handle is stashed in AppState so the hotkey
-    // path can keep the checkmark in sync.
-    let toggle_skins = CheckMenuItemBuilder::new(tr(lang, Key::TrayToggleSkins))
+    // 勾选 = 专注模式激活（原「隐藏已加载的皮肤」升级为专注模式——方案
+    // §3 定案）。句柄 stash 进 AppState，勾选态由 focus::emit_changed 与
+    // sync_tray_toggle_item 漏斗按真实模式状态同步。
+    let toggle_skins = CheckMenuItemBuilder::new(tr(lang, Key::TrayFocusMode))
         .id("toggle_skins")
-        .checked(crate::hotkey::all_skins_hidden(app))
+        .checked(crate::focus::is_active(app))
         .build(app)?;
-    *app.state::<crate::AppState>().toggle_item.lock().unwrap_or_else(|e| e.into_inner()) = Some(toggle_skins.clone());
+    *app.state::<crate::AppState>()
+        .toggle_item
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(toggle_skins.clone());
 
     let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
 
@@ -99,7 +102,10 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 /// 构建「布局方案」子菜单（无方案时一行禁用占位）
-fn build_layouts_submenu(app: &AppHandle, lang: &str) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+fn build_layouts_submenu(
+    app: &AppHandle,
+    lang: &str,
+) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
     let state = app.state::<crate::AppState>();
     let layouts = {
         let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
@@ -122,13 +128,19 @@ fn build_layouts_submenu(app: &AppHandle, lang: &str) -> tauri::Result<tauri::me
 }
 
 /// 构建「皮肤显隐」子菜单并 stash 每皮肤勾选项句柄
-fn build_skins_submenu(app: &AppHandle, lang: &str) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+fn build_skins_submenu(
+    app: &AppHandle,
+    lang: &str,
+) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
     let state = app.state::<crate::AppState>();
     let loaded: std::collections::HashSet<String> =
         state.registry.loaded_ids().into_iter().collect();
 
     let mut builder = SubmenuBuilder::new(app, tr(lang, Key::TraySkinsMenu));
-    let mut vis_items = state.skin_vis_items.lock().unwrap_or_else(|e| e.into_inner());
+    let mut vis_items = state
+        .skin_vis_items
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     vis_items.clear();
 
     if loaded.is_empty() {
@@ -140,16 +152,17 @@ fn build_skins_submenu(app: &AppHandle, lang: &str) -> tauri::Result<tauri::menu
 
     // 已加载皮肤按显示名排序（名称取自 manifest；扫描按文件夹名稳定序后
     // 再按名称排，跨语言下顺序确定）
-    let mut named: Vec<(String, String)> = crate::skin::loader::scan_skins_directory(&state.skins_dir)
-        .into_iter()
-        .filter(|s| loaded.contains(&s.id))
-        .map(|s| {
-            // 显示名走 SkinManifest::display_name 单一口源（界面语言优先、
-            // 缺失回退另一语言——单语言皮肤两种界面都显示其提供的文案）
-            (s.id, s.manifest.display_name(&lang))
-        })
-        .collect();
-    named.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    let mut named: Vec<(String, String)> =
+        crate::skin::loader::scan_skins_directory(&state.skins_dir)
+            .into_iter()
+            .filter(|s| loaded.contains(&s.id))
+            .map(|s| {
+                // 显示名走 SkinManifest::display_name 单一口源（界面语言优先、
+                // 缺失回退另一语言——单语言皮肤两种界面都显示其提供的文案）
+                (s.id, s.manifest.display_name(lang))
+            })
+            .collect();
+    named.sort_by_key(|a| a.1.to_lowercase());
 
     // 扫描不到但已加载的（文件夹被外部删除的僵尸窗口）：以 id 兜底名称
     // ——漏掉它们会让「加载集 ≠ 菜单项集合」恒成立，每次可见性同步都
@@ -212,7 +225,8 @@ pub fn create_tray(app: &AppHandle) -> Result<(), String> {
                     reload_all_skins(app);
                 }
                 "toggle_skins" => {
-                    crate::hotkey::toggle_all_skins(app);
+                    // 托盘「专注模式」勾选 = 专注模式切换（与全局热键同一路径）
+                    crate::focus::toggle(app);
                 }
                 "quit" => {
                     graceful_exit(app);
@@ -254,22 +268,42 @@ pub fn create_tray(app: &AppHandle) -> Result<(), String> {
 }
 
 fn toggle_manager_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false) {
-            let _ = window.hide();
-        } else {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
+    match app.get_webview_window("main") {
+        Some(window) => {
+            if window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false) {
+                // 关窗语义统一 = 销毁（回收渲染进程内存；机制见 lib.rs
+                // create_manager_window 头注）
+                let _ = window.destroy();
+            } else {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        // 已销毁（关窗即销毁回收内存）——唤回即重建
+        None => {
+            if let Some(window) = crate::create_manager_window(app) {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
         }
     }
 }
 
 pub(crate) fn show_manager_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+    match app.get_webview_window("main") {
+        Some(window) => {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        // 已销毁（关窗即销毁回收内存）——唤回即重建
+        None => {
+            if let Some(window) = crate::create_manager_window(app) {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
     }
 }
 
@@ -290,7 +324,8 @@ fn reload_all_skins(app: &AppHandle) {
         // 快照在拿到锁之后再取：排队等待期间被卸载的皮肤会被
         // reload_skin_impl 当「未加载→直接 load」重新拉起
         for skin_id in state.registry.loaded_ids() {
-            if let Err(e) = crate::commands::reload_skin_impl(handle.clone(), skin_id.clone()).await {
+            if let Err(e) = crate::commands::reload_skin_impl(handle.clone(), skin_id.clone()).await
+            {
                 log::error!("reload_all_skins: failed to reload '{}': {}", skin_id, e);
             }
         }
@@ -308,7 +343,9 @@ pub(crate) fn graceful_exit(app: &AppHandle) {
 
     // 1. Signal that this is a real exit — the main window's CloseRequested
     //    handler will let the close go through instead of hiding to tray.
-    state.exiting.store(true, std::sync::atomic::Ordering::SeqCst);
+    state
+        .exiting
+        .store(true, std::sync::atomic::Ordering::SeqCst);
 
     // 2. Close every loaded skin window.  No per-window teardown wait here —
     //    destroy_skin_window's polling exists for same-label recreation on

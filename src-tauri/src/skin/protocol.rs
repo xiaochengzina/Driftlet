@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use tauri::http;
 use tauri::Manager;
+use tauri::http;
 
 const SKIN_SCHEME: &str = "skin";
 
@@ -62,7 +62,15 @@ pub fn handle_skin_request<R: tauri::Runtime>(
         let settings_json = baked_settings_json(&skins_dir, &relative_path);
         let language = state.lang();
         let theme = crate::commands::current_theme(&state);
-        let injected = inject_bridge(html, opacity, locked, resizable, &settings_json, &language, &theme);
+        let injected = inject_bridge(
+            html,
+            opacity,
+            locked,
+            resizable,
+            &settings_json,
+            &language,
+            &theme,
+        );
         (Cow::Owned(injected.into_bytes()), "text/html")
     } else {
         let mime = guess_mime(&canonical_file_path);
@@ -122,7 +130,10 @@ fn resolve_skin_file(skins_dir: &Path, relative_path: &str) -> Option<PathBuf> {
     // 规范化后按真实文件名再拦截一次 settings.json：Windows 8.3 短名
     //（SETTIN~1.JSO）能绕过规范化前的字符串判断，canonicalize 会还原成长名
     if is_settings_file_name(
-        canonical_file_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+        canonical_file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(""),
     ) {
         return None;
     }
@@ -234,17 +245,13 @@ fn parse_fs_query(query: Option<&str>) -> Option<PathBuf> {
 /// password 类型设置项的值恒替换为空串：skin:// 对所有皮肤同源，烘焙进
 /// HTML 的值可被任意皮肤 fetch 到；password 值由 skin_get_setting 命令
 /// 按窗口身份校验后单独下发（不经过本注入）。
-pub(crate) fn baked_settings_json(
-    skins_dir: &Path,
-    relative_path: &str,
-) -> String {
+pub(crate) fn baked_settings_json(skins_dir: &Path, relative_path: &str) -> String {
     let skin_id = relative_path.split('/').next().unwrap_or("");
     let skin_dir = skins_dir.join(skin_id);
     let values = match crate::skin::loader::load_skin_manifest(&skin_dir) {
         Ok(manifest) => {
             let overrides = crate::skin::settings::load_skin_settings(&skin_dir);
-            let mut values =
-                crate::skin::loader::effective_settings(&manifest, Some(&overrides));
+            let mut values = crate::skin::loader::effective_settings(&manifest, Some(&overrides));
             for def in &manifest.settings {
                 if def.kind == crate::skin::types::SkinSettingKind::Password {
                     values.insert(def.key.clone(), serde_json::Value::from(""));
@@ -308,7 +315,15 @@ fn parse_query_flag(query: Option<&str>, key: &str) -> bool {
     })
 }
 
-fn inject_bridge(html: String, opacity: f64, locked: bool, resizable: bool, settings_json: &str, language: &str, theme: &str) -> String {
+fn inject_bridge(
+    html: String,
+    opacity: f64,
+    locked: bool,
+    resizable: bool,
+    settings_json: &str,
+    language: &str,
+    theme: &str,
+) -> String {
     // Lock state is baked into the injected bridge at serve time: window
     // recreation (reload / on-desktop toggle) used to restore only the
     // cursor CSS via a racy eval and lose __DESK_PP__.positionLocked,
@@ -327,13 +342,11 @@ fn inject_bridge(html: String, opacity: f64, locked: bool, resizable: bool, sett
     // html and keep the page dim (e.g. baked 0.5, then runtime set to 1.0
     // stayed at 0.5 until the next reload).
     let bridge = format!(
-
         "<style>\n{}\n</style>\n{}\n<script>\n{}\n</script>",
         bridge_css(opacity),
         lock_style,
         bridge_script(locked, resizable, settings_json, language, theme),
     );
-
 
     // 大小写敏感定位修复：HTML 标签可大写（</HEAD>）。不 to_lowercase()
     //（非 ASCII 字符小写化会改变字节长度，索引会漂——insert_str 落在非
@@ -355,8 +368,7 @@ fn inject_bridge(html: String, opacity: f64, locked: bool, resizable: bool, sett
     } else {
         format!(
             "<!DOCTYPE html><html><head>{}</head><body>{}</body></html>",
-            bridge,
-            html
+            bridge, html
         )
     }
 }
@@ -416,213 +428,15 @@ pub fn scheme() -> &'static str {
     SKIN_SCHEME
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn opacity_clamps_like_the_setter() {
-        // 下限与 set_skin_opacity 统一为 0.1：0.0 会让窗口彻底隐形
-        assert_eq!(parse_opacity(Some("opacity=0")), 0.1);
-        assert_eq!(parse_opacity(Some("opacity=0.05")), 0.1);
-        assert_eq!(parse_opacity(Some("opacity=0.5")), 0.5);
-        assert_eq!(parse_opacity(Some("opacity=2")), 1.0);
-        assert_eq!(parse_opacity(Some("locked=1")), 1.0);
-        assert_eq!(parse_opacity(None), 1.0);
-    }
-
-    #[test]
-    fn html_entry_detection_is_case_insensitive() {
-        assert!(is_html_entry(Path::new("skins/a/index.html"), "a/index.html"));
-        assert!(is_html_entry(Path::new("skins/a/PAGE.HTML"), "a/PAGE.HTML"));
-        assert!(is_html_entry(Path::new("skins/a/Page.Htm"), "a/Page.Htm"));
-        assert!(!is_html_entry(Path::new("skins/a/style.css"), "a/style.css"));
-    }
-
-    #[test]
-    fn settings_file_name_matching() {
-        for name in ["settings.json", "SETTINGS.JSON", "settings.json.bak", "settings.json.tmp"] {
-            assert!(is_settings_file_name(name), "{} must be intercepted", name);
-        }
-        for name in ["skin.json", "settings.jsonx", "my-settings.json", ""] {
-            assert!(!is_settings_file_name(name), "{} must pass through", name);
-        }
-    }
-
-    #[test]
-    fn guess_mime_covers_common_media_and_case() {
-        assert_eq!(guess_mime(Path::new("a/ICON.ICO")), "image/x-icon");
-        assert_eq!(guess_mime(Path::new("a/pic.avif")), "image/avif");
-        assert_eq!(guess_mime(Path::new("a/song.MP3")), "audio/mpeg");
-        assert_eq!(guess_mime(Path::new("a/sound.wav")), "audio/wav");
-        assert_eq!(guess_mime(Path::new("a/sound.ogg")), "audio/ogg");
-        assert_eq!(guess_mime(Path::new("a/song.flac")), "audio/flac");
-        assert_eq!(guess_mime(Path::new("a/clip.mp4")), "video/mp4");
-        assert_eq!(guess_mime(Path::new("a/clip.WEBM")), "video/webm");
-        assert_eq!(guess_mime(Path::new("a/data.bin")), "application/octet-stream");
-    }
-
-    #[test]
-    fn resolve_skin_file_blocks_escapes_and_settings() {
-        let skins_dir = std::env::temp_dir().join(format!(
-            "driftlet-resolve-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let skin_dir = skins_dir.join("my-skin");
-        std::fs::create_dir_all(&skin_dir).unwrap();
-        std::fs::write(skin_dir.join("index.html"), "<html></html>").unwrap();
-        std::fs::write(skin_dir.join("settings.json"), "{}").unwrap();
-        // skins_dir 外的目标（逃逸终点）
-        std::fs::write(skins_dir.parent().unwrap().join("outside.txt"), "x").unwrap();
-
-        // 正常文件可解析
-        assert!(resolve_skin_file(&skins_dir, "my-skin/index.html").is_some());
-        // 空路径 / 不存在
-        assert!(resolve_skin_file(&skins_dir, "").is_none());
-        assert!(resolve_skin_file(&skins_dir, "my-skin/nope.png").is_none());
-        // 逃逸：.. 与编码后的 %2e%2e（先经 decode_uri_path 解码）
-        assert!(resolve_skin_file(&skins_dir, "../outside.txt").is_none());
-        assert!(resolve_skin_file(&skins_dir, &decode_uri_path("/%2e%2e/outside.txt")).is_none());
-        assert!(resolve_skin_file(&skins_dir, "my-skin/../../outside.txt").is_none());
-        // 冒号路径段（ADS / 盘符）
-        assert!(resolve_skin_file(&skins_dir, "my-skin/settings.json:$DATA").is_none());
-        // settings.json 及其衍生（大小写不敏感）
-        assert!(resolve_skin_file(&skins_dir, "my-skin/settings.json").is_none());
-        assert!(resolve_skin_file(&skins_dir, "my-skin/SETTINGS.JSON").is_none());
-        assert!(resolve_skin_file(&skins_dir, "my-skin/settings.json.bak").is_none());
-        // 普通同名文件在子目录不受限
-        std::fs::create_dir_all(skin_dir.join("sub")).unwrap();
-        std::fs::write(skin_dir.join("sub/settings.json"), "{}").unwrap();
-        // 注意：文件名拦截只看末段——子目录里的 settings.json 同样被拦（与
-        // handle_skin_request 现行口径一致：任何位置的 settings.json 都不出协议）
-        assert!(resolve_skin_file(&skins_dir, "my-skin/sub/settings.json").is_none());
-
-        let _ = std::fs::remove_dir_all(&skins_dir);
-        let _ = std::fs::remove_file(skins_dir.parent().unwrap().join("outside.txt"));
-    }
-
-    #[test]
-    fn fs_query_requires_existing_absolute_file() {
-        // 存在的绝对路径文件放行
-        let dir = std::env::temp_dir().join(format!("driftlet-fsref-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("pic.png");
-        std::fs::write(&file, b"x").unwrap();
-        let abs = file.to_string_lossy().replace('\\', "/");
-        let q = format!("path={}", percent_encoding::utf8_percent_encode(&abs, percent_encoding::NON_ALPHANUMERIC));
-        assert!(parse_fs_query(Some(&q)).is_some(), "存在的绝对路径文件应放行");
-        // 非绝对路径 / 不存在 / 目录 / 缺参数一律拒
-        assert!(parse_fs_query(Some("path=notes%2Ftodo.txt")).is_none());
-        assert!(parse_fs_query(Some("path=D%3A%2Fno-such-driftlet.xyz")).is_none());
-        let dir_q = format!("path={}", percent_encoding::utf8_percent_encode(&dir.to_string_lossy().replace('\\', "/"), percent_encoding::NON_ALPHANUMERIC));
-        assert!(parse_fs_query(Some(&dir_q)).is_none(), "目录不放行");
-        assert!(parse_fs_query(None).is_none());
-        assert!(parse_fs_query(Some("other=x")).is_none());
-        // UNC 路径一律拒（\\server\share 与 //server/share 双形态——
-        // is_file() 探测会外发 NTLM 认证，哈希外泄面）
-        assert!(parse_fs_query(Some("path=%5C%5Cattacker.tld%5Cs%5Cx.png")).is_none(), "UNC 双反杠不放行");
-        assert!(parse_fs_query(Some("path=%2F%2Fattacker.tld%2Fs%2Fx.png")).is_none(), "UNC 双斜杠不放行");
-        assert!(parse_fs_query(Some("path=%5C%5C%3F%5CUNC%5Cattacker.tld%5Cs%5Cx.png")).is_none(), "VerbatimUNC 不放行");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn bridge_bakes_language() {
-        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN", "light");
-        assert!(out.contains(r#"language: "zh-CN""#), "桥必须烘焙管理器语言");
-        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "en", "dark");
-        assert!(out.contains(r#"language: "en""#));
-    }
-
-    #[test]
-    fn bridge_bakes_theme() {
-        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN", "dark");
-        assert!(out.contains(r#"theme: "dark""#), "桥必须烘焙当前生效主题");
-        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN", "light");
-        assert!(out.contains(r#"theme: "light""#));
-    }
-
-    #[test]
-    fn bridge_escapes_script_close_in_baked_strings() {
-        // B-F1：serde_json 不转义 '/'——"</script>" 序列必须被转义为 <\/，
-        // 防标签提前闭合（加载路径另有 load_config 归一化第一道闸）
-        let out = inject_bridge(
-            "<html></html>".to_string(),
-            1.0,
-            false,
-            false,
-            "{}",
-            "zh</script><script>alert(1)</script>",
-            "light",
-        );
-        assert!(
-            !out.contains("</script><script>alert(1)"),
-            "恶意 language 不得原样进桥"
-        );
-        assert!(out.contains("<\\/script>"), "闭合序列必须被转义");
-    }
-
-    #[test]
-    fn bridge_hooks_console_forwarding() {
-        let out = inject_bridge("<html></html>".to_string(), 1.0, false, false, "{}", "zh-CN", "light");
-        assert!(out.contains("skin_console_log"), "桥必须注入 console 转发 hook");
-        assert!(out.contains("unhandledrejection"), "桥必须捕获未处理 rejection");
-        assert!(out.contains("open_skin_devtools"), "桥必须注入 DevTools 快捷键 hook");
-        assert!(
-            out.contains(&format!("hostVersion: \"{}\"", env!("CARGO_PKG_VERSION"))),
-            "桥必须烘焙宿主版本号"
-        );
-        assert!(
-            out.contains("window.driftlet=window.__DESK_PP__"),
-            "桥必须挂 driftlet 别名"
-        );
-    }
-
-    #[test]
-    fn baked_settings_strips_password_values() {
-        let skins_dir = std::env::temp_dir().join(format!(
-            "driftlet-protocol-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let skin_dir = skins_dir.join("my-skin");
-        std::fs::create_dir_all(&skin_dir).unwrap();
-        std::fs::write(skin_dir.join("index.html"), "<html></html>").unwrap();
-        std::fs::write(
-            skin_dir.join("skin.json"),
-            r##"{"name":"T","settings":[
-                {"key":"accent","type":"palette","default":"#ff3333"},
-                {"key":"token","type":"password"}
-            ]}"##,
-        )
-        .unwrap();
-        // 用户已保存的明文 password 值
-        std::fs::write(
-            skin_dir.join("settings.json"),
-            r##"{"accent":"#00ff00","token":"s3cret"}"##,
-        )
-        .unwrap();
-
-        let json = baked_settings_json(&skins_dir, "my-skin/index.html");
-        let values: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(values["accent"], "#00ff00", "非 password 值照常烘焙");
-        assert_eq!(values["token"], "", "password 值必须被替换为空串");
-        assert!(!json.contains("s3cret"), "明文 password 不得出现在注入内容里");
-
-        let _ = std::fs::remove_dir_all(&skins_dir);
-    }
-}
-
 /// 桥脚本正文（__DESK_PP__ 对象 + 右键菜单/拖动/边框缩放/控制台转发/DevTools 的
 /// 全部 IIFE）。与 bridge_css 分离：注入路径（HTML 拼接 vs 其他载体）各自组合。
-fn bridge_script(locked: bool, resizable: bool, settings_json: &str, language: &str, theme: &str) -> String {
+fn bridge_script(
+    locked: bool,
+    resizable: bool,
+    settings_json: &str,
+    language: &str,
+    theme: &str,
+) -> String {
     // 管理器界面语言烘焙进桥：皮肤可据此让自己的界面跟随管理器语言（与锁定
     // 态同理，必须在 serve 时烘焙而非创建后 eval，防竞态）。运行时切换由
     // set_language 命令 eval 更新并派发 desk-language-changed 事件。
@@ -639,7 +453,8 @@ fn bridge_script(locked: bool, resizable: bool, settings_json: &str, language: &
     // 宿主版本烘焙进桥：皮肤据此做能力探测（新控件/新命令在老宿主上自行降级），
     // 与 min_host_version 的安装期提示互补。版本号不随运行期变化，无需事件同步。
     let host_version_json =
-        esc(serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"unknown\"".into()));
+        esc(serde_json::to_string(env!("CARGO_PKG_VERSION"))
+            .unwrap_or_else(|_| "\"unknown\"".into()));
     format!(
         r#"window.__DESK_PP__={{  setOpacity:function(v){{document.documentElement.style.opacity=v;}},
   positionLocked: {locked},
@@ -910,3 +725,293 @@ fn bridge_css(opacity: f64) -> String {
     )
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opacity_clamps_like_the_setter() {
+        // 下限与 set_skin_opacity 统一为 0.1：0.0 会让窗口彻底隐形
+        assert_eq!(parse_opacity(Some("opacity=0")), 0.1);
+        assert_eq!(parse_opacity(Some("opacity=0.05")), 0.1);
+        assert_eq!(parse_opacity(Some("opacity=0.5")), 0.5);
+        assert_eq!(parse_opacity(Some("opacity=2")), 1.0);
+        assert_eq!(parse_opacity(Some("locked=1")), 1.0);
+        assert_eq!(parse_opacity(None), 1.0);
+    }
+
+    #[test]
+    fn html_entry_detection_is_case_insensitive() {
+        assert!(is_html_entry(
+            Path::new("skins/a/index.html"),
+            "a/index.html"
+        ));
+        assert!(is_html_entry(Path::new("skins/a/PAGE.HTML"), "a/PAGE.HTML"));
+        assert!(is_html_entry(Path::new("skins/a/Page.Htm"), "a/Page.Htm"));
+        assert!(!is_html_entry(
+            Path::new("skins/a/style.css"),
+            "a/style.css"
+        ));
+    }
+
+    #[test]
+    fn settings_file_name_matching() {
+        for name in [
+            "settings.json",
+            "SETTINGS.JSON",
+            "settings.json.bak",
+            "settings.json.tmp",
+        ] {
+            assert!(is_settings_file_name(name), "{} must be intercepted", name);
+        }
+        for name in ["skin.json", "settings.jsonx", "my-settings.json", ""] {
+            assert!(!is_settings_file_name(name), "{} must pass through", name);
+        }
+    }
+
+    #[test]
+    fn guess_mime_covers_common_media_and_case() {
+        assert_eq!(guess_mime(Path::new("a/ICON.ICO")), "image/x-icon");
+        assert_eq!(guess_mime(Path::new("a/pic.avif")), "image/avif");
+        assert_eq!(guess_mime(Path::new("a/song.MP3")), "audio/mpeg");
+        assert_eq!(guess_mime(Path::new("a/sound.wav")), "audio/wav");
+        assert_eq!(guess_mime(Path::new("a/sound.ogg")), "audio/ogg");
+        assert_eq!(guess_mime(Path::new("a/song.flac")), "audio/flac");
+        assert_eq!(guess_mime(Path::new("a/clip.mp4")), "video/mp4");
+        assert_eq!(guess_mime(Path::new("a/clip.WEBM")), "video/webm");
+        assert_eq!(
+            guess_mime(Path::new("a/data.bin")),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn resolve_skin_file_blocks_escapes_and_settings() {
+        let skins_dir = std::env::temp_dir().join(format!(
+            "driftlet-resolve-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let skin_dir = skins_dir.join("my-skin");
+        std::fs::create_dir_all(&skin_dir).unwrap();
+        std::fs::write(skin_dir.join("index.html"), "<html></html>").unwrap();
+        std::fs::write(skin_dir.join("settings.json"), "{}").unwrap();
+        // skins_dir 外的目标（逃逸终点）
+        std::fs::write(skins_dir.parent().unwrap().join("outside.txt"), "x").unwrap();
+
+        // 正常文件可解析
+        assert!(resolve_skin_file(&skins_dir, "my-skin/index.html").is_some());
+        // 空路径 / 不存在
+        assert!(resolve_skin_file(&skins_dir, "").is_none());
+        assert!(resolve_skin_file(&skins_dir, "my-skin/nope.png").is_none());
+        // 逃逸：.. 与编码后的 %2e%2e（先经 decode_uri_path 解码）
+        assert!(resolve_skin_file(&skins_dir, "../outside.txt").is_none());
+        assert!(resolve_skin_file(&skins_dir, &decode_uri_path("/%2e%2e/outside.txt")).is_none());
+        assert!(resolve_skin_file(&skins_dir, "my-skin/../../outside.txt").is_none());
+        // 冒号路径段（ADS / 盘符）
+        assert!(resolve_skin_file(&skins_dir, "my-skin/settings.json:$DATA").is_none());
+        // settings.json 及其衍生（大小写不敏感）
+        assert!(resolve_skin_file(&skins_dir, "my-skin/settings.json").is_none());
+        assert!(resolve_skin_file(&skins_dir, "my-skin/SETTINGS.JSON").is_none());
+        assert!(resolve_skin_file(&skins_dir, "my-skin/settings.json.bak").is_none());
+        // 普通同名文件在子目录不受限
+        std::fs::create_dir_all(skin_dir.join("sub")).unwrap();
+        std::fs::write(skin_dir.join("sub/settings.json"), "{}").unwrap();
+        // 注意：文件名拦截只看末段——子目录里的 settings.json 同样被拦（与
+        // handle_skin_request 现行口径一致：任何位置的 settings.json 都不出协议）
+        assert!(resolve_skin_file(&skins_dir, "my-skin/sub/settings.json").is_none());
+
+        let _ = std::fs::remove_dir_all(&skins_dir);
+        let _ = std::fs::remove_file(skins_dir.parent().unwrap().join("outside.txt"));
+    }
+
+    #[test]
+    fn fs_query_requires_existing_absolute_file() {
+        // 存在的绝对路径文件放行
+        let dir = std::env::temp_dir().join(format!("driftlet-fsref-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("pic.png");
+        std::fs::write(&file, b"x").unwrap();
+        let abs = file.to_string_lossy().replace('\\', "/");
+        let q = format!(
+            "path={}",
+            percent_encoding::utf8_percent_encode(&abs, percent_encoding::NON_ALPHANUMERIC)
+        );
+        assert!(
+            parse_fs_query(Some(&q)).is_some(),
+            "存在的绝对路径文件应放行"
+        );
+        // 非绝对路径 / 不存在 / 目录 / 缺参数一律拒
+        assert!(parse_fs_query(Some("path=notes%2Ftodo.txt")).is_none());
+        assert!(parse_fs_query(Some("path=D%3A%2Fno-such-driftlet.xyz")).is_none());
+        let dir_q = format!(
+            "path={}",
+            percent_encoding::utf8_percent_encode(
+                &dir.to_string_lossy().replace('\\', "/"),
+                percent_encoding::NON_ALPHANUMERIC
+            )
+        );
+        assert!(parse_fs_query(Some(&dir_q)).is_none(), "目录不放行");
+        assert!(parse_fs_query(None).is_none());
+        assert!(parse_fs_query(Some("other=x")).is_none());
+        // UNC 路径一律拒（\\server\share 与 //server/share 双形态——
+        // is_file() 探测会外发 NTLM 认证，哈希外泄面）
+        assert!(
+            parse_fs_query(Some("path=%5C%5Cattacker.tld%5Cs%5Cx.png")).is_none(),
+            "UNC 双反杠不放行"
+        );
+        assert!(
+            parse_fs_query(Some("path=%2F%2Fattacker.tld%2Fs%2Fx.png")).is_none(),
+            "UNC 双斜杠不放行"
+        );
+        assert!(
+            parse_fs_query(Some("path=%5C%5C%3F%5CUNC%5Cattacker.tld%5Cs%5Cx.png")).is_none(),
+            "VerbatimUNC 不放行"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bridge_bakes_language() {
+        let out = inject_bridge(
+            "<html></html>".to_string(),
+            1.0,
+            false,
+            false,
+            "{}",
+            "zh-CN",
+            "light",
+        );
+        assert!(out.contains(r#"language: "zh-CN""#), "桥必须烘焙管理器语言");
+        let out = inject_bridge(
+            "<html></html>".to_string(),
+            1.0,
+            false,
+            false,
+            "{}",
+            "en",
+            "dark",
+        );
+        assert!(out.contains(r#"language: "en""#));
+    }
+
+    #[test]
+    fn bridge_bakes_theme() {
+        let out = inject_bridge(
+            "<html></html>".to_string(),
+            1.0,
+            false,
+            false,
+            "{}",
+            "zh-CN",
+            "dark",
+        );
+        assert!(out.contains(r#"theme: "dark""#), "桥必须烘焙当前生效主题");
+        let out = inject_bridge(
+            "<html></html>".to_string(),
+            1.0,
+            false,
+            false,
+            "{}",
+            "zh-CN",
+            "light",
+        );
+        assert!(out.contains(r#"theme: "light""#));
+    }
+
+    #[test]
+    fn bridge_escapes_script_close_in_baked_strings() {
+        // B-F1：serde_json 不转义 '/'——"</script>" 序列必须被转义为 <\/，
+        // 防标签提前闭合（加载路径另有 load_config 归一化第一道闸）
+        let out = inject_bridge(
+            "<html></html>".to_string(),
+            1.0,
+            false,
+            false,
+            "{}",
+            "zh</script><script>alert(1)</script>",
+            "light",
+        );
+        assert!(
+            !out.contains("</script><script>alert(1)"),
+            "恶意 language 不得原样进桥"
+        );
+        assert!(out.contains("<\\/script>"), "闭合序列必须被转义");
+    }
+
+    #[test]
+    fn bridge_hooks_console_forwarding() {
+        let out = inject_bridge(
+            "<html></html>".to_string(),
+            1.0,
+            false,
+            false,
+            "{}",
+            "zh-CN",
+            "light",
+        );
+        assert!(
+            out.contains("skin_console_log"),
+            "桥必须注入 console 转发 hook"
+        );
+        assert!(
+            out.contains("unhandledrejection"),
+            "桥必须捕获未处理 rejection"
+        );
+        assert!(
+            out.contains("open_skin_devtools"),
+            "桥必须注入 DevTools 快捷键 hook"
+        );
+        assert!(
+            out.contains(&format!("hostVersion: \"{}\"", env!("CARGO_PKG_VERSION"))),
+            "桥必须烘焙宿主版本号"
+        );
+        assert!(
+            out.contains("window.driftlet=window.__DESK_PP__"),
+            "桥必须挂 driftlet 别名"
+        );
+    }
+
+    #[test]
+    fn baked_settings_strips_password_values() {
+        let skins_dir = std::env::temp_dir().join(format!(
+            "driftlet-protocol-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let skin_dir = skins_dir.join("my-skin");
+        std::fs::create_dir_all(&skin_dir).unwrap();
+        std::fs::write(skin_dir.join("index.html"), "<html></html>").unwrap();
+        std::fs::write(
+            skin_dir.join("skin.json"),
+            r##"{"name":"T","settings":[
+                {"key":"accent","type":"palette","default":"#ff3333"},
+                {"key":"token","type":"password"}
+            ]}"##,
+        )
+        .unwrap();
+        // 用户已保存的明文 password 值
+        std::fs::write(
+            skin_dir.join("settings.json"),
+            r##"{"accent":"#00ff00","token":"s3cret"}"##,
+        )
+        .unwrap();
+
+        let json = baked_settings_json(&skins_dir, "my-skin/index.html");
+        let values: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(values["accent"], "#00ff00", "非 password 值照常烘焙");
+        assert_eq!(values["token"], "", "password 值必须被替换为空串");
+        assert!(
+            !json.contains("s3cret"),
+            "明文 password 不得出现在注入内容里"
+        );
+
+        let _ = std::fs::remove_dir_all(&skins_dir);
+    }
+}

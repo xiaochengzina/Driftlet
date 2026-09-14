@@ -1,0 +1,67 @@
+name: 🐛 Bug 报告 / Bug Report
+description: 报告 Driftlet 的异常行为 / Report a defect
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告！请尽量填全——**复现步骤 + 版本号 + 日志**是定位问题的三大关键。
+        Thanks for reporting! Repro steps + version + logs are the three keys to a fast fix.
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么 / What happened
+      description: 简要描述异常现象（期望 vs 实际）
+      placeholder: 例：右键菜单勾选「边缘吸附」后，管理器「窗口」页的开关没有跟着变……
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      placeholder: "1. 打开……\n2. 点击……\n3. 看到……"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / Version
+      description: 关于面板里的版本号（如 1.2.4）；安装包来源（官网/GitHub）
+      placeholder: 1.2.4
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 系统 / OS
+      options:
+        - Windows 11
+        - Windows 10
+        - 其他 / Other（请在补充里说明）
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及面 / Area
+      options:
+        - 管理器界面 / Manager UI
+        - 皮肤窗口行为（拖动/吸附/置顶/穿透等）/ Skin window behavior
+        - 某个具体皮肤 / A specific skin（请在补充里给出皮肤名与版本）
+        - 安装/更新/卸载 / Install, update, or uninstall
+        - 皮肤开发接口（桥/命令/权限）/ Skin API
+        - 托盘/热键/专注模式 / Tray, hotkeys, Focus Mode
+        - 其他 / Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / Logs
+      description: 管理器「设置 → 高级 → 日志」里的相关条目（可按皮肤筛选）；无关可留空
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充 / Anything else
+      description: 截图、屏幕录制、怀疑的关联操作等

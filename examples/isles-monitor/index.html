@@ -8,6 +8,7 @@
   .card {
     flex-direction: row;
     align-items: center;
+    gap: clamp(10px, min(4vw, 8vh), 24px); /* 旧运行时后备（无容器查询），下同 */
     gap: clamp(10px, min(4cqw, 8cqh), 24px);
   }
   .card.dir-right { flex-direction: row-reverse; }
@@ -16,7 +17,9 @@
   .rings {
     position: relative;
     flex: none;
+    width: min(100vh, 156px);
     width: min(100cqh, 156px);
+    height: min(100vh, 156px);
     height: min(100cqh, 156px);
   }
   /* 环与 M 档同尺寸——min(内容高, 156px)（P 档恰为 156px，M 档钉到同值） */
@@ -27,9 +30,9 @@
   .slot-outer { stroke: var(--ring-outer, #12B886); }
   .slot-mid { stroke: var(--ring-mid, #3B82F6); }
   .slot-inner { stroke: var(--ring-inner, #F26D5B); }
-  .track-outer { stroke: color-mix(in srgb, var(--ring-outer, #12B886) 16%, var(--isles-card-bg)); }
-  .track-mid { stroke: color-mix(in srgb, var(--ring-mid, #3B82F6) 16%, var(--isles-card-bg)); }
-  .track-inner { stroke: color-mix(in srgb, var(--ring-inner, #F26D5B) 16%, var(--isles-card-bg)); }
+  .track-outer { stroke: rgba(128, 128, 128, 0.22); stroke: color-mix(in srgb, var(--ring-outer, #12B886) 16%, var(--isles-card-bg)); } /* 前条 = 旧运行时后备 */
+  .track-mid { stroke: rgba(128, 128, 128, 0.22); stroke: color-mix(in srgb, var(--ring-mid, #3B82F6) 16%, var(--isles-card-bg)); }
+  .track-inner { stroke: rgba(128, 128, 128, 0.22); stroke: color-mix(in srgb, var(--ring-inner, #F26D5B) 16%, var(--isles-card-bg)); }
 
   /* ── 右区：系统整体占用热力图（纯图无文字；每格 = 30s 均值、按列推进、
      最新在右下；环看分项占比、热力图看整体走势） ── */
@@ -47,20 +50,27 @@
     grid-auto-flow: column;
     gap: 4px;
     justify-content: center;
-    transform: translateX(-0.5cqw);   /* 整体左移 0.5cqw（≈420 宽下 2px，随卡面缩放等比跟随） */
+    transform: translateX(-0.5vw);
+  transform: translateX(-0.5cqw);   /* 整体左移 0.5cqw（≈420 宽下 2px，随卡面缩放等比跟随） */
   }
   .heat-cell { width: 14px; height: 14px; border-radius: 3px; }
 
   /* 方向镜像（环在右）：以环左为基准的真镜像——位移取反（0.5cqw 向右）、
      时间轴翻转（列推进从右到左，最新格落左下） */
   .card.dir-right #heat {
-    transform: translateX(0.5cqw);
+    transform: translateX(0.5vw);
+  transform: translateX(0.5cqw);
     direction: rtl;
   }
 
   /* ── 布局断档：≤240px 宽 = M 小方（纯环无文字） ──
      纪律：容器查询的规则不能样式化查询容器自身（会被静默丢弃）——居中靠
      子元素 margin-inline: auto（横向）+ 顶层 align-items: center（纵向） */
+  /* 旧运行时后备：无容器查询时按视口宽降级（皮肤卡即窗口，vw≈cqw） */
+  @media (max-width: 240px) {
+    .rings { margin-inline: auto; }
+    .side { display: none; }
+  }
   @container (max-width: 240px) {
     .rings { margin-inline: auto; }
     .side { display: none; }

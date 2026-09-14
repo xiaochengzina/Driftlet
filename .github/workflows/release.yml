@@ -5,7 +5,9 @@ name: Release
 #
 # 触发方式：仅手动（workflow_dispatch）。流程：
 #   1. 四处版本号一致性闸门（AGENTS.md 硬性约定 #3）
-#   2. 前端构建 + 后端测试 + tauri build 出 NSIS 安装包
+#   2. 前端构建 + 后端测试 + tauri build 出 NSIS 安装包 ×2（标准版 + 离线版
+#      ——离线版经 tauri.offline.conf.json 覆盖内嵌 WebView2 完整运行时，
+#      面向无网络机器；应用内更新仍只下载标准版）
 #   3. 上传未签名安装包为 workflow artifact（SignPath 可验证来源的前提）
 #   4. 满足两个条件才提交签名请求（否则跳过，产物即未签名包）：
 #      - 运行在公开仓库 xiaochengzina/Driftlet（SignPath 签名绑定公开仓库的
@@ -19,7 +21,8 @@ name: Release
 # SignPath 侧一次性配置（后台 UI，非本文件）：
 #   Organization 接入 Trusted Build System "GitHub.com" 并 link 到 Project；
 #   Artifact Configuration 根元素为单文件 <file> + <authenticode-sign>
-#   （本工作流以 archive: false 上传原始 exe，配合 skip-decompress: true）；
+#   （本工作流以 archive: false 上传原始 exe，配合 skip-decompress: true），
+#   且文件名模式需同时覆盖 *setup.exe 与 *setup-offline.exe（两个签名请求）；
 #   元数据限制：product name = "Driftlet"（NSIS 模板已写 VIAddVersionKey）。
 #
 # 需要在公开仓库设置的机密/变量（GitHub Settings，不落任何文件）：
@@ -107,6 +110,29 @@ jobs:
           "exe_path=$exe" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "sha256_unsigned=$hash" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      # 离线版：内嵌 WebView2 完整离线运行时（+~205MB（本地实测 210MB））——面向无网络/受限网络机器
+      #（默认 downloadBootstrapper 装运行时要联网）。同一份代码、同一 productName
+      #（同一应用身份，仅打包形态不同）；bundler 打包时拉取微软离线安装器内嵌。
+      - name: Build NSIS offline installer (embedded WebView2 runtime)
+        # 编排器内部：先保护既有标准包 → 构建 → 改名 → 恢复（标准包不被覆盖；
+        # 覆盖写进配置文件再传路径——pwsh→npm→cmd 三层引号会把内联 JSON 剥光）
+        run: node tools/build-offline.mjs
+
+      - name: Locate offline installer and compute SHA-256 (unsigned)
+        shell: pwsh
+        id: locate_offline
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = '${{ steps.version.outputs.version }}'
+          # 编排器已把离线版改名为 -offline 后缀（与本地同一命名来源）
+          $dst = "src-tauri/target/release/bundle/nsis/Driftlet_${v}_x64-setup-offline.exe"
+          if (-not (Test-Path $dst)) { Write-Error "offline installer not found at expected path: $dst"; exit 1 }
+          $hash = (Get-FileHash $dst -Algorithm SHA256).Hash.ToLower()
+          Write-Host "unsigned offline exe: $dst"
+          Write-Host "unsigned offline sha256: $hash"
+          "exe_path=$dst" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha256_unsigned_offline=$hash" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       # SignPath 可验证来源的硬性前提：待签名产物必须先作为 workflow artifact 落在
       # GitHub 服务器上，签名请求凭 artifact-id 引用它。archive: false = 原始 exe
       # 直传（不打 zip），对应 SignPath 侧 <file> 型 artifact configuration。
@@ -116,6 +142,15 @@ jobs:
         with:
           name: driftlet-setup-unsigned
           path: ${{ steps.locate.outputs.exe_path }}
+          archive: false
+          retention-days: 14
+
+      - name: Upload unsigned offline installer artifact
+        id: upload_offline
+        uses: actions/upload-artifact@v7
+        with:
+          name: driftlet-setup-offline-unsigned
+          path: ${{ steps.locate_offline.outputs.exe_path }}
           archive: false
           retention-days: 14
 
@@ -137,6 +172,23 @@ jobs:
           output-artifact-directory: signed
           skip-decompress: true
 
+      # 第二个签名请求（离线版）：SignPath 侧的 artifact configuration 需覆盖
+      # *setup-offline.exe 文件名模式（一次性配置，见 docs/公开发布流程.md 文末清单）
+      - name: Submit offline signing request (SignPath)
+        id: signpath_offline
+        if: github.repository == 'xiaochengzina/Driftlet' && vars.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload_offline.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-offline
+          skip-decompress: true
+
       - name: Compute SHA-256 of signed installer and upload
         if: github.repository == 'xiaochengzina/Driftlet' && vars.SIGNPATH_ENABLED == 'true'
         shell: pwsh
@@ -151,6 +203,20 @@ jobs:
           "exe_path=$($signedExe.FullName)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "sha256_signed=$hash" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Compute SHA-256 of signed offline installer and upload
+        if: github.repository == 'xiaochengzina/Driftlet' && vars.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        id: signed_offline
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $signedExe = Get-ChildItem signed-offline -Filter *.exe -Recurse | Select-Object -First 1
+          if (-not $signedExe) { Write-Error "signed offline artifact not found under signed-offline/"; exit 1 }
+          $hash = (Get-FileHash $signedExe.FullName -Algorithm SHA256).Hash.ToLower()
+          Write-Host "signed offline exe: $($signedExe.FullName)"
+          Write-Host "signed offline sha256: $hash"
+          "exe_path=$($signedExe.FullName)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha256_signed_offline=$hash" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Upload signed installer artifact
         if: github.repository == 'xiaochengzina/Driftlet' && vars.SIGNPATH_ENABLED == 'true'
         uses: actions/upload-artifact@v7
@@ -160,19 +226,32 @@ jobs:
           archive: false
           retention-days: 14
 
+      - name: Upload signed offline installer artifact
+        if: github.repository == 'xiaochengzina/Driftlet' && vars.SIGNPATH_ENABLED == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: driftlet-setup-offline-signed
+          path: ${{ steps.signed_offline.outputs.exe_path }}
+          archive: false
+          retention-days: 14
+
       - name: Release summary
         if: always()
         shell: pwsh
         run: |
           $v = '${{ steps.version.outputs.version }}'
           $unsigned = '${{ steps.locate.outputs.sha256_unsigned }}'
+          $unsignedOffline = '${{ steps.locate_offline.outputs.sha256_unsigned_offline }}'
           $signed = '${{ steps.signed.outputs.sha256_signed }}'
+          $signedOffline = '${{ steps.signed_offline.outputs.sha256_signed_offline }}'
           $md = @()
           $md += "## Driftlet $v 发布候选"
           $md += ""
           $md += "- 未签名包 SHA-256：``$unsigned``（artifact ``driftlet-setup-unsigned``）"
+          $md += "- 未签名**离线版**（内嵌 WebView2 运行时）SHA-256：``$unsignedOffline``（artifact ``driftlet-setup-offline-unsigned``）"
           if ($signed) {
             $md += "- **已签名包 SHA-256：``$signed``（artifact ``driftlet-setup-signed``）**"
+            $md += "- **已签名离线版 SHA-256：``$signedOffline``（artifact ``driftlet-setup-offline-signed``）**"
             $md += ""
             $md += "release notes 末尾的 ``SHA256:`` 一行必须填**已签名包**的哈希——应用内更新下载的就是它。"
           } else {

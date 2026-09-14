@@ -67,13 +67,13 @@ impl SkinManifest {
     }
 
     pub fn display_description(&self, lang: &str) -> Option<String> {
-        let d = pick_skin_text(lang, self.description_zh.as_deref(), self.description_en.as_deref());
+        let d = pick_skin_text(
+            lang,
+            self.description_zh.as_deref(),
+            self.description_en.as_deref(),
+        );
         // 简介是全空时不下发（前端按 falsy 决定渲染不渲染）
-        if d.is_empty() {
-            None
-        } else {
-            Some(d)
-        }
+        if d.is_empty() { None } else { Some(d) }
     }
 }
 
@@ -148,7 +148,8 @@ pub enum SkinSettingKind {
     Directory,
     /// GPU 适配器选择器（管理器运行时枚举本机 GPU 生成下拉项），
     /// 值 = 适配器 LUID 字符串（"0xHHHHHHHH_0xLLLLLLLL"），空串 = 首项（自动）
-    #[serde(rename = "gpu_adapter")]   // 显式 rename：lowercase 规则会生成 gpuadapter，保留下划线名
+    #[serde(rename = "gpu_adapter")]
+    // 显式 rename：lowercase 规则会生成 gpuadapter，保留下划线名
     GpuAdapter,
 }
 
@@ -249,11 +250,21 @@ pub(crate) fn is_url_entry(entry: &str) -> bool {
 pub const MAX_DIMENSION: u32 = 10000;
 pub const MIN_OPACITY: f64 = 0.1;
 
-fn default_width() -> u32 { 300 }
-fn default_height() -> u32 { 200 }
-fn default_opacity() -> f64 { 1.0 }
-fn default_zoom() -> f64 { 1.0 }
-fn default_true() -> bool { true }
+fn default_width() -> u32 {
+    300
+}
+fn default_height() -> u32 {
+    200
+}
+fn default_opacity() -> f64 {
+    1.0
+}
+fn default_zoom() -> f64 {
+    1.0
+}
+fn default_true() -> bool {
+    true
+}
 
 /// Full runtime representation of a skin
 #[derive(Debug, Clone, Serialize)]
@@ -373,6 +384,10 @@ pub struct SkinRuntimeConfig {
     /// 无效果（无窗可切），不需加载/卸载钩子。
     #[serde(default)]
     pub hotkey: String,
+    /// 专注模式白名单（豁免）：专注模式进入时不隐藏/不卸载该皮肤。
+    /// 专注模式面板集中管理（docs/proposals/专注模式方案-2026-09.md）。
+    #[serde(default)]
+    pub focus_exempt: bool,
     // 「皮肤设置」页的用户值存在皮肤文件夹的 settings.json 里，不在此结构
     // （旧配置的 custom 键由 v1→v2 迁移处理，serde 读入时自动忽略）。
 }
@@ -399,6 +414,7 @@ impl SkinRuntimeConfig {
             edge_snap: None,
             snap_gap: None,
             hotkey: String::new(),
+            focus_exempt: false,
         }
     }
 }
@@ -424,6 +440,7 @@ impl Default for SkinRuntimeConfig {
             edge_snap: None,
             snap_gap: None,
             hotkey: String::new(),
+            focus_exempt: false,
         }
     }
 }
@@ -477,6 +494,18 @@ pub struct AppConfig {
     /// 「默认皮肤」组）：一次性标记——用户删过的皮肤不复活、组被删过不重建。
     #[serde(default)]
     pub bundled_skins_seeded: bool,
+    /// 专注模式动作偏好（"hide" | "unload"）：隐藏档秒回不回收内存；卸载档
+    /// 回收内存但运行时状态丢失。默认隐藏（老用户的热键习惯无感）。
+    #[serde(default = "default_focus_mode_action")]
+    pub focus_mode_action: String,
+    /// 全屏时自动进入专注模式（默认关——升级用户不被打扰）。
+    #[serde(default)]
+    pub focus_mode_auto_fullscreen: bool,
+    /// 专注模式态（config.json 持久化，崩溃安全）：模式激活期间应用退出/
+    /// 崩溃后下次启动按快照动作恢复并清除（隐藏档无需恢复动作——隐藏不落盘
+    /// loaded_skins，重启后照常全部加载显示）。启动 = 全新桌面，不带着模式复活。
+    #[serde(default)]
+    pub focus_mode: FocusModeState,
 }
 
 fn default_hot_reload() -> bool {
@@ -485,6 +514,24 @@ fn default_hot_reload() -> bool {
 
 fn default_update_check() -> bool {
     true
+}
+
+/// 专注模式默认动作档：隐藏（老用户的热键体验与旧版逐字节一致）。
+fn default_focus_mode_action() -> String {
+    "hide".to_string()
+}
+
+/// 专注模式态（config.json 持久化，崩溃安全）：active 标志 + 进入时生效的
+/// 动作档 + 受影响皮肤快照。用户偏好档在 AppConfig.focus_mode_action；模式
+/// 期间改档不影响本次模式的还原口径（退出按进入档还原）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FocusModeState {
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default = "default_focus_mode_action")]
+    pub action: String,
+    #[serde(default)]
+    pub snapshot: Vec<String>,
 }
 
 /// Default toggle-visibility hotkey. Rarely taken by other apps; users can
@@ -549,12 +596,7 @@ pub(crate) fn default_language() -> String {
         use windows::Win32::Globalization::GetUserDefaultUILanguage;
         // LANGID primary language id = low 10 bits; LANG_CHINESE = 0x04
         let primary = unsafe { GetUserDefaultUILanguage() } & 0x3FF;
-        if primary == 0x04 {
-            "zh-CN"
-        } else {
-            "en"
-        }
-        .to_string()
+        if primary == 0x04 { "zh-CN" } else { "en" }.to_string()
     }
     #[cfg(not(windows))]
     "en".to_string() // 非 Windows 无 UI 语言探测，按「everything else en」
@@ -577,6 +619,9 @@ impl Default for AppConfig {
             update_check: default_update_check(),
             allow_elevated: false,
             bundled_skins_seeded: false,
+            focus_mode_action: default_focus_mode_action(),
+            focus_mode_auto_fullscreen: false,
+            focus_mode: FocusModeState::default(),
         }
     }
 }

@@ -1,11 +1,7 @@
 node_modules/
 dist/
 target/
-packages/
-public/skin-temp/
-.tmp-ui-preview/
 .tmp-ico-src/
-.tmp-ico-preview/
 .venv/
 .DS_Store
 *.log

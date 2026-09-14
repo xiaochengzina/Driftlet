@@ -9,7 +9,9 @@
     align-items: center;
     justify-content: center;
     /* 文字深浅副色按卡面主色重新派生（自定义属性继承声明处计算值的经典坑） */
+    --isles-fg-2: var(--isles-fg); /* 旧运行时后备（无 color-mix）：副色取主色 */
     --isles-fg-2: color-mix(in srgb, var(--isles-fg) 62%, transparent);
+    --isles-fg-3: var(--isles-fg);
     --isles-fg-3: color-mix(in srgb, var(--isles-fg) 45%, transparent);
   }
 
@@ -27,6 +29,7 @@
   .ring-track {
     fill: none;
     stroke-width: 6;
+    stroke: rgba(128, 128, 128, 0.22); /* 旧运行时后备 */
     stroke: color-mix(in srgb, var(--isles-accent) 16%, var(--isles-card-bg));
   }
   .ring-val {
@@ -46,10 +49,12 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: clamp(6px, 4vh, 20px);
     gap: clamp(6px, 4cqh, 20px);   /* ± 钮与时间拉开间距 */
     pointer-events: none;   /* 环心穿透给拖动区；步进钮单独恢复 */
   }
   .mtime {
+    font-size: clamp(18px, min(19vw, 22vh), 60px);
     font-size: clamp(18px, min(19cqw, 22cqh), 60px);
     font-weight: 500;   /* 小档数字加重（倒数日实机教训：小字号 400 偏单薄） */
     line-height: 1.05;
@@ -58,9 +63,11 @@
     color: var(--isles-fg);
     transition: color 0.3s ease;
   }
-  .mtime.long { font-size: clamp(13px, min(11cqw, 13cqh), 40px); }   /* H:MM:SS 小时态降字级 */
+  .mtime.long { font-size: clamp(13px, min(11vw, 13vh), 40px);
+    font-size: clamp(13px, min(11cqw, 13cqh), 40px); }   /* H:MM:SS 小时态降字级 */
   .card.done .mtime { color: var(--isles-accent); }
   .mstate {
+    font-size: clamp(10px, min(5.6vw, 8vh), 18px);
     font-size: clamp(10px, min(5.6cqw, 8cqh), 18px);
     letter-spacing: 0.08em;
     color: var(--isles-fg-2);
@@ -73,9 +80,12 @@
   .step-btn {
     display: none;
     pointer-events: auto;
+    width: clamp(18px, min(14vw, 16vh), 38px);
     width: clamp(18px, min(14cqw, 16cqh), 38px);
+    height: clamp(18px, min(14vw, 16vh), 38px);
     height: clamp(18px, min(14cqw, 16cqh), 38px);
     border-radius: 30%;
+    background: var(--isles-card-bg); /* 旧运行时后备：不染淡 */
     background: color-mix(in srgb, var(--isles-accent) 12%, var(--isles-card-bg));
     color: var(--isles-accent);
     opacity: 0;
@@ -85,6 +95,7 @@
     transition: opacity 0.18s ease, background 0.15s ease, transform 0.12s ease;
   }
   .step-btn:hover {
+    background: rgba(128, 128, 128, 0.18);
     background: color-mix(in srgb, var(--isles-accent) 22%, var(--isles-card-bg));
     color: var(--isles-accent);
   }
@@ -103,7 +114,9 @@
      opacity 留键盘可聚焦性——visibility:hidden 会把它们移出 Tab 序） */
   .tools {
     position: absolute;
+    top: clamp(8px, min(4vw, 8vh), 16px);
     top: clamp(8px, min(4cqw, 8cqh), 16px);
+    right: clamp(8px, min(4vw, 8vh), 16px);
     right: clamp(8px, min(4cqw, 8cqh), 16px);
     display: flex;
     gap: 8px;

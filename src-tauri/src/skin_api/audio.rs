@@ -9,12 +9,12 @@
 //! audio device after 30 s without polls (skins come and go; we must not
 //! hold the endpoint open forever).  It re-opens on the next poll.
 
+use super::Spectrum;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
-use super::Spectrum;
 
 const SAMPLE_RATE: usize = 48_000;
 const CHANNELS: usize = 2;
@@ -68,7 +68,12 @@ pub fn spectrum(bands: usize, source: Source) -> Result<Spectrum, String> {
 
     *shared.last_poll.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
 
-    if let Some(err) = shared.error.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+    if let Some(err) = shared
+        .error
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
         // 线程还活着（采集暂时失败、5s 后自动重试中）：如实上报错误。
         // 线程已死（spawn 失败 / COM 初始化失败 / panic）：错误不会自愈，
         // 清错并重建线程；本次调用先按无数据返回，重建若再失败会把错误
@@ -85,7 +90,11 @@ pub fn spectrum(bands: usize, source: Source) -> Result<Spectrum, String> {
         }
         *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = None;
         // 残留的可能是线程死亡前的旧样本，一并清掉再重建
-        shared.samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        shared
+            .samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         spawn_capture(&shared, source);
     }
     let samples: Vec<f32> = {
@@ -128,7 +137,11 @@ struct AliveReset {
 impl Drop for AliveReset {
     fn drop(&mut self) {
         self.shared.alive.store(false, Ordering::Relaxed);
-        self.shared.samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.shared
+            .samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         if std::thread::panicking() {
             // panic 展开跳过了错误记录：alive 已假、error 为空时 spectrum
             // 侧认不到死亡、永不重建——补一条错误让下次调用走重建分支
@@ -151,17 +164,27 @@ impl Drop for AliveReset {
 
 fn capture_thread(shared: Arc<Shared>, source: Source) {
     shared.alive.store(true, Ordering::Relaxed);
-    let mut _alive = AliveReset { shared: shared.clone(), com_initialized: false };
+    let mut _alive = AliveReset {
+        shared: shared.clone(),
+        com_initialized: false,
+    };
     // COM (MTA) once per thread, before any WASAPI call.  S_FALSE (already
     // initialized) is a success HRESULT, so .ok() accepts it.
     if let Err(e) = wasapi::initialize_mta().ok() {
-        *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("COM init failed: {}", e));
+        *shared.error.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(format!("COM init failed: {}", e));
         return;
     }
     _alive.com_initialized = true;
     loop {
         // Park until a skin starts polling again.
-        while shared.last_poll.lock().unwrap_or_else(|e| e.into_inner()).elapsed() > Duration::from_secs(2) {
+        while shared
+            .last_poll
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .elapsed()
+            > Duration::from_secs(2)
+        {
             std::thread::sleep(Duration::from_millis(500));
         }
         match run_capture(&shared, source) {
@@ -177,12 +200,16 @@ fn capture_thread(shared: Arc<Shared>, source: Source) {
         }
         // 退出采集（闲置释放设备/出错重试）后清空环形缓冲：残留旧样本会
         // 在恢复轮询时被回放成一帧中断前的旧画面
-        shared.samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        shared
+            .samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
 fn run_capture(shared: &Arc<Shared>, source: Source) -> Result<(), String> {
-    use wasapi::{get_default_device, Direction, SampleType, ShareMode, WaveFormat};
+    use wasapi::{Direction, SampleType, ShareMode, WaveFormat, get_default_device};
 
     // Loopback recipe: open the default RENDER device and initialize the
     // client for Capture — wasapi then sets AUDCLNT_STREAMFLAGS_LOOPBACK.
@@ -198,7 +225,13 @@ fn run_capture(shared: &Arc<Shared>, source: Source) -> Result<(), String> {
     // convert=true guarantees the requested f32/48k/stereo mix regardless of
     // the device's native format.
     client
-        .initialize_client(&format, default_period, &Direction::Capture, &ShareMode::Shared, true)
+        .initialize_client(
+            &format,
+            default_period,
+            &Direction::Capture,
+            &ShareMode::Shared,
+            true,
+        )
         .map_err(|e| e.to_string())?;
     let event = client.set_get_eventhandle().map_err(|e| e.to_string())?;
     let capture = client.get_audiocaptureclient().map_err(|e| e.to_string())?;
@@ -210,7 +243,13 @@ fn run_capture(shared: &Arc<Shared>, source: Source) -> Result<(), String> {
 
     const FRAME_BYTES: usize = CHANNELS * 4;
     loop {
-        if shared.last_poll.lock().unwrap_or_else(|e| e.into_inner()).elapsed() > Duration::from_secs(IDLE_STOP_SECS) {
+        if shared
+            .last_poll
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .elapsed()
+            > Duration::from_secs(IDLE_STOP_SECS)
+        {
             let _ = client.stop_stream();
             return Ok(());
         }
@@ -231,7 +270,12 @@ fn run_capture(shared: &Arc<Shared>, source: Source) -> Result<(), String> {
             let (frames, flags) = capture
                 .read_from_device(&mut buf)
                 .map_err(|e| e.to_string())?;
-            push_frames(shared, &buf[..frames as usize * FRAME_BYTES], frames as usize, flags.silent);
+            push_frames(
+                shared,
+                &buf[..frames as usize * FRAME_BYTES],
+                frames as usize,
+                flags.silent,
+            );
         }
     }
 }
@@ -278,10 +322,7 @@ thread_local! {
 fn compute_spectrum(samples: &[f32], bands: usize) -> Spectrum {
     use rustfft::num_complex::Complex32;
 
-    let peak = samples
-        .iter()
-        .fold(0.0f32, |m, &s| m.max(s.abs()))
-        .min(1.0);
+    let peak = samples.iter().fold(0.0f32, |m, &s| m.max(s.abs())).min(1.0);
 
     // Latest FFT_SIZE samples, Hann-windowed, zero-padded when short.
     let n = FFT_SIZE;
@@ -307,9 +348,7 @@ fn compute_spectrum(samples: &[f32], bands: usize) -> Spectrum {
             let lo = f_min * ratio.powi(b as i32);
             let hi = lo * ratio;
             let bin_lo = ((lo * n as f32 / sr) as usize).max(1).min(n / 2 - 1);
-            let bin_hi = ((hi * n as f32 / sr) as usize)
-                .max(bin_lo + 1)
-                .min(n / 2);
+            let bin_hi = ((hi * n as f32 / sr) as usize).max(bin_lo + 1).min(n / 2);
             let sum: f32 = (bin_lo..bin_hi).map(|i| buf[i].norm()).sum();
             let mean = sum / (bin_hi - bin_lo) as f32;
             // Full-scale sine ≈ N/4 per bin after Hann loss → *4/N ≈ 0 dBFS.
@@ -358,8 +397,16 @@ mod tests {
             .map(|(i, _)| i)
             .unwrap();
         // 440 Hz sits in a low band; the top band (≈11–16 kHz) must be far weaker.
-        assert!(s.bands[max_idx] > 0.5, "dominant band too weak: {:?}", s.bands);
-        assert!(s.bands[max_idx] > s.bands[15] + 0.3, "no spectral contrast: {:?}", s.bands);
+        assert!(
+            s.bands[max_idx] > 0.5,
+            "dominant band too weak: {:?}",
+            s.bands
+        );
+        assert!(
+            s.bands[max_idx] > s.bands[15] + 0.3,
+            "no spectral contrast: {:?}",
+            s.bands
+        );
     }
 
     #[test]

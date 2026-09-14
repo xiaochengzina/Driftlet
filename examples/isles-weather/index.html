@@ -10,9 +10,12 @@
   .card {
     flex-direction: row;
     align-items: stretch;
+    gap: clamp(10px, min(4vw, 8vh), 22px); /* 旧运行时后备（无容器查询），下同 */
     gap: clamp(10px, min(4cqw, 8cqh), 22px);
     /* 文字深浅副色按卡面主色重新派生（自定义属性继承声明处计算值的经典坑） */
+    --isles-fg-2: var(--isles-fg); /* 旧运行时后备（无 color-mix）：副色取主色 */
     --isles-fg-2: color-mix(in srgb, var(--isles-fg) 62%, transparent);
+    --isles-fg-3: var(--isles-fg);
     --isles-fg-3: color-mix(in srgb, var(--isles-fg) 45%, transparent);
   }
 
@@ -22,19 +25,37 @@
     flex-direction: column;
     justify-content: space-between;
     min-width: 0;
+    padding-right: clamp(12px, min(4vw, 8vh), 20px);
     padding-right: clamp(12px, min(4cqw, 8cqh), 20px);
+    border-right: 1px solid rgba(128, 128, 128, 0.25);
     border-right: 1px solid color-mix(in srgb, var(--isles-fg) 8%, transparent);
+    /* 左区封顶：长城市名（如 Washington D.C. / Ulaanbaatar）不再把右区
+       预报挤窄——超宽走 .meta 的省略截断，左区最大占卡宽 46% */
+    max-width: 46vw;
+    max-width: 46cqw;
   }
   /* 负两位数温度（-10°）也不溢出：字级上限压到 72、禁折行；左区宽度内
      最坏 4 字符约 158px 放得下 */
-  .temp { font-size: clamp(40px, min(17cqw, 38cqh), 72px); font-weight: 350; white-space: nowrap; }
+  .temp { font-size: clamp(40px, min(17vw, 38vh), 72px); font-size: clamp(40px, min(17cqw, 38cqh), 72px); font-weight: 400; white-space: nowrap; }   /* 横档数字加重（350 偏飘的族实机教训，与日历 #day 同律） */
   .condline { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
   #cond-icon { width: 30px; height: 30px; }
   /* 浅色纸卡上白云/浅蓝图标发虚——一层随主色走的投影描边，任何底色都立得住 */
   .condline img, .day img {
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
     filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--isles-fg) 30%, transparent));
   }
   .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* 城市名限宽约 4 个汉字（超出省略截断，悬停出全名）——长名不再顶宽
+     左区挤压右区预报（实机反馈：Washington D.C. 级长度把预报数字挤得
+     竖排难读） */
+  #meta-city {
+    display: inline-block;
+    max-width: 4.2em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
 
   /* 右区：五列等分、整列空间分推撑满高度（实机反馈上下留白过大）——
      列内节奏 = 星期（顶）/ 图标（中）/ 温度区间（低~高）/ 日期（底） */
@@ -49,9 +70,9 @@
     padding: 2px 0;
   }
   .day img { width: 32px; height: 32px; }
-  .dw { font-size: clamp(11px, min(3.4cqw, 7cqh), 14px); color: var(--isles-fg-2); white-space: nowrap; }
-  .dtemp { font-size: clamp(11px, min(3.8cqw, 7.6cqh), 15px); color: var(--isles-fg-2); white-space: nowrap; }
-  .dt { font-size: clamp(10px, min(3cqw, 6cqh), 12px); color: var(--isles-fg-3); white-space: nowrap; }
+  .dw { font-size: clamp(11px, min(3.4vw, 7vh), 14px); font-size: clamp(11px, min(3.4cqw, 7cqh), 14px); color: var(--isles-fg-2); white-space: nowrap; }
+  .dtemp { font-size: clamp(11px, min(3.8vw, 7.6vh), 15px); font-size: clamp(11px, min(3.8cqw, 7.6cqh), 15px); color: var(--isles-fg-2); white-space: nowrap; }
+  .dt { font-size: clamp(10px, min(3vw, 6vh), 12px); font-size: clamp(10px, min(3cqw, 6cqh), 12px); color: var(--isles-fg-3); white-space: nowrap; }
 
   /* 未设城市 / 加载中：整卡空态引导（不是左区一行小字）——中央大图标 + 说明。
      两种整卡态共用一个 #empty，文案由 JS 切换 */
@@ -66,14 +87,33 @@
     color: var(--isles-fg-3);
     z-index: 3;
   }
-  #empty svg { width: clamp(30px, min(14cqw, 24cqh), 44px); height: auto; }
-  #empty-text { font-size: clamp(11px, min(3.6cqw, 7.4cqh), 14px); letter-spacing: 0.08em; }
+  #empty svg { width: clamp(30px, min(14vw, 24vh), 44px); width: clamp(30px, min(14cqw, 24cqh), 44px); height: auto; }
+  #empty-text { font-size: clamp(11px, min(3.6vw, 7.4vh), 14px); font-size: clamp(11px, min(3.6cqw, 7.4cqh), 14px); letter-spacing: 0.08em; }
   .card.no-city .now, .card.no-city .more,
   .card.loading .now, .card.loading .more { display: none; }
   .card.no-city #empty, .card.loading #empty { display: flex; }
 
   /* ── M 小方（≤240px 宽）：当下块几何居中 + 预报隐藏；
      空态整卡不变（绝对定位两档通用）。纪律：容器查询只样式化子元素 ── */
+  /* 旧运行时后备：无容器查询时按视口宽降级（皮肤卡即窗口，vw≈cqw） */
+  @media (max-width: 240px) {
+    .now {
+      position: absolute;
+      inset: 0;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding-right: 0;
+      border-right: none;
+      max-width: none;
+      text-align: center;
+      z-index: 1;
+    }
+    .temp { font-size: clamp(38px, 30vw, 52px); font-weight: 500; }
+    .condline { justify-content: center; }
+    .meta { max-width: 100%; }
+    .more { display: none; }
+  }
   @container (max-width: 240px) {
     .now {
       position: absolute;
@@ -83,10 +123,11 @@
       gap: 6px;
       padding-right: 0;
       border-right: none;
+      max-width: none;   /* 小档整卡居中覆盖，不吃横档的左区封顶 */
       text-align: center;
       z-index: 1;
     }
-    .temp { font-size: clamp(38px, 30cqw, 52px); }
+    .temp { font-size: clamp(38px, 30vw, 52px); font-size: clamp(38px, 30cqw, 52px); font-weight: 500; }   /* 小档数字加重（与日历 #day 同律） */
     .condline { justify-content: center; }
     .meta { max-width: 100%; }
     .more { display: none; }
@@ -101,7 +142,7 @@
         <img id="cond-icon" alt="" draggable="false" />
         <span class="isles-caption" id="cond"></span>
       </span>
-      <span class="isles-caption meta" id="meta"></span>
+      <span class="isles-caption meta" id="meta"><span id="meta-range"></span><span id="meta-city" title=""></span></span>
     </div>
     <div class="more" id="more"><div class="forecast" id="forecast"></div></div>
     <div id="empty">

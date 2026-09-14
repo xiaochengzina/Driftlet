@@ -9,7 +9,9 @@
     align-items: center;
     justify-content: center;
     /* 刻度深浅按卡面主色派生（自定义属性继承声明处计算值的经典坑） */
+    --isles-fg-2: var(--isles-fg); /* 旧运行时后备（无 color-mix）：副色取主色 */
     --isles-fg-2: color-mix(in srgb, var(--isles-fg) 62%, transparent);
+    --isles-fg-3: var(--isles-fg);
     --isles-fg-3: color-mix(in srgb, var(--isles-fg) 45%, transparent);
   }
 

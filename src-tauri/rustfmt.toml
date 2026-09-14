@@ -1,0 +1,4 @@
+# 显式钉住格式化规则——不随 rustfmt 版本漂移（CI 与本地同一口径）。
+# 其余规则保持默认：4 空格缩进、max_width 100、use 合并不重排。
+edition = "2021"
+style_edition = "2024"

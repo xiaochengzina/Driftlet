@@ -8,12 +8,16 @@
 //!   开关/改间距时 `upsert` 更新。候选边缘 = 注册表内其他皮肤窗口（实时
 //!   取矩形）+ 窗口所在显示器的工作区。
 //! - 吸附本身是纯距离判定：X/Y 两轴独立，屏幕候选优先，|delta| ≤ 阈值
-//!   （SNAP_THRESHOLD）即吸附。贴边后同一拖动内要拖出阈值区才脱开——
-//!   手感简单可预期，精细调整走下面的逃逸窗口。
-//! - 逃逸 = 「松手再拖」的 1 秒自由窗口：上次拖动以吸附结束、窗口仍停在
-//!   原吸附坐标时，`begin_drag` 为下次拖动开启 1 秒逃逸窗口——期间不
-//!   吸附，仅把窗口夹取在屏幕工作区 − gap 内（防拖出屏幕）；时间到即
-//!   恢复吸附（同一拖动内生效）。
+//!   （SNAP_THRESHOLD）即吸附。贴边后同一拖动内拖出阈值区即脱开——
+//!   手感简单可预期，精细调整靠拖出阈值区或管理器面板的精确坐标。
+//! - 勿回归（慢拖粘死事故）：WM_MOVING 的提议矩形是相对「上一步写回值」
+//!   的增量（实机注入轨迹实证）——吸附改写窗口后，下一步提议仍贴着吸附
+//!   位，直接判定提议会把慢拖粘死在阈值区内（只有单步 >阈值的快甩能脱
+//!   开）。吸附判定必须针对按增量累积的原始轨迹（DragRuntime 的
+//!   raw/last_out，advance_raw 推进），拖出阈值区即脱开。
+//! - 「松手再拖」逃逸窗口已移除（勿再加回）：阈值脱开修复前它是精细
+//!   调整的唯一出口；修复后拖出阈值区即可脱开，微调走管理器面板精确
+//!   坐标。曾同期回退删除的还有方向感知逃逸与 Shift 临时绕过。
 //! - 间距（gap）与触发阈值都是逻辑像素，吸附前按窗口 DPI 换算成物理
 //!   像素。
 
@@ -22,10 +26,6 @@ use std::sync::Mutex;
 
 /// 吸附触发距离（逻辑像素）：窗口边缘与目标边缘的距离 ≤ 该值时吸附。
 const SNAP_THRESHOLD: i32 = 10;
-
-/// 「松手再拖」逃逸窗口时长：上次拖动以吸附结束时，下次拖动的前 1 秒
-/// 不吸附（仅夹取在屏幕内），时间到恢复吸附。
-const ESCAPE_WINDOW: std::time::Duration = std::time::Duration::from_millis(1000);
 
 /// 吸附间距上限（逻辑像素），命令侧与前端输入同步 clamp。
 pub const MAX_SNAP_GAP: u32 = 200;
@@ -50,14 +50,26 @@ pub fn upsert(hwnd: isize, enabled: bool, gap: u32) {
     SNAP_WINDOWS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(hwnd, SnapEntry { enabled, gap: gap.min(MAX_SNAP_GAP) });
+        .insert(
+            hwnd,
+            SnapEntry {
+                enabled,
+                gap: gap.min(MAX_SNAP_GAP),
+            },
+        );
 }
 
 /// 窗口销毁时摘除登记。HWND 会被系统回收复用，残留条目可能把无关窗口
 /// 误当吸附候选，必须随销毁清理。
 pub fn unregister(hwnd: isize) {
-    SNAP_WINDOWS.lock().unwrap_or_else(|e| e.into_inner()).remove(&hwnd);
-    DRAG_STATES.lock().unwrap_or_else(|e| e.into_inner()).remove(&hwnd);
+    SNAP_WINDOWS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&hwnd);
+    DRAG_STATES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&hwnd);
 }
 
 /// 与平台无关的矩形（物理像素），便于纯逻辑测试。
@@ -69,14 +81,14 @@ pub struct SnapRect {
     pub bottom: i32,
 }
 
-/// 拖动运行时状态（跨拖动保留，只随 unregister 清除）：
-/// `ended_snapped` = 上次拖动结束时的吸附位置（跨拖动记忆，None = 上次
-/// 拖动未以吸附结束）；`escape_until` = 本次拖动的逃逸窗口截止时间
-/// （begin_drag 决定）。
+/// 拖动运行时状态（只服务本次拖动，begin_drag 重置，随 unregister 清除）：
+/// `raw` = 未被吸附改写的原始轨迹矩形；`last_out` = 上一步实际写回系统的
+/// 矩形（算增量用）。每步按「提议 − 上一步写回」推进 raw（勿回归——
+/// 系统提议是增量制，见模块头注释）。
 #[derive(Debug, Clone, Copy, Default)]
 struct DragRuntime {
-    ended_snapped: Option<(i32, i32)>,
-    escape_until: Option<std::time::Instant>,
+    raw: Option<SnapRect>,
+    last_out: Option<SnapRect>,
 }
 
 static DRAG_STATES: std::sync::LazyLock<Mutex<HashMap<isize, DragRuntime>>> =
@@ -85,6 +97,23 @@ static DRAG_STATES: std::sync::LazyLock<Mutex<HashMap<isize, DragRuntime>>> =
 /// 两段区间是否重叠或间距不超过 slack。
 fn ranges_near(a1: i32, a2: i32, b1: i32, b2: i32, slack: i32) -> bool {
     (a1 - b2) <= slack && (b1 - a2) <= slack
+}
+
+/// 原始拖动轨迹推进（纯函数）：raw += 本步提议 − 上一步写回。
+/// 系统模态移动循环的 WM_MOVING 提议矩形是相对上一步「写回值」的增量，
+/// 吸附改写窗口后提议仍贴着吸附位——判定若直接吃提议，慢拖时提议永远
+/// 落在阈值区内（粘死）；按增量自行累积的 raw 才是真实拖动轨迹。
+fn advance_raw(raw: SnapRect, last_out: SnapRect, proposed: SnapRect) -> SnapRect {
+    let w = raw.right - raw.left;
+    let h = raw.bottom - raw.top;
+    let left = raw.left + (proposed.left - last_out.left);
+    let top = raw.top + (proposed.top - last_out.top);
+    SnapRect {
+        left,
+        top,
+        right: left + w,
+        bottom: top + h,
+    }
 }
 
 /// 单轴候选选取（纯函数）：屏幕候选优先，|delta| ≤ threshold 中取
@@ -101,7 +130,8 @@ fn pick_axis(raw: i32, screen: &[i32], windows: &[i32], threshold: i32) -> Optio
 }
 
 /// 整窗距离吸附（纯函数）：X/Y 两轴独立判定，屏幕边缘优先。
-/// `moving` = 拖动中的待定矩形，`work` = 屏幕工作区，`others` = 其他皮肤
+/// `moving` = 原始拖动轨迹矩形（未被吸附改写的 raw，勿传 WM_MOVING 的
+/// 增量提议矩形——见模块头注释），`work` = 屏幕工作区，`others` = 其他皮肤
 /// 窗口矩形，`gap` / `threshold` 均为物理像素。窗口候选要求两窗口在垂直
 /// 于该轴的方向上重叠或足够近，否则远处窗口会造成「幻影吸附」。
 /// 返回 (吸附后矩形, x 轴是否吸附, y 轴是否吸附)。
@@ -123,8 +153,16 @@ pub fn snap_drag(
     // 反过阈值过滤，窗口被吸附到 -2³¹；debug 直接 panic）
     let fits_w = w + 2 * gap <= work.right - work.left;
     let fits_h = h + 2 * gap <= work.bottom - work.top;
-    let screen_x: &[i32] = if fits_w { &[work.left + gap, work.right - gap - w] } else { &[] };
-    let screen_y: &[i32] = if fits_h { &[work.top + gap, work.bottom - gap - h] } else { &[] };
+    let screen_x: &[i32] = if fits_w {
+        &[work.left + gap, work.right - gap - w]
+    } else {
+        &[]
+    };
+    let screen_y: &[i32] = if fits_h {
+        &[work.top + gap, work.bottom - gap - h]
+    } else {
+        &[]
+    };
 
     let mut win_x = Vec::new();
     let mut win_y = Vec::new();
@@ -138,8 +176,8 @@ pub fn snap_drag(
         }
     }
 
-    let left = pick_axis(moving.left, &screen_x, &win_x, threshold);
-    let top = pick_axis(moving.top, &screen_y, &win_y, threshold);
+    let left = pick_axis(moving.left, screen_x, &win_x, threshold);
+    let top = pick_axis(moving.top, screen_y, &win_y, threshold);
 
     let new_left = left.unwrap_or(moving.left);
     let new_top = top.unwrap_or(moving.top);
@@ -155,39 +193,9 @@ pub fn snap_drag(
     )
 }
 
-/// 逃逸窗口内的夹取（纯函数）：窗口不得超出屏幕工作区 − gap
-/// （「不能超出屏幕 + 自定义间距」）。窗口比工作区还宽/高时钉在 min 边。
-pub fn clamp_to_work(moving: SnapRect, work: SnapRect, gap: i32) -> SnapRect {
-    let w = moving.right - moving.left;
-    let h = moving.bottom - moving.top;
-    let min_x = work.left + gap;
-    let min_y = work.top + gap;
-    let max_x = (work.right - gap - w).max(min_x);
-    let max_y = (work.bottom - gap - h).max(min_y);
-    let left = moving.left.max(min_x).min(max_x);
-    let top = moving.top.max(min_y).min(max_y);
-    SnapRect {
-        left,
-        top,
-        right: left + w,
-        bottom: top + h,
-    }
-}
-
-/// 是否为新拖动开启逃逸窗口（纯函数）：上次拖动以吸附结束且窗口仍停在
-/// 原吸附坐标（±1px 容差）。位置已被面板/程序改动则不开启。
-pub fn should_arm_escape(ended_snapped: Option<(i32, i32)>, current: SnapRect) -> bool {
-    match ended_snapped {
-        Some((lx, ly)) => (current.left - lx).abs() <= 1 && (current.top - ly).abs() <= 1,
-        None => false,
-    }
-}
-
-/// WM_ENTERSIZEMOVE：一次拖动/缩放循环开始，决定是否开启逃逸窗口。
-///
-/// 上次拖动以吸附结束、窗口仍停在原位 → 本次拖动的前 ESCAPE_WINDOW 时间
-/// 内不吸附（「松手再拖 = 逃逸」）。注意只设置逃逸窗口，不碰
-/// ended_snapped——它要跨拖动保留，不要在 WM_EXITSIZEMOVE 清理。
+/// WM_ENTERSIZEMOVE：一次拖动/缩放循环开始，重置原始拖动轨迹。
+/// （缩放循环也走此消息：raw/last_out 只服务 WM_MOVING，下次拖动重写，
+/// 无需在退出消息里清理。）
 #[cfg(target_os = "windows")]
 pub fn begin_drag(hwnd_val: isize) {
     use windows::Win32::Foundation::{HWND, RECT};
@@ -204,12 +212,8 @@ pub fn begin_drag(hwnd_val: isize) {
         });
     let mut states = DRAG_STATES.lock().unwrap_or_else(|e| e.into_inner());
     let st = states.entry(hwnd_val).or_default();
-    st.escape_until = match current {
-        Some(rect) if should_arm_escape(st.ended_snapped, rect) => {
-            Some(std::time::Instant::now() + ESCAPE_WINDOW)
-        }
-        _ => None,
-    };
+    st.raw = current;
+    st.last_out = current;
 }
 
 /// WM_MOVING 处理：把待定 RECT 就地改成吸附后的位置。
@@ -218,14 +222,18 @@ pub fn begin_drag(hwnd_val: isize) {
 pub fn on_window_moving(hwnd_val: isize, l_param: isize) {
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
     };
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowRect, IsIconic, IsWindow, IsWindowVisible,
     };
 
-    let entry = SNAP_WINDOWS.lock().unwrap_or_else(|e| e.into_inner()).get(&hwnd_val).copied();
+    let entry = SNAP_WINDOWS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&hwnd_val)
+        .copied();
     let Some(entry) = entry else {
         return;
     };
@@ -251,8 +259,10 @@ pub fn on_window_moving(hwnd_val: isize, l_param: isize) {
 
         // 工作区（不含任务栏），多屏时取窗口当前所在的显示器
         let monitor = MonitorFromRect(rect, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO::default();
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
         if !GetMonitorInfoW(monitor, &mut info).as_bool() {
             return;
         }
@@ -264,7 +274,12 @@ pub fn on_window_moving(hwnd_val: isize, l_param: isize) {
         };
 
         // 其他皮肤窗口的实时矩形（跳过自己、已销毁、不可见、最小化的）
-        let hwnds: Vec<isize> = SNAP_WINDOWS.lock().unwrap_or_else(|e| e.into_inner()).keys().copied().collect();
+        let hwnds: Vec<isize> = SNAP_WINDOWS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .copied()
+            .collect();
         let mut others = Vec::with_capacity(hwnds.len().saturating_sub(1));
         for other_val in hwnds {
             if other_val == hwnd_val {
@@ -291,24 +306,18 @@ pub fn on_window_moving(hwnd_val: isize, l_param: isize) {
         let out = {
             let mut states = DRAG_STATES.lock().unwrap_or_else(|e| e.into_inner());
             let st = states.entry(hwnd_val).or_default();
-            let in_escape = st
-                .escape_until
-                .map_or(false, |t| std::time::Instant::now() < t);
-            if in_escape {
-                // 逃逸窗口内：不吸附，仅夹取在屏幕工作区 − gap 内
-                clamp_to_work(moving, work, gap)
-            } else {
-                // 到期（或未开启）：正常吸附，并记录本次拖动的吸附状态
-                // ——拖动结束时停在哪，决定下次拖动是否给逃逸窗口
-                st.escape_until = None;
-                let (snapped, sx, sy) = snap_drag(moving, work, &others, gap, threshold);
-                st.ended_snapped = if sx || sy {
-                    Some((snapped.left, snapped.top))
-                } else {
-                    None
-                };
-                snapped
-            }
+            // 还原未被吸附改写的原始轨迹：提议矩形是相对上一步写回值
+            // 的增量，直接判定会把慢拖粘死在阈值区内（勿回归，见模块头注释）。
+            // begin_drag 未跑过的兜底（理论不可达：模态循环先发
+            // WM_ENTERSIZEMOVE）：本步按提议矩形原样处理，从下一步起正常累积。
+            let raw = match (st.raw, st.last_out) {
+                (Some(r), Some(l)) => advance_raw(r, l, moving),
+                _ => moving,
+            };
+            st.raw = Some(raw);
+            let (out, _, _) = snap_drag(raw, work, &others, gap, threshold);
+            st.last_out = Some(out);
+            out
         };
 
         rect.left = out.left;
@@ -421,29 +430,52 @@ mod tests {
     }
 
     #[test]
-    fn clamp_keeps_window_inside_work() {
-        // 左边越界 → 夹回 0
-        assert_eq!(clamp_to_work(rect(-50, 500, 200, 100), WORK, 0).left, 0);
-        // 右/上越界 → 夹回
-        let out = clamp_to_work(rect(2000, -20, 200, 100), WORK, 0);
-        assert_eq!(out.left, 1720);
-        assert_eq!(out.top, 0);
-        // gap 生效：最小位置 = gap
-        let out = clamp_to_work(rect(2, 2, 200, 100), WORK, 10);
-        assert_eq!(out.left, 10);
-        assert_eq!(out.top, 10);
-        // 窗口比屏幕宽 → 钉在 min 边（不 panic）
-        assert_eq!(clamp_to_work(rect(-100, 0, 3000, 100), WORK, 0).left, 0);
+    fn advance_raw_accumulates_deltas() {
+        // raw 按「提议 − 上一步写回」推进，与吸附改写解耦
+        let raw = rect(100, 100, 200, 100);
+        let last = rect(90, 104, 200, 100); // 上一步吸附改写后的写回
+        let proposed = rect(96, 108, 200, 100); // 系统下一步提议 = 写回 + 鼠标增量
+        let out = advance_raw(raw, last, proposed);
+        assert_eq!(out, rect(106, 104, 200, 100)); // raw(100,100) + (6,4)
     }
 
+    /// ⭑ 慢拖粘死事故回归：吸附后慢拖（每步增量 ≤ 阈值）必须在 raw 拖出
+    /// 阈值区后脱开并跟随鼠标。模拟系统移动循环的增量提议：每步提议 =
+    /// 上一步输出 + 6px（实机注入轨迹实证的系统行为）。
     #[test]
-    fn escape_window_armed_only_when_still_at_snap() {
-        // 上次以吸附结束且窗口仍在原位（±1px 容差）→ 开启
-        assert!(should_arm_escape(Some((0, 300)), rect(0, 300, 200, 100)));
-        assert!(should_arm_escape(Some((0, 300)), rect(1, 300, 200, 100)));
-        // 窗口已被移走 → 不开启
-        assert!(!should_arm_escape(Some((0, 300)), rect(5, 300, 200, 100)));
-        // 上次拖动未以吸附结束 → 不开启
-        assert!(!should_arm_escape(None, rect(0, 300, 200, 100)));
+    fn slow_drag_detaches_once_raw_leaves_threshold_zone() {
+        let other = rect(900, 400, 200, 100);
+        let gap = 20;
+        let candidate = 900 - gap - 200; // 贴到它左侧 = 680
+        let mut raw = rect(600, 420, 200, 100);
+        let mut last_out = raw;
+        let mut snaps = Vec::new(); // (raw.left, out.left, x吸附?)
+        for _ in 0..40 {
+            let proposed = rect(last_out.left + 6, last_out.top, 200, 100);
+            raw = advance_raw(raw, last_out, proposed);
+            let (out, sx, _sy) = snap_drag(raw, WORK, &[other], gap, T);
+            snaps.push((raw.left, out.left, sx));
+            last_out = out;
+        }
+        // raw 进入阈值区即吸附到候选位
+        let first_snap = snaps
+            .iter()
+            .position(|&(_, o, s)| s && o == candidate)
+            .expect("raw 进阈值区应吸附到候选位");
+        // 吸附期间窗口钉在候选位（raw 仍被鼠标推进）
+        for &(_, o, s) in &snaps[first_snap..] {
+            if s {
+                assert_eq!(o, candidate, "吸附期间必须钉在候选位");
+            }
+        }
+        // raw 越过 candidate+T 后必须脱开：输出跟随 raw（旧行为是永久钉死）
+        let detach = snaps
+            .iter()
+            .position(|&(r, o, s)| !s && r > candidate + T && o == r)
+            .expect("raw 拖出阈值区后必须脱开并跟随原始轨迹");
+        assert!(detach > first_snap, "必须先吸附后脱开");
+        for &(r, o, s) in &snaps[detach..] {
+            assert!(!s && o == r, "脱开后不得再被吸回（raw 已远离候选位）");
+        }
     }
 }

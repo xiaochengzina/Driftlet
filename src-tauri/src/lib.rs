@@ -1,12 +1,14 @@
 mod app_log;
-mod commands;
 mod backup;
+mod commands;
 mod desktop;
 #[cfg(target_os = "windows")]
 mod elevation;
+mod focus;
 mod hotkey;
 // Debug builds only — in release the module is compiled out entirely so its
 // watcher/helpers don't trigger dead-code warnings during packaging.
+mod capture;
 #[cfg(debug_assertions)]
 mod hotreload;
 mod i18n;
@@ -15,22 +17,22 @@ mod skin;
 mod skin_api;
 mod tray;
 mod update;
+mod webview2;
 mod window;
-mod capture;
 
 // Re-export the skin protocol registration helper.
 pub use skin::protocol;
 
-use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
-use tauri::{Emitter, Manager};
+use desktop::Pinner;
 use skin::config;
 use skin::loader;
 use skin::types::AppConfig;
-use window::registry::SkinWindowRegistry;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use tauri::{Emitter, Manager};
 use window::factory;
-use desktop::Pinner;
+use window::registry::SkinWindowRegistry;
 
 /// Shared application state accessible from all commands
 pub struct AppState {
@@ -45,7 +47,8 @@ pub struct AppState {
     /// tray is missing, closing the main window must exit the app instead of
     /// hiding — there is no other UI entry to bring the window back.
     pub tray_ok: AtomicBool,
-    /// Desktop pinner (Driftlet-style z-order helper window + Show Desktop hook)
+    /// Desktop pinner (Driftlet-style z-order adjacency watcher — deliberately
+    /// NO helper window and NO show-desktop state machine; see desktop.rs)
     pub pinner: Pinner,
     /// ThreadId of the event-loop (main) thread.  Win32 window work such as
     /// SetWindowSubclass must run on this thread — see window::factory.
@@ -89,11 +92,21 @@ pub struct AppState {
     /// 托盘「皮肤显隐」子菜单的每皮肤勾选项（skin_id → CheckMenuItem）：
     /// 加载集（键集合）与 registry.loaded_ids 不一致时重建整个托盘菜单
     ///（顺便更新本表），一致时仅按真实可见性 set_checked。
-    pub skin_vis_items: Mutex<std::collections::HashMap<String, tauri::menu::CheckMenuItem<tauri::Wry>>>,
+    pub skin_vis_items:
+        Mutex<std::collections::HashMap<String, tauri::menu::CheckMenuItem<tauri::Wry>>>,
     /// Startup hotkey registration failure (the configured combo, e.g.
     /// "Ctrl+Alt+D"). Pulled once by the frontend on init so the user sees
     /// a toast instead of a silent log — mirrors pending_package.
     pub hotkey_error: Mutex<Option<String>>,
+    /// 「打开皮肤配置」事件在管理器已销毁（关窗即销毁）时发出会丢——后端
+    /// 暂存待选皮肤 id，前端启动时经 take_pending_open_config 幂等拉取
+    /// （与 pending_package 同一约定）。
+    pub pending_open_config: Mutex<Option<String>>,
+    /// 启动自动更新检测每进程只做一次（管理器关窗即销毁后，每次重建都会
+    /// 重跑前端 init——没有本标记，开着更新时每次打开管理器都会重查重弹）。
+    /// 手动「检查更新」（关于页）不受此限。前端经 take_update_auto_checked
+    /// 取走 true 后后续启动跳过。
+    pub update_auto_checked: AtomicBool,
     /// Skin hot reload master switch (mirrors config.hot_reload; toggled by
     /// the set_hot_reload command, and re-synced from the imported config by
     /// backup::rebuild_runtime).  The watcher thread reads it every tick;
@@ -105,7 +118,10 @@ impl AppState {
     /// Snapshot of the current UI language ("zh-CN" | "en").
     pub fn lang(&self) -> String {
         // Mutex 中毒不等于数据损坏：取回内部值继续运行
-        self.language.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.language
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -121,6 +137,9 @@ pub fn run() {
     // 「是」= 写 allow_elevated 持久放行并继续，「否」= 退出。
     #[cfg(target_os = "windows")]
     elevation::startup_elevation_notice();
+    // WebView2 运行时版本地板（屿族皮肤的容器查询/color-mix 基线）：过旧即
+    // 原生框引导更新——安装器管安装/更新时升旧，这里管「装好之后又变旧」
+    webview2::runtime_floor_notice();
 
     tauri::Builder::default()
         // Must stay the first plugin: a second instance launched by
@@ -131,7 +150,9 @@ pub fn run() {
                 // 管理器 webview 未就绪时 emit 的事件会丢 —— 同时写入
                 // pending_package 兜底：前端 take_pending_package_install
                 // 幂等拉取（与冷启动同一约定）
-                *app.state::<AppState>().pending_package.lock()
+                *app.state::<AppState>()
+                    .pending_package
+                    .lock()
                     .unwrap_or_else(|e| e.into_inner()) = Some(path.clone());
                 tray::show_manager_window(app);
                 let _ = app.emit_to("main", "open-skin-package", path);
@@ -182,10 +203,9 @@ pub fn run() {
             // Set up directories — portable layout: all app data lives next
             // to the executable, so the install location the user picks in
             // the installer decides where everything is stored.
-            let app_data_dir = app.path().app_data_dir()
-                .unwrap_or_else(|e| {
-                    fatal_startup_error(&format!("Failed to get app data directory: {}", e))
-                });
+            let app_data_dir = app.path().app_data_dir().unwrap_or_else(|e| {
+                fatal_startup_error(&format!("Failed to get app data directory: {}", e))
+            });
 
             // 导入崩溃回滚必须赶在 resolve_portable_dir 之前（它的可写性探测
             // 会创建目录，把「目录不存在」的崩溃现场抹成「两者都在」，回滚分支
@@ -234,7 +254,8 @@ pub fn run() {
             // 必须在 load_config 之前跑，之后读入的配置即无 custom 键。
             config::migrate_v1_custom_settings(
                 &config_dir,
-                &skins.iter()
+                &skins
+                    .iter()
                     .map(|s| (s.id.clone(), s.directory.clone()))
                     .collect::<Vec<_>>(),
             );
@@ -246,7 +267,7 @@ pub fn run() {
             //（一次性标记；置位后删过的不复活、组删过不重建）。装了新皮肤
             // 就重扫目录，让下面的 prune 与自动加载看到它们
             let skins = if !app_config.bundled_skins_seeded {
-                let installed = seed_bundled_skins(&app, &skins_dir, &mut app_config);
+                let installed = seed_bundled_skins(app, &skins_dir, &mut app_config);
                 if let Err(e) = config::save_config(&config_dir, &app_config) {
                     log::warn!("Failed to save bundled-skins seed flag: {}", e);
                 }
@@ -278,7 +299,8 @@ pub fn run() {
             // via take_pending_package_install once it is ready.
             // args() 对非 UTF-8 参数直接 panic（release 无控制台 GUI =
             // 静默闪退），这里用 args_os() + to_string_lossy() 容错
-            let pending_package = dskin_arg(std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()));
+            let pending_package =
+                dskin_arg(std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()));
             let language = app_config.language.clone();
             let hot_reload = app_config.hot_reload;
             app.manage(AppState {
@@ -298,31 +320,46 @@ pub fn run() {
                 toggle_item: Mutex::new(None),
                 skin_vis_items: Mutex::new(std::collections::HashMap::new()),
                 hotkey_error: Mutex::new(None),
+                pending_open_config: Mutex::new(None),
+                update_auto_checked: AtomicBool::new(false),
                 hot_reload_enabled: AtomicBool::new(hot_reload),
             });
 
             // Auto-load previously loaded skins
             // Read loaded_skins list first (drop lock before creating windows)
             let to_load: Vec<String> = {
-                app.handle().state::<AppState>()
-                    .config.lock().unwrap_or_else(|e| e.into_inner())
-                    .loaded_skins.clone()
+                app.handle()
+                    .state::<AppState>()
+                    .config
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .loaded_skins
+                    .clone()
             };
 
             for skin_id in &to_load {
                 if let Some(skin) = skins.iter().find(|s| &s.id == skin_id) {
                     // Read saved config (drop lock before creating window)
                     let skin_config = {
-                        app.handle().state::<AppState>()
-                            .config.lock().unwrap_or_else(|e| e.into_inner())
-                            .skin_settings.get(skin_id).cloned()
-                            .unwrap_or_else(|| skin::types::SkinRuntimeConfig::from_manifest(&skin.manifest))
+                        app.handle()
+                            .state::<AppState>()
+                            .config
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .skin_settings
+                            .get(skin_id)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                skin::types::SkinRuntimeConfig::from_manifest(&skin.manifest)
+                            })
                     };
 
                     match factory::create_skin_window(app.handle(), skin, &skin_config) {
                         Ok(window) => {
-                            app.handle().state::<AppState>()
-                                .registry.register(skin_id.clone(), window);
+                            app.handle()
+                                .state::<AppState>()
+                                .registry
+                                .register(skin_id.clone(), window);
                             log::info!("Auto-loaded skin: {}", skin_id);
                         }
                         Err(e) => {
@@ -332,48 +369,21 @@ pub fn run() {
                 }
             }
 
-            // Create manager window — center on screen, hidden on startup.
-            // User opens it from the tray icon.
-            // frameless with custom title bar (min/max/close buttons in UI)
-            let manager = tauri::WebviewWindowBuilder::new(
-                app,
-                "main",
-                tauri::WebviewUrl::App("index.html".into()),
-            )
-            .title("Driftlet")
-            .inner_size(960.0, 640.0)
-            .min_inner_size(640.0, 460.0)
-            // 「无标题栏原生窗框」：无边框建窗（tao 剥 WS_CAPTION|WS_THICKFRAME）
-            // + 建窗后补回 WS_THICKFRAME|WS_BORDER（见 apply_native_frame）。
-            // 保持 shadow(false)——那是 DwmExtendFrameIntoClientArea 玻璃延伸
-            // 路径，与真实窗框叠加会在窗缘留 1px 玻璃线
-            .decorations(false)
-            .shadow(false)
-            .resizable(true)
-            .center()
-            .visible(false)
-            .build()
-            .unwrap_or_else(|e| {
-                fatal_startup_error(&format!("Failed to create manager window: {}", e))
-            });
-
-            // 补回「无标题栏原生窗框」样式 + 任务栏/悬停预览/Alt+Tab 图标
-            #[cfg(target_os = "windows")]
+            // 专注模式态残留恢复（上次退出/崩溃在模式激活期间）：按快照
+            // 动作恢复并清除——自载皮肤之后、管理器建窗之前（卸载档要重载
+            // 的皮肤走正常注册表，别与自载竞态）
             {
-                if let Ok(hwnd) = manager.hwnd() {
-                    if !apply_native_frame(hwnd.0 as isize) {
-                        log::error!("apply_native_frame: SetWindowSubclass failed for manager window");
-                    }
-                    apply_window_icon(hwnd.0 as isize);
-                }
+                let h = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    focus::startup_recover(&h).await;
+                });
             }
 
-            // WebView2 hardening on the manager too: no browser context menu,
-            // no F5/Ctrl+R refresh keys (the manager UI must not be
-            // reloadable by keystroke).  Same async-init retry as skins;
-            // afterwards the 5s maintenance timer keeps re-applying both.
-            #[cfg(target_os = "windows")]
-            factory::spawn_webview_hardening_retry(app.handle(), "main");
+            // Create manager window — center on screen, hidden on startup.
+            // User opens it from the tray icon.（关窗即销毁、唤回重建的
+            // 机制说明见 create_manager_window 头注）
+            let manager = create_manager_window(app.handle())
+                .unwrap_or_else(|| fatal_startup_error("Failed to create manager window"));
 
             // Double-click install: a package was passed on the command
             // line, so show the manager window right away — the frontend
@@ -384,32 +394,13 @@ pub fn run() {
                 let _ = manager.set_focus();
             }
 
-            // Window event handler: close-to-tray
-            let h = app.handle().clone();
-            manager.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    let state = h.state::<AppState>();
-                    if state.exiting.load(std::sync::atomic::Ordering::SeqCst) {
-                        // Real exit
-                    } else if !state.tray_ok.load(std::sync::atomic::Ordering::SeqCst) {
-                        // 托盘没建起来：隐藏到托盘会彻底失去 UI 入口 ——
-                        // 关窗直接走退出流程
-                        log::info!("Manager window closed (no tray, exiting)");
-                        state.exiting.store(true, std::sync::atomic::Ordering::SeqCst);
-                        h.exit(0);
-                    } else {
-                        api.prevent_close();
-                        log::info!("Manager window hidden to tray");
-                        let _ = h.get_webview_window("main").map(|w| w.hide());
-                    }
-                }
-            });
-
             // Set up system tray
             match tray::create_tray(app.handle()) {
                 Ok(()) => {
-                    app.handle().state::<AppState>()
-                        .tray_ok.store(true, std::sync::atomic::Ordering::SeqCst);
+                    app.handle()
+                        .state::<AppState>()
+                        .tray_ok
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 Err(e) => {
                     log::warn!("Failed to create system tray: {}", e);
@@ -423,6 +414,9 @@ pub fn run() {
 
             // 启动序列走完（状态、自载皮肤、管理器窗、托盘、热键全就绪）。
             log::info!("Manager started");
+
+            // 专注模式全屏检测线程（常驻，只在设置开启时干活）
+            focus::spawn_detector(app.handle());
 
             // Periodic frameless maintenance timer (Windows only).
             //
@@ -535,6 +529,8 @@ pub fn run() {
             commands::check_update,
             commands::set_update_check,
             commands::open_release_page,
+            commands::open_repo_page,
+            commands::get_user_agreement,
             commands::download_update,
             commands::install_update,
             commands::take_hotkey_error,
@@ -545,6 +541,13 @@ pub fn run() {
             commands::list_gpu_adapters,
             commands::capture_skin_preview,
             commands::take_pending_package_install,
+            commands::take_pending_open_config,
+            commands::take_update_auto_checked,
+            commands::get_focus_mode_state,
+            commands::toggle_focus_mode,
+            commands::set_focus_exempt,
+            commands::set_focus_mode_action,
+            commands::set_focus_mode_auto_fullscreen,
             commands::export_config,
             commands::inspect_backup,
             commands::import_config,
@@ -609,7 +612,7 @@ pub fn run() {
             skin_api::skin_hide,
             skin_api::skin_show,
         ])
-        .run({
+        .build({
             // NOTE(driftlet): never let Tauri hand windows a runtime icon.
             // default_window_icon (icons/icon.ico) is decoded to RGBA and
             // turned into an HICON by tao's RgbaIcon::into_windows_icon, which
@@ -624,7 +627,19 @@ pub fn run() {
             context.set_default_window_icon(None);
             context
         })
-        .unwrap_or_else(|e| fatal_startup_error(&format!("Error while running Driftlet: {}", e)));
+        .unwrap_or_else(|e| fatal_startup_error(&format!("Error while building Driftlet: {}", e)))
+        // 关窗即销毁后：最后一个窗口销毁会触发 ExitRequested——托盘还在就不
+        // 是退出（托盘左键随时唤回重建），否则进程静默死掉（实机踩过）。
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let state = app_handle.state::<AppState>();
+                if !state.exiting.load(std::sync::atomic::Ordering::SeqCst)
+                    && state.tray_ok.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 /// Find the first .dskin package path in command-line arguments.
@@ -643,7 +658,7 @@ fn dskin_arg(args: impl Iterator<Item = String>) -> Option<String> {
 /// 记录日志并弹出可读错误框，然后退出进程
 #[cfg(target_os = "windows")]
 fn fatal_startup_error(msg: &str) -> ! {
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
     log::error!("Fatal startup error: {}", msg);
     let text = windows::core::HSTRING::from(msg);
@@ -665,6 +680,83 @@ fn fatal_startup_error(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// 创建管理器窗口（启动建窗与销毁后唤回重建共用）。**关窗即销毁、唤回重建**：
+/// 管理器渲染进程 ~80MB 是皮肤之外最大的常驻块；「隐藏常驻秒开」的另一条路
+/// （隐藏时 TrySuspend 挂起渲染进程）已实机证伪（docs/已知问题.md），故选
+/// 销毁回收——重建代价 = WebView2 重初始化 + 页面重载（约 1s 级，用户已接受）。
+/// 注意：窗口事件处理（关窗销毁）随窗重建重挂；前端瞬态（选中皮肤、搜索词）
+/// 不保留——列表/主题/权限等全部从后端配置重建。
+///
+/// 返回 None = 建窗失败（仅记日志；启动期由调用方转 fatal_startup_error）。
+pub(crate) fn create_manager_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    // frameless with custom title bar (min/max/close buttons in UI)
+    let manager =
+        tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+            .title("Driftlet")
+            .inner_size(960.0, 640.0)
+            .min_inner_size(640.0, 460.0)
+            // 「无标题栏原生窗框」：无边框建窗（tao 剥 WS_CAPTION|WS_THICKFRAME）
+            // + 建窗后补回 WS_THICKFRAME|WS_BORDER（见 apply_native_frame）。
+            // 保持 shadow(false)——那是 DwmExtendFrameIntoClientArea 玻璃延伸
+            // 路径，与真实窗框叠加会在窗缘留 1px 玻璃线
+            .decorations(false)
+            .shadow(false)
+            .resizable(true)
+            .center()
+            .visible(false)
+            .build();
+    let manager = match manager {
+        Ok(w) => w,
+        Err(e) => {
+            log::error!("Failed to create manager window: {}", e);
+            return None;
+        }
+    };
+
+    // 补回「无标题栏原生窗框」样式 + 任务栏/悬停预览/Alt+Tab 图标
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(hwnd) = manager.hwnd() {
+            if !apply_native_frame(hwnd.0 as isize) {
+                log::error!("apply_native_frame: SetWindowSubclass failed for manager window");
+            }
+            apply_window_icon(hwnd.0 as isize);
+        }
+    }
+
+    // WebView2 hardening on the manager too: no browser context menu,
+    // no F5/Ctrl+R refresh keys (the manager UI must not be
+    // reloadable by keystroke).  Same async-init retry as skins;
+    // afterwards the 5s maintenance timer keeps re-applying both.
+    #[cfg(target_os = "windows")]
+    factory::spawn_webview_hardening_retry(app, "main");
+
+    // Window event handler: close = destroy（回收渲染进程内存），唤回 = 重建
+    let h = app.clone();
+    manager.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let state = h.state::<AppState>();
+            if state.exiting.load(std::sync::atomic::Ordering::SeqCst) {
+                // Real exit（放行：退出流程统一回收）
+            } else if !state.tray_ok.load(std::sync::atomic::Ordering::SeqCst) {
+                // 托盘没建起来：销毁管理器会彻底失去 UI 入口 ——
+                // 关窗直接走退出流程
+                log::info!("Manager window closed (no tray, exiting)");
+                state
+                    .exiting
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                h.exit(0);
+            } else {
+                api.prevent_close();
+                log::info!("Manager window destroyed (will recreate on tray open)");
+                let _ = h.get_webview_window("main").map(|w| w.destroy());
+            }
+        }
+    });
+
+    Some(manager)
+}
+
 /// Resolve a data directory as `<exe dir>/<name>` (portable layout).
 ///
 /// All app data lives next to the executable, so the install location the
@@ -679,7 +771,11 @@ fn resolve_portable_dir(app_data_dir: &std::path::Path, name: &str) -> PathBuf {
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()));
     let Some(exe_dir) = exe_dir else {
-        log::warn!("Cannot resolve exe path, {} dir falls back to {:?}", name, fallback);
+        log::warn!(
+            "Cannot resolve exe path, {} dir falls back to {:?}",
+            name,
+            fallback
+        );
         let _ = std::fs::create_dir_all(&fallback);
         return fallback;
     };
@@ -695,7 +791,10 @@ fn resolve_portable_dir(app_data_dir: &std::path::Path, name: &str) -> PathBuf {
         Err(e) => {
             log::warn!(
                 "Cannot write {} dir {:?} ({}), falling back to {:?}",
-                name, dir, e, fallback
+                name,
+                dir,
+                e,
+                fallback
             );
             let _ = std::fs::create_dir_all(&fallback);
             fallback
@@ -752,7 +851,11 @@ fn migrate_legacy_config(
         }
         let dest = skins_dir.join(entry.file_name());
         if dest.exists() {
-            log::info!("Legacy skin {:?} skipped: {:?} already exists", entry.file_name(), dest);
+            log::info!(
+                "Legacy skin {:?} skipped: {:?} already exists",
+                entry.file_name(),
+                dest
+            );
             continue;
         }
         // 优先 rename；跨卷（如装在 D:\ 而 %APPDATA% 在 C:\）退化为复制+删除
@@ -784,7 +887,11 @@ const BUNDLED_SKIN_IDS: [&str; 6] = [
 /// 一次性——配置标记 bundled_skins_seeded 置位后不再执行（用户删过的皮肤
 /// 不复活、组被删过不重建）。补缺不覆盖：盘上已有的同名皮肤（用户更新/
 /// 修改过的拷贝）一律不动。返回是否有皮肤新装（需要重扫目录）。
-fn seed_bundled_skins(app: &tauri::App, skins_dir: &std::path::Path, config: &mut skin::types::AppConfig) -> bool {
+fn seed_bundled_skins(
+    app: &tauri::App,
+    skins_dir: &std::path::Path,
+    config: &mut skin::types::AppConfig,
+) -> bool {
     let mut installed = false;
     match app.path().resource_dir() {
         Ok(rdir) => {
@@ -837,11 +944,14 @@ fn seed_bundled_skins(app: &tauri::App, skins_dir: &std::path::Path, config: &mu
     if !ungrouped.is_empty() {
         config.skin_groups.push(skin::types::SkinGroup {
             id: "g-default-skins".to_string(),
-            name: crate::i18n::tr(&config.language, crate::i18n::Key::DefaultSkinsGroup).to_string(),
+            name: crate::i18n::tr(&config.language, crate::i18n::Key::DefaultSkinsGroup)
+                .to_string(),
             collapsed: false,
         });
         for id in ungrouped {
-            config.skin_group_map.insert(id.to_string(), "g-default-skins".to_string());
+            config
+                .skin_group_map
+                .insert(id.to_string(), "g-default-skins".to_string());
         }
     }
     config.bundled_skins_seeded = true;
@@ -853,7 +963,7 @@ fn seed_bundled_skins(app: &tauri::App, skins_dir: &std::path::Path, config: &mu
 /// 见 seed_bundled_skins）；开发期从这里同步进 skins 目录保持最新。
 /// 演示皮肤（`demos/`）不再同步——它们只是接口演示，装即用的族皮肤才是默认内容。
 /// Skins that don't exist yet are copied; existing skins are updated if the source is newer.
-fn copy_example_skins(skins_dir: &PathBuf) {
+fn copy_example_skins(skins_dir: &Path) {
     // release 构建直接返回：示例源是相对 CWD 的仓库 examples/ 路径，生产环境
     // CWD 不可控（快捷方式启动常落在 System32），撞上同名目录会被静默误装
     if !cfg!(debug_assertions) {
@@ -862,7 +972,7 @@ fn copy_example_skins(skins_dir: &PathBuf) {
     // 开发期的皮肤源（仓库 examples/ 目录；demos/ 已停同步——接口演示不属于
     // 开发期默认内容）
     let example_dirs = ["examples"];
-    let prefixes = ["..", "."];   // ..: CWD=src-tauri；.: CWD=项目根
+    let prefixes = ["..", "."]; // ..: CWD=src-tauri；.: CWD=项目根
 
     let canonical_dest = skins_dir.canonicalize().ok();
     let mut synced_any = false;
@@ -889,9 +999,7 @@ fn copy_example_skins(skins_dir: &PathBuf) {
                     // 基建/模板，如 examples/_template、shared/ 不同步）
                     let name = entry.file_name();
                     let name = name.to_string_lossy();
-                    if name.starts_with('_')
-                        || !entry.path().join("skin.json").is_file()
-                    {
+                    if name.starts_with('_') || !entry.path().join("skin.json").is_file() {
                         continue;
                     }
                     let dest = skins_dir.join(entry.file_name());
@@ -908,11 +1016,10 @@ fn copy_example_skins(skins_dir: &PathBuf) {
                             std::fs::read(dest.join(skin::settings::SETTINGS_FILENAME)).ok();
                         let staging = skins_dir.join(format!(".staging-{}", name.as_ref()));
                         let _ = std::fs::remove_dir_all(&staging);
-                        match copy_dir_recursive(&entry.path(), &staging)
-                            .and_then(|_| {
-                                std::fs::remove_dir_all(&dest)?;
-                                std::fs::rename(&staging, &dest)
-                            }) {
+                        match copy_dir_recursive(&entry.path(), &staging).and_then(|_| {
+                            std::fs::remove_dir_all(&dest)?;
+                            std::fs::rename(&staging, &dest)
+                        }) {
                             Ok(_) => {
                                 if let Some(bytes) = saved_settings {
                                     let _ = std::fs::write(
@@ -924,7 +1031,11 @@ fn copy_example_skins(skins_dir: &PathBuf) {
                             }
                             Err(e) => {
                                 let _ = std::fs::remove_dir_all(&staging);
-                                log::warn!("  Failed to update example skin {:?}: {}", entry.file_name(), e);
+                                log::warn!(
+                                    "  Failed to update example skin {:?}: {}",
+                                    entry.file_name(),
+                                    e
+                                );
                             }
                         }
                     }
@@ -1005,13 +1116,13 @@ unsafe extern "system" fn native_frame_proc(
     _dwrefdata: usize,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
     };
     use windows::Win32::UI::Shell::DefSubclassProc;
     use windows::Win32::UI::WindowsAndMessaging::{
         DefWindowProcW, GWL_STYLE, IsZoomed, MINMAXINFO, NCCALCSIZE_PARAMS, STYLESTRUCT,
-        WM_GETMINMAXINFO, WM_NCCALCSIZE, WM_NCACTIVATE, WM_STYLECHANGING, WS_BORDER,
-        WS_CAPTION, WS_THICKFRAME,
+        WM_GETMINMAXINFO, WM_NCACTIVATE, WM_NCCALCSIZE, WM_STYLECHANGING, WS_BORDER, WS_CAPTION,
+        WS_THICKFRAME,
     };
     // 纯 FFI 转发/就地改写、无锁无分配，不存在 panic 路径（无需 catch_unwind 包装）
     if msg == WM_NCACTIVATE {
@@ -1047,12 +1158,9 @@ unsafe extern "system" fn native_frame_proc(
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
-        if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi).as_bool()
-        {
-            let inflate_x =
-                (mmi.ptMaxSize.x - (mi.rcMonitor.right - mi.rcMonitor.left)) / 2;
-            let inflate_y =
-                (mmi.ptMaxSize.y - (mi.rcMonitor.bottom - mi.rcMonitor.top)) / 2;
+        if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi).as_bool() {
+            let inflate_x = (mmi.ptMaxSize.x - (mi.rcMonitor.right - mi.rcMonitor.left)) / 2;
+            let inflate_y = (mmi.ptMaxSize.y - (mi.rcMonitor.bottom - mi.rcMonitor.top)) / 2;
             mmi.ptMaxPosition.x = mi.rcWork.left - inflate_x;
             mmi.ptMaxPosition.y = mi.rcWork.top - inflate_y;
             mmi.ptMaxSize.x = (mi.rcWork.right - mi.rcWork.left) + 2 * inflate_x;
@@ -1085,8 +1193,7 @@ unsafe extern "system" fn native_frame_proc(
                 cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                 ..Default::default()
             };
-            if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi)
-                .as_bool()
+            if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi).as_bool()
             {
                 params.rgrc[0] = mi.rcWork;
             }
@@ -1118,6 +1225,7 @@ unsafe extern "system" fn native_frame_proc(
 ///   - 部分非客户区（细框环）→ DWM 画出完整标题栏；
 ///   - 唯有「WS_THICKFRAME|WS_BORDER、无 WS_CAPTION、NCCALCSIZE 默认」
 ///     = 原生框+影+无标题栏。
+///
 /// client/摆窗修正方案另经 tools/win32-probes/top-inset-probe.ps1 实证：
 /// 还原态 clientTop 8px→1px、最大化 rect=work+膨胀 且 client=rcWork 精确
 /// 贴合、边框+阴影完好、不触发细框环的标题栏坑。
@@ -1127,9 +1235,9 @@ pub(crate) fn apply_native_frame(hwnd_val: isize) -> bool {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::Shell::SetWindowSubclass;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
-        GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-        SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_THICKFRAME,
+        GWL_STYLE, GetWindowLongPtrW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WS_BORDER,
+        WS_CAPTION, WS_THICKFRAME,
     };
 
     let hwnd = HWND(hwnd_val as *mut _);
@@ -1138,23 +1246,24 @@ pub(crate) fn apply_native_frame(hwnd_val: isize) -> bool {
         SetWindowLongPtrW(
             hwnd,
             GWL_STYLE,
-            (style & !(WS_CAPTION.0 as isize))
-                | WS_THICKFRAME.0 as isize
-                | WS_BORDER.0 as isize,
+            (style & !(WS_CAPTION.0 as isize)) | WS_THICKFRAME.0 as isize | WS_BORDER.0 as isize,
         );
-        let ok = SetWindowSubclass(
-            hwnd,
-            Some(native_frame_proc),
-            NATIVE_FRAME_SUBCLASS_ID,
-            0,
-        )
-        .as_bool();
+        let ok =
+            SetWindowSubclass(hwnd, Some(native_frame_proc), NATIVE_FRAME_SUBCLASS_ID, 0).as_bool();
         // 让 DWM 按新样式 + 新 NCCALCSIZE 口径重估窗框
         let _ = SetWindowPos(
             hwnd,
             None,
-            0, 0, 0, 0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED
+                | SWP_NOMOVE
+                | SWP_NOSIZE
+                | SWP_NOZORDER
+                | SWP_NOOWNERZORDER
+                | SWP_NOACTIVATE,
         );
         ok
     }
@@ -1174,8 +1283,8 @@ pub(crate) fn apply_window_icon(hwnd_val: isize) {
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateIconFromResourceEx, SendMessageW, HICON, ICON_BIG, ICON_SMALL, LR_DEFAULTCOLOR,
-        SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, WM_SETICON,
+        CreateIconFromResourceEx, HICON, ICON_BIG, ICON_SMALL, LR_DEFAULTCOLOR, SM_CXICON,
+        SM_CXSMICON, SM_CYICON, SM_CYSMICON, SendMessageW, WM_SETICON,
     };
 
     /// 打包进二进制的多尺寸 .ico（与 exe 资源图标同一份文件）
@@ -1183,7 +1292,10 @@ pub(crate) fn apply_window_icon(hwnd_val: isize) {
     // (small, big) 两枚 HICON 的句柄值，按 DPI 分档缓存——OnceLock 按首次
     // 调用窗的 DPI 建后永久缓存，DPI 变更（跨屏拖动/系统改缩放）后图标
     // 尺寸档失配
-    static ICONS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u32, Option<(usize, usize)>>>> =
+    type IconCache = std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<u32, Option<(usize, usize)>>>,
+    >;
+    static ICONS: IconCache =
         std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
     /// 从 .ico 目录里挑最贴合 (cx, cy) 的条目建 HICON。
@@ -1229,10 +1341,9 @@ pub(crate) fn apply_window_icon(hwnd_val: isize) {
                 unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) },
                 unsafe { GetSystemMetricsForDpi(SM_CYSMICON, dpi) },
             );
-            let big = load_entry(
-                unsafe { GetSystemMetricsForDpi(SM_CXICON, dpi) },
-                unsafe { GetSystemMetricsForDpi(SM_CYICON, dpi) },
-            );
+            let big = load_entry(unsafe { GetSystemMetricsForDpi(SM_CXICON, dpi) }, unsafe {
+                GetSystemMetricsForDpi(SM_CYICON, dpi)
+            });
             small.zip(big).map(|(s, b)| (s.0 as usize, b.0 as usize))
         })
     };
@@ -1277,7 +1388,10 @@ mod tests {
     use super::{dskin_arg, migrate_legacy_config};
 
     fn args(v: &[&str]) -> impl Iterator<Item = String> {
-        v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+        v.iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     #[test]
@@ -1352,7 +1466,10 @@ mod tests {
             std::fs::read_to_string(skins_dir.join("old-skin").join("index.html")).unwrap(),
             "old"
         );
-        assert!(!legacy_skins.join("old-skin").exists(), "moved skin must leave the legacy dir");
+        assert!(
+            !legacy_skins.join("old-skin").exists(),
+            "moved skin must leave the legacy dir"
+        );
         assert_eq!(
             std::fs::read_to_string(skins_dir.join("clash-skin").join("index.html")).unwrap(),
             "new",

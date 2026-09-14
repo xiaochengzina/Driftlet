@@ -8,10 +8,10 @@
 //! 本身，其子孙成孤儿继续跑）——要整树清理得走 Job Object，超出本模块
 //! 的取舍范围。
 
+use crate::i18n::{Key, trf};
 use serde::Serialize;
 use std::io::Read;
 use std::time::{Duration, Instant};
-use crate::i18n::{trf, Key};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandOutput {
@@ -33,12 +33,10 @@ pub fn run(
     // 参数 f64 收下 JSON 整数/小数（u64 遇小数会被 serde 拒成英文报错），
     // 这里取整并钳制：下限 100ms、上限 120s、默认 30s。
     // NaN 防线：NaN 穿透 clamp 后 as u64 = 0 → 立即超时——非有限值回默认
-    let timeout = Duration::from_millis(
-        match timeout_ms {
-            Some(t) if t.is_finite() => t.clamp(100.0, MAX_TIMEOUT_MS as f64) as u64,
-            _ => DEFAULT_TIMEOUT_MS,
-        },
-    );
+    let timeout = Duration::from_millis(match timeout_ms {
+        Some(t) if t.is_finite() => t.clamp(100.0, MAX_TIMEOUT_MS as f64) as u64,
+        _ => DEFAULT_TIMEOUT_MS,
+    });
 
     let mut cmd = std::process::Command::new(command);
     cmd.args(args)
@@ -149,7 +147,7 @@ fn decode_console(bytes: &[u8]) -> String {
     if let Ok(s) = std::str::from_utf8(bytes) {
         return s.to_string();
     }
-    use windows::Win32::Globalization::{MultiByteToWideChar, CP_OEMCP};
+    use windows::Win32::Globalization::{CP_OEMCP, MultiByteToWideChar};
     unsafe {
         let len = MultiByteToWideChar(CP_OEMCP, Default::default(), bytes, None);
         if len <= 0 {
@@ -208,7 +206,10 @@ mod tests {
         // broken pipe），返回截断的 1MB 与真实退出码
         let out = run(
             "cmd",
-            &args(&["/c", "for /l %i in (1,1,40000) do @echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]),
+            &args(&[
+                "/c",
+                "for /l %i in (1,1,40000) do @echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            ]),
             Some(30000.0),
             "zh-CN",
         )

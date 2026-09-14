@@ -1,0 +1,25 @@
+# Editor 层统一（与 .gitattributes 互补：行尾入库归 git 管，编辑器实时行为归本文件）
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Rust / TOML / Python 按社区惯例四格
+[*.{rs,toml,py}]
+indent_size = 4
+
+# Windows 脚本按平台惯例 CRLF（与 .gitattributes 的 *.ps1 例外一致）
+[*.ps1]
+end_of_line = crlf
+
+# 压缩/二进制产物不适用
+[*.{png,ico,exe,dskin,zip}]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset

@@ -17,14 +17,14 @@
 //! First call after process start reports usage/vram-used 0 (PDH baseline),
 //! same convention as the CPU sampler.
 
+use super::GpuInfo;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use super::GpuInfo;
 
 struct AdapterInfo {
     name: String,
     luid: (u32, u32), // (HighPart as u32, LowPart)
-    unified: bool, // 统一内存架构（核显）：显存总量/占用按「专用 + 共享」计算
+    unified: bool,    // 统一内存架构（核显）：显存总量/占用按「专用 + 共享」计算
     vram_total: u64,
     vram_shared_total: u64,
     vram_used: u64,
@@ -57,7 +57,10 @@ pub fn collect() -> Vec<GpuInfo> {
                     shared.get(&a.luid).copied().unwrap_or(a.vram_shared_used),
                 )
             } else {
-                (a.vram_total, vram.get(&a.luid).copied().unwrap_or(a.vram_used))
+                (
+                    a.vram_total,
+                    vram.get(&a.luid).copied().unwrap_or(a.vram_used),
+                )
             };
             let vram_usage_pct = if vram_total > 0 {
                 ((vram_used as f64 / vram_total as f64) * 100.0).min(100.0) as f32
@@ -80,8 +83,8 @@ pub fn collect() -> Vec<GpuInfo> {
 // ─── DXGI: adapters + VRAM ───
 
 fn enum_adapters() -> Vec<AdapterInfo> {
-    use windows::core::Interface;
     use windows::Win32::Graphics::Dxgi::*;
+    use windows::core::Interface;
 
     let mut out = Vec::new();
     unsafe {
@@ -156,9 +159,9 @@ fn is_unified_memory(
     adapter: &windows::Win32::Graphics::Dxgi::IDXGIAdapter1,
     luid: (u32, u32),
 ) -> bool {
-    use windows::core::Interface;
     use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
     use windows::Win32::Graphics::Direct3D12::*;
+    use windows::core::Interface;
 
     static CACHE: Mutex<Option<HashMap<(u32, u32), bool>>> = Mutex::new(None);
     let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -174,7 +177,7 @@ fn is_unified_memory(
                 Ok(())
             })
             .ok()
-            .and_then(|_| device)
+            .and(device)
             .and_then(|dev| {
                 let mut arch = D3D12_FEATURE_DATA_ARCHITECTURE::default();
                 dev.CheckFeatureSupport(
@@ -330,8 +333,8 @@ mod tests {
     #[test]
     #[ignore = "hardware probe — run manually with --nocapture"]
     fn probe_dxgi_descs() {
-        use windows::core::Interface;
         use windows::Win32::Graphics::Dxgi::*;
+        use windows::core::Interface;
 
         unsafe {
             let factory: IDXGIFactory1 = CreateDXGIFactory1().unwrap();

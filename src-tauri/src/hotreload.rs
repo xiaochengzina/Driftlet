@@ -26,14 +26,14 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Manager};
 
-use crate::skin::loader;
 use crate::AppState;
+use crate::skin::loader;
 
 /// Quiet period after the last change before a skin is reloaded.  Long
 /// enough to absorb editor atomic-save bursts (tmp + rename), short enough
@@ -114,8 +114,8 @@ pub fn start(app: AppHandle) {
         let (tx, rx) = mpsc::sync_channel::<notify::Event>(4096);
         let watch_broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let broken_flag = watch_broken.clone();
-        let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
-            move |res: Result<notify::Event, notify::Error>| {
+        let mut watcher: RecommendedWatcher =
+            match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
                 match res {
                     Ok(event) => {
                         let _ = tx.try_send(event);
@@ -127,14 +127,13 @@ pub fn start(app: AppHandle) {
                         log::warn!("hotreload: watcher error event: {}", e);
                     }
                 }
-            },
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                log::warn!("hotreload: failed to create watcher: {}", e);
-                return;
-            }
-        };
+            }) {
+                Ok(w) => w,
+                Err(e) => {
+                    log::warn!("hotreload: failed to create watcher: {}", e);
+                    return;
+                }
+            };
         if let Err(e) = watcher.watch(&skins_dir, RecursiveMode::Recursive) {
             log::warn!("hotreload: failed to watch {:?}: {}", skins_dir, e);
             return;
@@ -156,7 +155,9 @@ pub fn start(app: AppHandle) {
                 if skins_dir.exists() {
                     let _ = watcher.unwatch(&skins_dir);
                     match watcher.watch(&skins_dir, RecursiveMode::Recursive) {
-                        Ok(()) => log::info!("hotreload: re-watching {:?} after watcher error", skins_dir),
+                        Ok(()) => {
+                            log::info!("hotreload: re-watching {:?} after watcher error", skins_dir)
+                        }
                         Err(e) => {
                             watch_broken.store(true, std::sync::atomic::Ordering::Relaxed);
                             log::warn!("hotreload: re-watch failed: {}", e);
@@ -247,7 +248,9 @@ mod tests {
         assert!(is_self_write(&base.join("settings.json.tmp")));
         assert!(is_self_write(&base.join("settings.json.bak")));
         assert!(is_self_write(&base.join("preview.png")));
-        assert!(is_self_write(&base.join(".staging-clock").join("index.html")));
+        assert!(is_self_write(
+            &base.join(".staging-clock").join("index.html")
+        ));
         assert!(is_self_write(&base.join(".clock.old").join("index.html")));
         assert!(!is_self_write(&base.join("index.html")));
         assert!(!is_self_write(&base.join("js").join("main.js")));
@@ -264,7 +267,9 @@ mod tests {
         assert!(hit_recent_self_write(p));
         // canonicalize 的 \\?\ 前缀与 notify 事件路径等价命中
         note_self_write(Path::new(r"\\?\C:\skins\clock\data.json"));
-        assert!(hit_recent_self_write(Path::new(r"C:\skins\clock\data.json")));
+        assert!(hit_recent_self_write(Path::new(
+            r"C:\skins\clock\data.json"
+        )));
     }
 
     #[test]

@@ -14,7 +14,9 @@
   /* 双模文字变量桥：皮肤自定义件一律用 fg 族变量——纸卡按文字色派生
      （天气同款）；图片卡上映射到白族（base.css 的 on-photo 派生） */
   .card {
+    --isles-fg-2: var(--isles-fg); /* 旧运行时后备（无 color-mix）：副色取主色 */
     --isles-fg-2: color-mix(in srgb, var(--isles-fg) 62%, transparent);
+    --isles-fg-3: var(--isles-fg);
     --isles-fg-3: color-mix(in srgb, var(--isles-fg) 45%, transparent);
   }
   .card.isles-card--photo {
@@ -47,6 +49,7 @@
   /* 「今天/Today」文字态：比数字态小一档（文字在大字号下视觉面积远超
      数字）、加重、字距再开一点 */
   #days.days-word {
+    font-size: clamp(24px, min(20vw, 34vh), 76px); /* 旧运行时后备（无容器查询），下同 */
     font-size: clamp(24px, min(20cqw, 34cqh), 76px);
     font-weight: 400;
     letter-spacing: 0.05em;
@@ -56,7 +59,9 @@
      opacity 留键盘可聚焦性——visibility:hidden 会把它们移出 Tab 序） */
   .tools {
     position: absolute;
+    top: clamp(10px, min(4vw, 8vh), 16px);
     top: clamp(10px, min(4cqw, 8cqh), 16px);
+    right: clamp(10px, min(4vw, 8vh), 16px);
     right: clamp(10px, min(4cqw, 8cqh), 16px);
     display: flex;
     gap: 8px;
@@ -75,6 +80,14 @@
   /* 横条（P，出厂 420×200）：左文右数——左列名称+副题**顶对齐**、右列大数字+单位
      沉底、目标日期收右下角（与族横条左区「眉题顶 + 主内容底」同节奏——
      此前 align-items:center 垂直居中让眉题下移，实机反馈） */
+  /* 旧运行时后备：无容器查询时按视口宽降级（皮肤卡即窗口，vw≈cqw） */
+  @media (min-width: 241px) {
+    .card { flex-direction: row; align-items: stretch; justify-content: space-between; }
+    .head { gap: 1px; }
+    .base { margin-top: 0; flex-direction: column; align-items: flex-end; justify-content: flex-end; gap: 0; }
+    #days { font-weight: 400; }
+    #date { margin-top: 0.4em; }
+  }
   @container (min-width: 241px) {
     .card { flex-direction: row; align-items: stretch; justify-content: space-between; }
     .head { gap: 1px; }
@@ -85,6 +98,14 @@
   /* 小卡（M 200×200）：天数钉死卡面几何中心（垂直水平双居中）——名称/副题
      悬浮顶部居中、目标日期悬浮底部居中，全部脱离文档流、不参与居中计算；
      单位「天」省略 */
+  @media (max-width: 240px) {
+    .head { position: absolute; top: 12px; left: 12px; right: 12px; align-items: center; text-align: center; z-index: 1; }
+    #date { position: absolute; bottom: 12px; left: 12px; right: 12px; text-align: center; z-index: 1; }
+    #unit { display: none; }
+    #days { font-weight: 500; }
+    #days.days-word { font-size: clamp(24px, min(27vw, 34vh), 76px); }
+    .base { position: absolute; inset: 0; margin-top: 0; display: flex; align-items: center; justify-content: center; }
+  }
   @container (max-width: 240px) {
     .head { position: absolute; top: 12px; left: 12px; right: 12px; align-items: center; text-align: center; z-index: 1; }
     #date { position: absolute; bottom: 12px; left: 12px; right: 12px; text-align: center; z-index: 1; }
@@ -92,7 +113,7 @@
     /* 小尺寸数字加重到 500——350/400 在小字号渐变上偏单薄 */
     #days { font-weight: 500; }
     /* 文字态在小卡随数字同比例放大（约 0.79×，与横条档同比例） */
-    #days.days-word { font-size: clamp(24px, min(27cqw, 34cqh), 76px); }
+    #days.days-word { font-size: clamp(24px, min(27vw, 34vh), 76px); font-size: clamp(24px, min(27cqw, 34cqh), 76px); }
     .base { position: absolute; inset: 0; margin-top: 0; display: flex; align-items: center; justify-content: center; }
   }
 </style>

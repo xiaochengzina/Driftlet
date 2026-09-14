@@ -9,8 +9,8 @@
 //! None); cover-art failure only blanks the cover field; a broken SMTC
 //! service is the only hard error.
 
-use base64::Engine;
 use super::{MediaAction, MediaInfo};
+use base64::Engine;
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as Session,
     GlobalSystemMediaTransportControlsSessionManager as Manager,
@@ -36,7 +36,9 @@ fn pick_session(mgr: &Manager) -> Option<Session> {
     let sessions = mgr.GetSessions().ok()?;
     let mut best: Option<(Session, i32)> = None;
     for i in 0..sessions.Size().unwrap_or(0) {
-        let Ok(session) = sessions.GetAt(i) else { continue };
+        let Ok(session) = sessions.GetAt(i) else {
+            continue;
+        };
         let mut score = 0i32;
         if let Ok(pb) = session.GetPlaybackInfo() {
             if let Ok(PlaybackStatus::Playing) = pb.PlaybackStatus() {
@@ -119,7 +121,9 @@ pub fn info() -> Result<Option<MediaInfo>, String> {
                     .ok()
                     .and_then(|r| r.Value().ok())
                     .unwrap_or(1.0);
-                let elapsed_secs = ((windows_now_100ns() - last_updated.UniversalTime) as f64 / 10_000_000.0).max(0.0);
+                let elapsed_secs = ((windows_now_100ns() - last_updated.UniversalTime) as f64
+                    / 10_000_000.0)
+                    .max(0.0);
                 position_secs += elapsed_secs * rate;
             }
         }
@@ -135,9 +139,21 @@ pub fn info() -> Result<Option<MediaInfo>, String> {
         .and_then(read_thumbnail);
 
     Ok(Some(MediaInfo {
-        title: props.as_ref().and_then(|p| p.Title().ok()).map(|h| h.to_string()).unwrap_or_default(),
-        artist: props.as_ref().and_then(|p| p.Artist().ok()).map(|h| h.to_string()).unwrap_or_default(),
-        album: props.as_ref().and_then(|p| p.AlbumTitle().ok()).map(|h| h.to_string()).unwrap_or_default(),
+        title: props
+            .as_ref()
+            .and_then(|p| p.Title().ok())
+            .map(|h| h.to_string())
+            .unwrap_or_default(),
+        artist: props
+            .as_ref()
+            .and_then(|p| p.Artist().ok())
+            .map(|h| h.to_string())
+            .unwrap_or_default(),
+        album: props
+            .as_ref()
+            .and_then(|p| p.AlbumTitle().ok())
+            .map(|h| h.to_string())
+            .unwrap_or_default(),
         status: status.to_string(),
         position_secs,
         duration_secs,
@@ -153,8 +169,8 @@ pub fn control(action: MediaAction) -> Result<bool, String> {
         .get()
         .map_err(|e| e.to_string())?;
     // 控制走择优选出的同一会话（与 info 同一路径——控制与展示不打架）
-    let session = pick_session(&mgr)
-        .ok_or_else(|| "no media session (nothing playing)".to_string())?;
+    let session =
+        pick_session(&mgr).ok_or_else(|| "no media session (nothing playing)".to_string())?;
     let op = match action {
         MediaAction::Play => session.TryPlayAsync(),
         MediaAction::Pause => session.TryPauseAsync(),
@@ -181,8 +197,8 @@ pub fn seek(position_secs: f64) -> Result<bool, String> {
         .map_err(|e| e.to_string())?
         .get()
         .map_err(|e| e.to_string())?;
-    let session = pick_session(&mgr)
-        .ok_or_else(|| "no media session (nothing playing)".to_string())?;
+    let session =
+        pick_session(&mgr).ok_or_else(|| "no media session (nothing playing)".to_string())?;
     let supported = session
         .GetPlaybackInfo()
         .and_then(|pb| pb.Controls())
@@ -269,19 +285,48 @@ mod tests {
         println!("=== {} session(s) ===", n);
         for i in 0..n {
             let Ok(s) = sessions.GetAt(i) else { continue };
-            let app = s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default();
-            let status = s.GetPlaybackInfo().and_then(|p| p.PlaybackStatus()).map(|s| format!("{:?}", s)).unwrap_or_else(|_| "?".into());
-            let seek = s.GetPlaybackInfo().and_then(|p| p.Controls()).and_then(|c| c.IsPlaybackPositionEnabled()).unwrap_or(false);
-            let title = s.TryGetMediaPropertiesAsync().and_then(|op| op.get()).ok().and_then(|p| p.Title().ok()).map(|t| t.to_string()).unwrap_or_default();
+            let app = s
+                .SourceAppUserModelId()
+                .map(|h| h.to_string())
+                .unwrap_or_default();
+            let status = s
+                .GetPlaybackInfo()
+                .and_then(|p| p.PlaybackStatus())
+                .map(|s| format!("{:?}", s))
+                .unwrap_or_else(|_| "?".into());
+            let seek = s
+                .GetPlaybackInfo()
+                .and_then(|p| p.Controls())
+                .and_then(|c| c.IsPlaybackPositionEnabled())
+                .unwrap_or(false);
+            let title = s
+                .TryGetMediaPropertiesAsync()
+                .and_then(|op| op.get())
+                .ok()
+                .and_then(|p| p.Title().ok())
+                .map(|t| t.to_string())
+                .unwrap_or_default();
             let (pos, dur) = match s.GetTimelineProperties() {
                 Ok(tl) => {
-                    let p = tl.Position().map(|t| t.Duration as f64 / 1e7).unwrap_or(0.0);
+                    let p = tl
+                        .Position()
+                        .map(|t| t.Duration as f64 / 1e7)
+                        .unwrap_or(0.0);
                     let d = tl.EndTime().map(|t| t.Duration as f64 / 1e7).unwrap_or(0.0);
                     (p, d)
                 }
                 Err(_) => (0.0, 0.0),
             };
-            println!("[{i}] app={app} status={status} seekable={seek} title={title} pos={pos:.1}/{dur:.1}s", i = i, app = app, status = status, seek = seek, title = title, pos = pos, dur = dur);
+            println!(
+                "[{i}] app={app} status={status} seekable={seek} title={title} pos={pos:.1}/{dur:.1}s",
+                i = i,
+                app = app,
+                status = status,
+                seek = seek,
+                title = title,
+                pos = pos,
+                dur = dur
+            );
         }
     }
 }
