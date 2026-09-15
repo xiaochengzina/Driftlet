@@ -60,8 +60,10 @@ pub fn read(root: &str, path: &str, name: &str, lang: &str) -> Result<RegistryVa
 #[cfg(target_os = "windows")]
 fn utf16z(bytes: &[u8]) -> String {
     let wide: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .collect();
     String::from_utf16_lossy(&wide)
         .trim_end_matches('\0')

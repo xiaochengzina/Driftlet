@@ -291,7 +291,7 @@ fn push_frames(shared: &Arc<Shared>, buf: &[u8], frames: usize, silent: bool) {
         }
         return;
     }
-    for chunk in buf.chunks_exact(FRAME_BYTES) {
+    for chunk in buf.as_chunks::<FRAME_BYTES>().0 {
         let l = f32::from_le_bytes(chunk[0..4].try_into().unwrap());
         let r = f32::from_le_bytes(chunk[4..8].try_into().unwrap());
         push_capped(&mut q, (l + r) * 0.5);
