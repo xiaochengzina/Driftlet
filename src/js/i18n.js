@@ -43,6 +43,11 @@ const MESSAGES = {
 
     // ── 主窗口外壳（app.js） ──
     'app.subtitle': '桌面皮肤管理器',
+    // 标题栏警告徽标（红 = 提权运行在前，黄 = 运行时过旧在后；短标签 + 悬停详情）
+    'app.warnElevated': '管理员',
+    'app.warnElevatedHint': '正以管理员权限运行——声明 shell 等权限的皮肤将拥有完整系统权限。若非有意，请退出后以普通方式重新启动',
+    'app.warnWebview2': '运行时过旧',
+    'app.warnWebview2Hint': 'WebView2 运行时版本过低，默认皮肤将降级为基础样式——请从微软官网获取 WebView2 运行时安装包更新（装后重启本应用生效）',
     'app.minimize': '最小化',
     'app.maximize': '最大化',
     'app.skins': '皮肤库',
@@ -244,6 +249,10 @@ const MESSAGES = {
     'settings.updateCheckHint': '启动时检测新版本并自动下载安装包，下载完成后提示安装（装完自动清理安装包）',
     'settings.updateCheckOn': '已开启更新检测',
     'settings.updateCheckOff': '已关闭更新检测',
+    'settings.titlebarWarnings': '标题栏警告标识',
+    'settings.titlebarWarningsHint': '在标题栏显示状态警告：红 = 正以管理员权限运行，黄 = WebView2 运行时版本过低（未检出对应状态时不显示）',
+    'settings.titlebarWarningsOn': '已开启标题栏警告标识',
+    'settings.titlebarWarningsOff': '已关闭标题栏警告标识',
     'settings.log': '日志',
     'settings.logHint': '查看后端警告/报错与皮肤控制台输出（调试皮肤时定位问题）',
     'settings.logOpen': '打开日志窗口',
@@ -441,6 +450,11 @@ const MESSAGES = {
 
     // ── Main window shell (app.js) ──
     'app.subtitle': 'Desktop Skin Manager',
+    // Title bar warning badges (red = elevated first, yellow = outdated runtime second)
+    'app.warnElevated': 'Admin',
+    'app.warnElevatedHint': 'Running with administrator rights — skins holding sensitive permissions get full system access. If unintended, quit and relaunch normally.',
+    'app.warnWebview2': 'Runtime outdated',
+    'app.warnWebview2Hint': "The WebView2 runtime is too old — bundled skins degrade to a basic look. Update it with Microsoft's WebView2 Runtime installer, then relaunch.",
     'app.minimize': 'Minimize',
     'app.maximize': 'Maximize',
     'app.skins': 'Skins',
@@ -643,6 +657,10 @@ const MESSAGES = {
     'settings.updateCheckHint': 'On startup, check for a new version and auto-download its installer; prompt to install once the download completes (the installer is cleaned up after installing)',
     'settings.updateCheckOn': 'Update check enabled',
     'settings.updateCheckOff': 'Update check disabled',
+    'settings.titlebarWarnings': 'Title bar warning badges',
+    'settings.titlebarWarningsHint': 'Show status warnings on the title bar: red = running as administrator, yellow = WebView2 runtime too old (hidden when nothing is detected)',
+    'settings.titlebarWarningsOn': 'Title bar warnings enabled',
+    'settings.titlebarWarningsOff': 'Title bar warnings disabled',
     'settings.log': 'Logs',
     'settings.logHint': 'View backend warnings/errors and skin console output (for debugging skins)',
     'settings.logOpen': 'Open Log Window',

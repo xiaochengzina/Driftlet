@@ -77,6 +77,9 @@ class App {
     this.bindSearch();
     this.bindBackendEvents();
     this._paintVersion();
+    this._paintTitlebarWarnings();
+    // 设置页开关切换 → 即时重绘徽标（同窗口事件，不经后端往返）
+    window.addEventListener('driftlet:titlebar-warnings-changed', () => this._paintTitlebarWarnings());
     await initTheme();
     await this.skinList.refresh();
 
@@ -195,6 +198,9 @@ class App {
           <span class="brand-name">Driftlet</span>
           <span class="brand-sub">${t('app.subtitle')}</span>
           <span class="brand-version" id="brand-version"></span>
+          <!-- 状态警告徽标（红 = 提权运行在前，黄 = WebView2 运行时过旧在
+               后；设置页「通用」开关门控）——由 _paintTitlebarWarnings 填充 -->
+          <span class="brand-warnings" id="brand-warnings"></span>
         </div>
         <div class="win-btns">
           <button id="btn-minimize" title="${t('app.minimize')}" class="win-btn"><svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
@@ -388,6 +394,7 @@ class App {
     this.bindToolbar();
     this.bindSearch();
     this._paintVersion();
+    this._paintTitlebarWarnings();
     // 外壳重建后容器元素已更换，重新挂接再重绘
     this.skinList.container = document.getElementById('skin-list-container');
     this.skinList.bindScrollFade();
@@ -404,6 +411,37 @@ class App {
       const el = document.getElementById('brand-version');
       if (el) el.textContent = `v${this.appVersion}`;
     } catch { /* 留空 */ }
+  }
+
+  // 标题栏警告徽标：红 = 提权运行（在前），黄 = WebView2 运行时低于渲染
+  // 地板（在后）；设置页「通用」开关门控（关掉 = 整体不渲染）。检测态是
+  // 进程/系统级静态事实，建窗查一次即可；开关切换经
+  // driftlet:titlebar-warnings-changed 事件触发重绘。
+  async _paintTitlebarWarnings() {
+    const box = document.getElementById('brand-warnings');
+    if (!box) return;
+    try {
+      const [config, w] = await Promise.all([API.getAppConfig(), API.getTitlebarWarnings()]);
+      // 默认开：仅显式存了 false 才视为关闭（与后端 serde default 一致）
+      const enabled = config.titlebar_warnings !== false;
+      const mk = (level, label, hint) => {
+        const s = document.createElement('span');
+        s.className = `brand-warn brand-warn-${level}`;
+        s.title = hint;
+        // 警告三角（feather alert-triangle，静态无插值）+ 文字
+        s.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+        s.appendChild(document.createTextNode(label));
+        return s;
+      };
+      const badges = [];
+      if (enabled && w.running_elevated) {
+        badges.push(mk('red', t('app.warnElevated'), t('app.warnElevatedHint')));
+      }
+      if (enabled && w.webview2_below_floor) {
+        badges.push(mk('yellow', t('app.warnWebview2'), t('app.warnWebview2Hint')));
+      }
+      box.replaceChildren(...badges);
+    } catch { box.replaceChildren(); /* 查询失败 = 不显示，不打扰 */ }
   }
 
   bindToolbar() {

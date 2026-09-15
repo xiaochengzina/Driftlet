@@ -709,12 +709,46 @@ Section WebView2
       install_webview2:
         DetailPrint "$(installingWebview2)"
         ; $6 holds the path to the webview2 installer
-        ExecWait "$6 ${WEBVIEW2INSTALLERARGS} /install" $1
+        !if "${INSTALLWEBVIEW2MODE}" == "offlineInstaller"
+          ; NOTE(driftlet) 自定义⑧：全新装运行时与升级同根因——per-machine
+          ; 安装要管理员，非提权安装器 /silent 下必败（且此处失败会 Abort
+          ; 终止整个安装）。交互场景一律 runas 弹 UAC（已提权时 runas 不弹
+          ; 框、与 ExecWait 等价——不设判定分支，理由见自定义⑦）；静默模式
+          ; 保持 ExecWait。引导程序两种模式无此问题（EdgeUpdate 服务代提权），
+          ; 不走此分支。
+          ${If} ${Silent}
+            ExecWait "$6 ${WEBVIEW2INSTALLERARGS} /install" $1
+          ${Else}
+            ExecShellWait "runas" "$6" "${WEBVIEW2INSTALLERARGS} /install"
+            Pop $1
+          ${EndIf}
+        !else
+          ExecWait "$6 ${WEBVIEW2INSTALLERARGS} /install" $1
+        !endif
+        ; NOTE(driftlet) 自定义⑥：载荷用完即删——三种模式的安装器都解到
+        ; %TEMP%（离线运行时 ~130MB，实机反馈装完残留不清），Delete 失败
+        ;（占用中）静默跳过，无碍主流程。
+        Delete "$6"
         ${If} $1 = 0
           DetailPrint "$(webview2InstallSuccess)"
         ${Else}
-          DetailPrint "$(webview2InstallError)"
-          Abort "$(webview2AbortError)"
+          ; NOTE(driftlet) 自定义⑨：载荷报错 ≠ 没装上（实机：EdgeUpdate 被精简的
+          ; 机器上首跑报错、二跑直接跳过正常装——本体在、注册步报错）。先复验
+          ; pv 再 Abort：pv 在 = 真装上，按成功走。
+          ${If} ${RunningX64}
+            ReadRegStr $4 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\${WEBVIEW2APPGUID}" "pv"
+          ${Else}
+            ReadRegStr $4 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2APPGUID}" "pv"
+          ${EndIf}
+          ${If} $4 == ""
+            ReadRegStr $4 HKCU "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2APPGUID}" "pv"
+          ${EndIf}
+          ${If} $4 != ""
+            DetailPrint "$(webview2InstallSuccess)"
+          ${Else}
+            DetailPrint "$(webview2InstallError)"
+            Abort "$(webview2AbortError)"
+          ${EndIf}
         ${EndIf}
       webview2_done:
     ${EndIf}
@@ -727,17 +761,73 @@ Section WebView2
           ; 上游模板的 EdgeUpdate 在线升级在无网络机器上必然失败（实机反馈：
           ; 离线包却尝试在线更新 WebView2）。载荷与参数与安装段同款；失败可
           ; 重试/忽略（忽略 = 旧运行时装机，皮肤降级 + 启动提醒兜着）。
+          ; NOTE(driftlet) 自定义⑥：~130MB 载荷跑完即删（成功失败都删，
+          ; RETRY 由循环头重新释放；实机反馈残留 %TEMP%）。
+          ; NOTE(driftlet) 自定义⑦：交互场景一律经 runas 弹 UAC 提权安装——
+          ; Driftlet 默认 per-user 安装（NSIS 非提权），/silent 下离线运行时
+          ; 安装器无法自提权升 per-machine 运行时（实机报错 -2147219416 /
+          ; 0x80040828）。**不做 IsUserAnAdmin 判定分支**：已提权时 runas
+          ; 不再弹框、与 ExecWait 等价，分支只剩误判面（fail-closed 加固曾
+          ; 是其补丁，统一后整层拆除）。仅静默模式保留 ExecWait（自动化部署
+          ; 不应半路弹 UAC，且静默上下文本多是管理员/SYSTEM）。提权取消或
+          ; 仍败 → 回退 EdgeUpdate 在线升级（needsadmin=true 经系统服务自行
+          ; 提权，标准包同路径、实机验证可用）→ 仍败才弹窗。
           update_webview_offline:
             DetailPrint "$(installingWebview2)"
             Delete "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
             File "/oname=$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" "${WEBVIEW2INSTALLERPATH}"
-            ExecWait '"$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" ${WEBVIEW2INSTALLERARGS} /install' $1
+            ${If} ${Silent}
+              ExecWait '"$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" ${WEBVIEW2INSTALLERARGS} /install' $1
+            ${Else}
+              ExecShellWait "runas" "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" "${WEBVIEW2INSTALLERARGS} /install"
+              Pop $1
+            ${EndIf}
+            Delete "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
             ${If} $1 = 0
               DetailPrint "$(webview2InstallSuccess)"
             ${Else}
-              MessageBox MB_ICONEXCLAMATION|MB_ABORTRETRYIGNORE "$(webview2InstallError)" IDIGNORE ignore_offline IDRETRY update_webview_offline
-              Quit
-              ignore_offline:
+              ; NOTE(driftlet) 自定义⑨：载荷报错 ≠ 没装上——EdgeUpdate 被精简的
+              ; 机器上载荷能装完运行时本体、仅注册步报错（实机：首跑报 525064、
+              ; 二跑直接跳过正常装）。先复验 pv 再判负，免误报与无谓在线回退：
+              ; pv 在且 ≥ 地板 = 真装上（按成功走）；否则 $R0=1 走在线回退。
+              ${If} ${RunningX64}
+                ReadRegStr $4 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\${WEBVIEW2APPGUID}" "pv"
+              ${Else}
+                ReadRegStr $4 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2APPGUID}" "pv"
+              ${EndIf}
+              ${If} $4 == ""
+                ReadRegStr $4 HKCU "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2APPGUID}" "pv"
+              ${EndIf}
+              ${If} $4 != ""
+                ${VersionCompare} "${MINIMUMWEBVIEW2VERSION}" "$4" $R0
+              ${Else}
+                StrCpy $R0 1
+              ${EndIf}
+              ${If} $R0 <> 1
+                DetailPrint "$(webview2InstallSuccess)"
+              ${Else}
+              DetailPrint "$(webview2InstallError)"
+              ; 回退 EdgeUpdate 在线升级（注册表定位与标准包分支同序；找不到
+              ; EdgeUpdate 时 $1 保留离线失败码，直接进弹窗）。
+              ${If} ${RunningX64}
+                ReadRegStr $R1 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate" "path"
+              ${Else}
+                ReadRegStr $R1 HKLM "SOFTWARE\Microsoft\EdgeUpdate" "path"
+              ${EndIf}
+              ${If} $R1 == ""
+                ReadRegStr $R1 HKCU "SOFTWARE\Microsoft\EdgeUpdate" "path"
+              ${EndIf}
+              ${If} $R1 != ""
+                ExecWait `"$R1" /install appguid=${WEBVIEW2APPGUID}&needsadmin=true` $1
+              ${EndIf}
+              ${If} $1 = 0
+                DetailPrint "$(webview2InstallSuccess)"
+              ${Else}
+                MessageBox MB_ICONEXCLAMATION|MB_ABORTRETRYIGNORE "$(webview2InstallError)" IDIGNORE ignore_offline IDRETRY update_webview_offline
+                Quit
+                ignore_offline:
+              ${EndIf}
+            ${EndIf}
             ${EndIf}
         !else
         update_webview:

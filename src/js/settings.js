@@ -25,6 +25,7 @@ export default class Settings {
     this.theme = 'auto';
     this.hotReload = false;
     this.updateCheck = true;
+    this.titlebarWarnings = true;
     this.activeTab = 'general';
   }
 
@@ -36,6 +37,7 @@ export default class Settings {
     this.hotReload = config.hot_reload === true;
     // 默认开：仅显式存了 false 才视为关闭（与后端 serde default 一致）
     this.updateCheck = config.update_check !== false;
+    this.titlebarWarnings = config.titlebar_warnings !== false;
 
     this.render();
   }
@@ -86,6 +88,16 @@ export default class Settings {
             </div>
             <label class="toggle">
               <input type="checkbox" id="cfg-updatecheck" ${this.updateCheck ? 'checked' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="settings-row">
+            <div>
+              <label>${t('settings.titlebarWarnings')}</label>
+              <div class="hint">${t('settings.titlebarWarningsHint')}</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg-tbwarnings" ${this.titlebarWarnings ? 'checked' : ''}>
               <span class="slider"></span>
             </label>
           </div>
@@ -182,6 +194,20 @@ export default class Settings {
       try {
         await API.setUpdateCheck(on);
         showToast(on ? t('settings.updateCheckOn') : t('settings.updateCheckOff'), on ? 'success' : 'info');
+      } catch (err) {
+        // 保存失败回滚勾选态（对齐皮肤编辑器开关的回滚语义）
+        e.target.checked = !on;
+        showToast(t('common.setFailed') + String(err), 'error');
+      }
+    };
+
+    // 标题栏警告徽标开关（持久化 + 即时重绘：通知 app.js 重取检测态渲染）
+    overlay.querySelector('#cfg-tbwarnings').onchange = async (e) => {
+      const on = e.target.checked;
+      try {
+        await API.setTitlebarWarnings(on);
+        window.dispatchEvent(new CustomEvent('driftlet:titlebar-warnings-changed'));
+        showToast(on ? t('settings.titlebarWarningsOn') : t('settings.titlebarWarningsOff'), on ? 'success' : 'info');
       } catch (err) {
         // 保存失败回滚勾选态（对齐皮肤编辑器开关的回滚语义）
         e.target.checked = !on;

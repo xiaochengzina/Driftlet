@@ -490,6 +490,16 @@ pub struct AppConfig {
     ///（elevation.rs 的 should_demote 读它）。
     #[serde(default)]
     pub allow_elevated: bool,
+    /// WebView2 地板提醒已弹过（一次性标记；此后由标题栏黄色徽标常驻
+    /// 提示——webview2.rs 的 runtime_floor_notice / get_titlebar_warnings）。
+    /// 必须是 AppConfig 字段而非游离键：config 保存按结构体重写整个文件，
+    /// 游离键会在下一次保存时被冲掉（allow_elevated 同款教训）。
+    #[serde(default)]
+    pub webview2_floor_noticed: bool,
+    /// 标题栏警告徽标总开关（默认开）：红 = 提权运行（在前），黄 =
+    /// WebView2 运行时低于渲染地板（在后）。设置页「通用」可关。
+    #[serde(default = "default_titlebar_warnings")]
+    pub titlebar_warnings: bool,
     /// 内置族皮肤首装种子已落（安装包打包的 isles-* 已装进 skins 目录并归入
     /// 「默认皮肤」组）：一次性标记——用户删过的皮肤不复活、组被删过不重建。
     #[serde(default)]
@@ -513,6 +523,10 @@ fn default_hot_reload() -> bool {
 }
 
 fn default_update_check() -> bool {
+    true
+}
+
+fn default_titlebar_warnings() -> bool {
     true
 }
 
@@ -618,6 +632,8 @@ impl Default for AppConfig {
             hot_reload: default_hot_reload(),
             update_check: default_update_check(),
             allow_elevated: false,
+            webview2_floor_noticed: false,
+            titlebar_warnings: default_titlebar_warnings(),
             bundled_skins_seeded: false,
             focus_mode_action: default_focus_mode_action(),
             focus_mode_auto_fullscreen: false,

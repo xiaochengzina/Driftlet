@@ -273,6 +273,16 @@ const API = {
     return invoke('set_update_check', { on });
   },
 
+  // 标题栏警告徽标：检测态查询（{running_elevated, webview2_below_floor}，
+  // 静态事实建窗查一次）/ 显示开关持久化
+  getTitlebarWarnings() {
+    return invoke('get_titlebar_warnings');
+  },
+
+  setTitlebarWarnings(on) {
+    return invoke('set_titlebar_warnings', { on });
+  },
+
   openReleasePage() {
     return invoke('open_release_page');
   },

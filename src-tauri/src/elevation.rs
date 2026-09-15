@@ -70,8 +70,9 @@ pub(crate) fn enable_privilege(name: PCWSTR) -> Result<(), String> {
 }
 
 /// 当前进程是否提权（TokenElevation，而非「用户是不是管理员」——UAC 下
-/// 管理员的普通启动 TokenIsElevated=0，不触发提醒）。
-fn is_elevated() -> bool {
+/// 管理员的普通启动 TokenIsElevated=0，不触发提醒）。pub(crate)：
+/// get_titlebar_warnings 的标题栏红色徽标同读此判定。
+pub(crate) fn is_elevated() -> bool {
     unsafe {
         let mut token = HANDLE::default();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
@@ -113,7 +114,7 @@ fn should_warn() -> bool {
 
 /// config.json 里的「允许提权运行」持久放行标记。此时 AppState 尚未建立，
 /// 直接读文件（与 early_language 同一约定：便携布局 <exe>/config）。
-fn config_json_path() -> Option<std::path::PathBuf> {
+pub(crate) fn config_json_path() -> Option<std::path::PathBuf> {
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|p| p.join("config").join("config.json")))
@@ -150,7 +151,7 @@ fn persist_allow_elevated() {
 /// persist 的打底选择（纯函数，测试钉住）：已有配置形状完整（必填三键
 /// 在）才按原值保留，否则按 load_config 同款「损坏重置」语义用默认配置
 /// 打底——绝不能写形状不全的极简 JSON。
-fn config_base_for_flag(existing: Option<serde_json::Value>) -> serde_json::Value {
+pub(crate) fn config_base_for_flag(existing: Option<serde_json::Value>) -> serde_json::Value {
     existing
         .filter(|v| {
             v.get("version").is_some()

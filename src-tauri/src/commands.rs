@@ -2902,6 +2902,48 @@ pub fn set_update_check(
         .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
 
+/// 标题栏警告徽标的检测态（红 = 提权运行，黄 = WebView2 运行时低于渲染
+/// 地板）。两者都是进程/系统级静态事实——提权在进程启动时固定、运行时
+/// 版本随系统装态——管理器建窗时查一次即可；可见性另由前端按
+/// config.titlebar_warnings 开关门控（关闭时前端不渲染，本命令照常可查）。
+#[derive(serde::Serialize)]
+pub struct TitlebarWarnings {
+    pub running_elevated: bool,
+    pub webview2_below_floor: bool,
+}
+
+#[tauri::command]
+pub fn get_titlebar_warnings(
+    window: tauri::WebviewWindow,
+) -> Result<TitlebarWarnings, String> {
+    require_manager(&window)?;
+    #[cfg(target_os = "windows")]
+    let elevated = crate::elevation::is_elevated();
+    #[cfg(not(target_os = "windows"))]
+    let elevated = false;
+    Ok(TitlebarWarnings {
+        running_elevated: elevated,
+        webview2_below_floor: crate::webview2::runtime_below_floor(),
+    })
+}
+
+/// 标题栏警告徽标开关（持久化 config.titlebar_warnings，默认开；前端监听
+/// driftlet:titlebar-warnings-changed 事件即时重绘，无运行时镜像要同步）。
+#[tauri::command]
+pub fn set_titlebar_warnings(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    on: bool,
+) -> Result<(), String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let lang = state.lang();
+    let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+    config.titlebar_warnings = on;
+    config::save_config(&state.config_dir, &config)
+        .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
+}
+
 /// 跳转 GitHub 最新 release 下载页。URL 后端固定（不接受前端入参）；
 /// 复用皮肤接口的 open_target_impl（Windows = ShellExecuteW 直开默认浏览器）。
 #[tauri::command]

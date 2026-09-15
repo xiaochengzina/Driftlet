@@ -6,8 +6,9 @@
 //! 很大」）。安装/更新端已由 bundle.windows.nsis.minimumWebview2Version 升旧
 //! （bundler 模板逻辑：已装但低于地板时调 EdgeUpdate 在线升级）；本模块是
 //! 运行侧兜底——启动时读注册表的运行时版本，低于地板即原生消息框告知并
-//! 引导更新（每次启动都提醒：渲染是真坏，不是警告噪音；「是」顺手打开
-//! 微软一键更新页）。
+//! 引导更新。**只弹一次**（与提权提醒同约定，config.json 持久标记；
+//! 实机反馈每启动必弹是噪音）——此后由管理器标题栏黄色警告徽标常驻
+//! 提示（get_titlebar_warnings），渲染降级的修复入口不丢。
 
 #[cfg(target_os = "windows")]
 use crate::i18n::{Key, trf};
@@ -61,9 +62,52 @@ fn below_floor(v: [u64; 4]) -> bool {
     v < FLOOR
 }
 
+/// 标题栏黄色徽标用的检测：运行时存在且低于地板（读不到 = 不误报，
+/// 与启动提醒同一口径）。进程级静态事实，管理器建窗时查一次即可。
+#[cfg(target_os = "windows")]
+pub fn runtime_below_floor() -> bool {
+    installed_runtime_version().map(below_floor).unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn runtime_below_floor() -> bool {
+    false
+}
+
+/// config.json 的「地板提醒已弹过」持久标记（读不到/未写 = false）。
+/// 此时 AppState 尚未建立，直接读文件（与 elevation.rs 同一约定）。
+#[cfg(target_os = "windows")]
+fn persisted_floor_noticed() -> bool {
+    crate::elevation::config_json_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("webview2_floor_noticed")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// 写入「已弹过」标记。打底必须走完整形状（config_base_for_flag）——
+/// 极简 JSON 会被 load_config 判「损坏重置」、标记随 .bak 一起丢
+/// （elevation.rs 的 persist_allow_elevated 同款事故教训，勿写极简）。
+#[cfg(target_os = "windows")]
+fn persist_floor_noticed() {
+    let Some(path) = crate::elevation::config_json_path() else {
+        return;
+    };
+    let existing = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let mut v = crate::elevation::config_base_for_flag(existing);
+    v["webview2_floor_noticed"] = serde_json::Value::Bool(true);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap_or_default());
+}
+
 /// 启动时检查：运行时低于地板则原生消息框告知（此刻窗口系统尚未建立，与
 /// elevation.rs 提权提醒同一手法）——「是」打开微软一键更新页后继续，
-/// 「否」直接继续。每启动必提醒（渲染是真坏，提醒即修复入口）。
+/// 「否」直接继续。**只弹一次**：弹过即写 config.json 持久标记（无论选
+/// 是/否——用户已知情），此后由标题栏黄色徽标常驻提示。
 #[cfg(target_os = "windows")]
 pub fn runtime_floor_notice() {
     use windows::Win32::UI::WindowsAndMessaging::{IDYES, MB_ICONWARNING, MB_YESNO, MessageBoxW};
@@ -75,6 +119,10 @@ pub fn runtime_floor_notice() {
     if !below_floor(v) {
         return;
     }
+    if persisted_floor_noticed() {
+        return;
+    }
+    persist_floor_noticed();
     let cur = v.map(|n| n.to_string()).join(".");
     let floor = FLOOR.map(|n| n.to_string()).join(".");
     let lang = crate::elevation::early_language();

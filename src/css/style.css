@@ -295,6 +295,49 @@ img {
   display: none;
 }
 
+/* 标题栏状态警告徽标：与版本号同款描边徽章语言，语义着色（红 = 提权
+   运行在前，黄 = 运行时过旧在后）。容器空时整体收起（:empty） */
+.brand-warnings {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.brand-warnings:empty {
+  display: none;
+}
+
+.brand-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 10.5px;
+  letter-spacing: 0.3px;
+  cursor: default;
+}
+
+.brand-warn svg {
+  flex-shrink: 0;
+}
+
+.brand-warn-red {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* 不用 color-mix：黄色徽标的整个意义就是在低于地板的旧运行时上也能
+   正常显示（color-mix 在旧运行时上整体失效会丢背景）——-soft 变量是
+   预混 rgba，新旧运行时通吃 */
+.brand-warn-yellow {
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
 /* 「已加载/总数」徽标：已加载数 accent 强调（0 时回落弱色） */
 .sidebar-count .count-loaded {
   color: var(--accent);

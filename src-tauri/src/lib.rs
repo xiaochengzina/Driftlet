@@ -528,6 +528,8 @@ pub fn run() {
             commands::set_hot_reload,
             commands::check_update,
             commands::set_update_check,
+            commands::get_titlebar_warnings,
+            commands::set_titlebar_warnings,
             commands::open_release_page,
             commands::open_repo_page,
             commands::get_user_agreement,

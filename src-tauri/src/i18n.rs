@@ -337,7 +337,7 @@ fn zh(key: Key) -> &'static str {
             "检测到 Driftlet 正以管理员权限运行。\n\n影响：声明 shell 权限的皮肤可静默以管理员权限执行命令（不经 UAC 弹窗）；从资源管理器拖 .dskin 到管理器会被系统拦截（可改用双击或文件选择器安装）。\n\n「是」= 继续运行（以后不再提示）；「否」= 退出。"
         }
         Key::Webview2Outdated => {
-            "检测到当前 WebView2 运行时为 {}（低于 Driftlet 的渲染基线 {}）。\n\n默认皮肤与部分界面依赖新版 WebView2 的 CSS 能力（容器查询 / color-mix），当前运行时上渲染会严重失真。\n\n「是」= 打开微软官方一键更新页（约 1 分钟，更新后重启本应用生效）；「否」= 仍要继续（渲染可能异常，默认皮肤会自动降级为基础样式）。\n\n本机无网络时：请从有网络的机器访问微软 WebView2 下载页获取脱机安装包，拷贝到本机安装。\n\n运行时更新前，每次启动都会提醒。"
+            "检测到当前 WebView2 运行时为 {}（低于 Driftlet 的渲染基线 {}）。\n\n默认皮肤与部分界面依赖新版 WebView2 的 CSS 能力（容器查询 / color-mix），当前运行时上渲染会严重失真。\n\n「是」= 打开微软官方一键更新页（约 1 分钟，更新后重启本应用生效）；「否」= 仍要继续（渲染可能异常，默认皮肤会自动降级为基础样式）。\n\n本机无网络时：请从有网络的机器访问微软 WebView2 下载页获取脱机安装包，拷贝到本机安装。\n\n本提醒只弹一次；运行时更新前，管理器标题栏会常驻黄色警告标识。"
         }
         Key::WindowsOnly => "该功能仅支持 Windows",
     }
@@ -492,7 +492,7 @@ fn en(key: Key) -> &'static str {
             "Driftlet is running with administrator rights.\n\nConsequences: skins holding the shell permission can silently run commands with full administrator rights (no UAC prompt); dragging .dskin files from Explorer into the manager will be blocked by the system (use double-click or the file picker instead).\n\nYes = continue (never ask again); No = exit."
         }
         Key::Webview2Outdated => {
-            "The WebView2 runtime on this machine is {} — below Driftlet's rendering baseline {}.\n\nThe bundled skins and parts of the UI rely on modern CSS (container queries / color-mix) and will render incorrectly on this runtime.\n\nYes = open Microsoft's one-click update page (~1 minute; relaunch afterwards); No = continue anyway (rendering may be broken — the bundled skins degrade to a basic look automatically).\n\nOffline machine? From a machine with internet access, grab the offline installer on Microsoft's WebView2 download page and copy it over.\n\nThis reminder appears at every launch until the runtime is updated."
+            "The WebView2 runtime on this machine is {} — below Driftlet's rendering baseline {}.\n\nThe bundled skins and parts of the UI rely on modern CSS (container queries / color-mix) and will render incorrectly on this runtime.\n\nYes = open Microsoft's one-click update page (~1 minute; relaunch afterwards); No = continue anyway (rendering may be broken — the bundled skins degrade to a basic look automatically).\n\nOffline machine? From a machine with internet access, grab the offline installer on Microsoft's WebView2 download page and copy it over.\n\nThis reminder appears only once; until the runtime is updated, a yellow warning badge stays on the manager title bar."
         }
         Key::WindowsOnly => "This feature is only supported on Windows",
     }
