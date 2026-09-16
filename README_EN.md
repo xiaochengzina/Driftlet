@@ -6,6 +6,10 @@
 
 A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. It presents web pages as desktop widgets, offering transparent windows, frameless windows, always on top, and pin to desktop.
 
+| Light Theme | Dark Theme |
+|:---:|:---:|
+| ![Manager main interface (light)](docs/screenshots/en-01-manager-light.png) | ![Manager main interface (dark)](docs/screenshots/en-02-manager-dark.png) |
+
 ---
 
 ## Features
@@ -23,11 +27,21 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Autostart, dark/light theme switching
 - Right-click a skin window to open the skin menu (open config / refresh / hide / unload, plus a window-behavior quick-toggle section: always-on-top / lock position / click-through / resize by dragging / edge snapping; skins can register custom menu items)
 - Focus Mode: one click (nav-bar panel / global hotkey / tray check) enters a do-not-disturb desktop — by the chosen action tier it hides (default; instant restore, state kept) or unloads (reclaims all memory) every non-whitelisted skin, and restores from the entry snapshot on exit; the whitelist exempts checked skins from both tiers; optionally auto-enters when a fullscreen app (game / fullscreen video) is detected and auto-exits 5 s after it ends; mode state and snapshot are persisted, so a crash or quit never loses the restore point. The hotkey defaults to Ctrl+Shift+Alt+D, changeable or disabled in the Focus Mode panel
+
+| Window Config | Skin Settings |
+|:---:|:---:|
+| ![Editor - Window tab](docs/screenshots/en-03-editor-window.png) | ![Editor - Skin Settings tab](docs/screenshots/en-04-editor-skin-settings.png) |
+
 - Tray "Skin Visibility" submenu: one checkable row per loaded skin, click to toggle that skin's visibility, with the check state synced in real time with the editor, the right-click menu, and the global hotkey; Alt+F4 on a skin window only hides it (never destroys) — call it back via this check or the editor button
 - Per-skin visibility shortcut: each skin can record a combo in the editor to toggle just that skin's visibility (saving is refused when it duplicates the global hotkey / another skin's combo or is taken by another program)
 - Browser refresh/navigation shortcuts like F5 are blocked in both the manager and skin windows — pages cannot be refreshed by keystroke; the window lifecycle belongs entirely to the manager
 - Layout backup: export/import all settings and skins as a single zip from the Settings page (for migration or sharing; the import review shows the permission declarations of the skins inside, same conventions as the install wizard; selective import supported — checking skins in the review list switches to merge mode, replacing only the checked skins and merging their config and layouts, everything else untouched)
 - Layout presets: save the current desktop state (load set + each skin's position/size/visibility) as a named preset and apply it with one click; the tray menu lists presets too
+
+| Settings | Layout Presets |
+|:---:|:---:|
+| ![Settings page](docs/screenshots/en-05-settings.png) | ![Layout presets panel](docs/screenshots/en-06-layouts.png) |
+
 - Skin groups: custom grouping with fold/unfold, rename and checkbox-based member editing; batch load/unload/hide/show for all members of a group, or delete a whole group together with its skins (two-step confirmation)
 - Skin duplication: create an independent copy of a skin (separate settings/preview/permissions), and pull the source's latest content into the copy with one click after the source is updated
 - Startup update check (on by default, can be turned off in Settings): once a new GitHub release is found it prompts immediately and downloads the installer in the background — direct connection and acceleration mirrors race in parallel with segmented downloading (slow/failed direct downloads no longer force a manual trip to the web page; the official SHA-256 of the installer is verified throughout), a progress bar shows during the download, and the primary button turns into "Install now" when done; only on download failure does it fall back to the "Go to download page" flow
