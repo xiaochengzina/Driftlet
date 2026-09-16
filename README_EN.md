@@ -20,6 +20,11 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Install/update skins from `.dskin` skin packages (zip format); updates preserve user settings data
 - Double-click a `.dskin` file to bring up the install wizard directly (the installer registers the file association)
 - Skin permission model: sensitive capabilities must be declared in `permissions` in `skin.json` (12 kinds: registry / Shell / system control (open links / power & Recycle Bin) / clipboard / microphone / arbitrary-path file access / skin window control / media control / notifications / system info / network requests / opening web links); the install wizard lists them one by one and flags them with a three-tier high/medium/low risk grading (see "Security Model")
+
+| Install Wizard |
+|:---:|
+| ![Install wizard](docs/screenshots/en-07-install-wizard.png) |
+
 - Custom skin settings: declare config items in `skin.json` (23 control types + groups + descriptions); the config panel is generated automatically
 - Adjust a skin's opacity, position, size, and zoom (the "Window" tab can enable resize-by-dragging: shows a frame hint, drag edges/corners to resize directly; zoom scales the whole window and its content from 50%–200%)
 - Always on top / pin to desktop (mutually exclusive, pin to desktop by default), disable dragging
