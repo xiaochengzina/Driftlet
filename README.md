@@ -315,11 +315,11 @@ tools\pack-skin.exe <皮肤文件夹> [输出目录]
 
 ## Code signing policy（代码签名政策）
 
-本项目曾申请 SignPath Foundation 免费代码签名，但因项目知名度不足（GitHub stars、社区讨论等外部信号不够）于 2026-09-16 被拒绝。**当前发布的安装包未进行代码签名**。
+**当前发布的安装包未进行代码签名。**
 
 - **当前状态**：Release 工作流产出未签名安装包（`driftlet-setup-unsigned`）。Windows Defender / 杀软可能对未签名的 Tauri/Rust 桌面应用产生机器学习误报（如 Trojan:Win32/Bearfoos.A!ml）——这是未签名二进制的已知现象，非恶意软件。
 - **误报处置**：每次发版后把安装包提交到 [Microsoft 误报门户](https://www.microsoft.com/en-us/wdsi/filesubmission)（选 "incorrect detection"，通常 24–48 小时内修正）。
-- **未来计划**：待项目获得更广泛的社区认可后重新申请 SignPath Foundation；或考虑购买商业代码签名证书（如 Azure Trusted Signing）。
+- **未来计划**：待项目获得更广泛的社区认可后申请免费代码签名；或考虑购买商业代码签名证书（如 Azure Trusted Signing）。
 - **可验证构建**：安装包由公开仓库的 GitHub Actions 工作流（`.github/workflows/release.yml`）构建，每个产物都对应一次公开提交，任何人可比对源码与产物。
 - 隐私政策：见 [PRIVACY.md](PRIVACY.md)。
 

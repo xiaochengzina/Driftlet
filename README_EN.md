@@ -315,12 +315,11 @@ A third-party skin is **networked local code** (a full Chromium web page + backe
 
 ## Code signing policy
 
-This project applied for the SignPath Foundation free code signing program but was rejected on 2026-09-16 due to insufficient public visibility (GitHub stars, community discussions, and other external signals). **Installers published to GitHub Releases are currently NOT code-signed.**
+Installers published to GitHub Releases are code-signed through SignPath (effective from the first release after it is enabled; verify via the installer's "Properties → Digital Signatures" — the publisher is shown as SignPath Foundation).
 
-- **Current status**: The Release workflow produces unsigned installers (`driftlet-setup-unsigned`). Windows Defender / antivirus software may flag unsigned Tauri/Rust desktop applications with machine-learning heuristics (e.g., Trojan:Win32/Bearfoos.A!ml) — this is a known false-positive pattern for unsigned binaries, not malware.
-- **False positive handling**: After each release, submit the installer to the [Microsoft malware submission portal](https://www.microsoft.com/en-us/wdsi/filesubmission) (select "incorrect detection"; signatures are typically corrected within 24–48 hours).
-- **Future plans**: Reapply to SignPath Foundation once the project gains broader community recognition, or purchase a commercial code signing certificate (e.g., Azure Trusted Signing).
-- **Verifiable builds**: Installers are built by the public repository's GitHub Actions workflow (`.github/workflows/release.yml`); every artifact maps to a public commit, so anyone can compare source and binary.
+- Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)
+- Verifiable builds: signing happens only inside the public repository's GitHub Actions workflow (`.github/workflows/release.yml`); every signed artifact maps to a public commit, so anyone can compare source and binary.
+- Team roles (currently a solo project): Committers and reviewers: [@xiaochengzina](https://github.com/xiaochengzina); Approvers (manual approval of each signing request): [@xiaochengzina](https://github.com/xiaochengzina).
 - Privacy policy: see [PRIVACY.md](PRIVACY.md).
 
 ---
