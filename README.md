@@ -6,6 +6,8 @@
 
 一款基于 Tauri 2 + Vite / 原生 JavaScript 构建的 Windows 桌面皮肤管理器。支持将网页以桌面小部件（Widget）形式呈现，提供透明窗口、无边框窗口、窗口置顶以及固定窗口至桌面。
 
+![桌面小组件实机截图](docs/screenshots/zh-00-desktop-widgets.jpg)
+
 | 浅色主题 | 深色主题 |
 |:---:|:---:|
 | ![管理器主界面（浅色）](docs/screenshots/zh-01-manager-light.png) | ![管理器主界面（深色）](docs/screenshots/zh-02-manager-dark.png) |

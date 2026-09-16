@@ -6,6 +6,8 @@
 
 A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. It presents web pages as desktop widgets, offering transparent windows, frameless windows, always on top, and pin to desktop.
 
+![Desktop widgets in action](docs/screenshots/zh-00-desktop-widgets.jpg)
+
 | Light Theme | Dark Theme |
 |:---:|:---:|
 | ![Manager main interface (light)](docs/screenshots/en-01-manager-light.png) | ![Manager main interface (dark)](docs/screenshots/en-02-manager-dark.png) |
