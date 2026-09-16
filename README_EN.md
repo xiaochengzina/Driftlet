@@ -315,11 +315,12 @@ A third-party skin is **networked local code** (a full Chromium web page + backe
 
 ## Code signing policy
 
-Installers published to GitHub Releases are code-signed through SignPath (effective from the first release after it is enabled; verify via the installer's "Properties → Digital Signatures" — the publisher is shown as SignPath Foundation).
+**Installers are currently published unsigned.**
 
-- Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)
-- Verifiable builds: signing happens only inside the public repository's GitHub Actions workflow (`.github/workflows/release.yml`); every signed artifact maps to a public commit, so anyone can compare source and binary.
-- Team roles (currently a solo project): Committers and reviewers: [@xiaochengzina](https://github.com/xiaochengzina); Approvers (manual approval of each signing request): [@xiaochengzina](https://github.com/xiaochengzina).
+- **Current status**: the Release workflow produces unsigned installers (`driftlet-setup-unsigned`). Windows Defender / antivirus products may machine-learning-flag unsigned Tauri/Rust desktop apps (e.g. Trojan:Win32/Bearfoos.A!ml) — a known phenomenon for unsigned binaries, not malware.
+- **False-positive handling**: verify first, submit second — on a detection, first make sure the machine has the latest Security Intelligence Update ([signature updates](https://www.microsoft.com/en-us/wdsi/defenderupdates)); if detection persists, the file is submitted to the [Microsoft submission portal](https://www.microsoft.com/en-us/wdsi/filesubmission) as "incorrect detection", attaching the affected machine's diagnostic data (`MPSupportFiles.cab`, produced by `mpcmdrun.exe -GetFiles`). Preemptive submissions without a live detection are closed with no action and achieve nothing.
+- **Future plans**: apply for free code signing once the project gains broader community recognition, or purchase a commercial code-signing certificate (e.g. Azure Trusted Signing).
+- **Verifiable builds**: installers are built by the public repository's GitHub Actions workflow (`.github/workflows/release.yml`); every artifact maps to a public commit, so anyone can compare source and binary.
 - Privacy policy: see [PRIVACY.md](PRIVACY.md).
 
 ---
