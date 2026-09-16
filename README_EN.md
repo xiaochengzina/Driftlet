@@ -28,9 +28,9 @@ A Windows desktop skin manager built with Tauri 2 + Vite / vanilla JavaScript. I
 - Right-click a skin window to open the skin menu (open config / refresh / hide / unload, plus a window-behavior quick-toggle section: always-on-top / lock position / click-through / resize by dragging / edge snapping; skins can register custom menu items)
 - Focus Mode: one click (nav-bar panel / global hotkey / tray check) enters a do-not-disturb desktop — by the chosen action tier it hides (default; instant restore, state kept) or unloads (reclaims all memory) every non-whitelisted skin, and restores from the entry snapshot on exit; the whitelist exempts checked skins from both tiers; optionally auto-enters when a fullscreen app (game / fullscreen video) is detected and auto-exits 5 s after it ends; mode state and snapshot are persisted, so a crash or quit never loses the restore point. The hotkey defaults to Ctrl+Shift+Alt+D, changeable or disabled in the Focus Mode panel
 
-| Window Config | Skin Settings |
+| Skin Settings | Focus Mode |
 |:---:|:---:|
-| ![Editor - Window tab](docs/screenshots/en-03-editor-window.png) | ![Editor - Skin Settings tab](docs/screenshots/en-04-editor-skin-settings.png) |
+| ![Editor - Skin Settings tab](docs/screenshots/en-03-editor-skin-settings.png) | ![Focus Mode panel](docs/screenshots/en-04-focus-mode.png) |
 
 - Tray "Skin Visibility" submenu: one checkable row per loaded skin, click to toggle that skin's visibility, with the check state synced in real time with the editor, the right-click menu, and the global hotkey; Alt+F4 on a skin window only hides it (never destroys) — call it back via this check or the editor button
 - Per-skin visibility shortcut: each skin can record a combo in the editor to toggle just that skin's visibility (saving is refused when it duplicates the global hotkey / another skin's combo or is taken by another program)
