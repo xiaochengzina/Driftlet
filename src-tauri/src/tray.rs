@@ -322,11 +322,17 @@ fn reload_all_skins(app: &AppHandle) {
         let state = handle.state::<crate::AppState>();
         let _install_guard = state.install_lock.lock().await;
         // 快照在拿到锁之后再取：排队等待期间被卸载的皮肤会被
-        // reload_skin_impl 当「未加载→直接 load」重新拉起
-        for skin_id in state.registry.loaded_ids() {
-            if let Err(e) = crate::commands::reload_skin_impl(handle.clone(), skin_id.clone()).await
-            {
-                log::error!("reload_all_skins: failed to reload '{}': {}", skin_id, e);
+        // reload_skin_impl 当「未加载→直接 load」重新拉起。
+        // 逐皮肤并发走共用漏斗 run_skins_concurrent（各自 unload+load
+        // 成对、label 互不相同）——串行会把每窗的出场淡出等待叠加成
+        // 逐窗消失/登场。
+        let ids = state.registry.loaded_ids();
+        for (id, result) in
+            crate::commands::run_skins_concurrent(handle.clone(), ids, crate::commands::SkinBatchOp::Reload)
+                .await
+        {
+            if let Err(e) = result {
+                log::error!("reload_all_skins: failed to reload '{}': {}", id, e);
             }
         }
     });

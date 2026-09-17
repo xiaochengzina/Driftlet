@@ -2036,7 +2036,7 @@ pub fn skin_get_window_config(
             .unwrap_or_else(|| crate::skin::types::SkinRuntimeConfig::from_manifest(&skin.manifest))
     };
     let resizable = cfg.resizable.unwrap_or(skin.manifest.window.resizable);
-    let zoom = crate::commands::clamp_zoom(cfg.zoom.unwrap_or(skin.manifest.window.zoom));
+    let zoom = crate::skin::types::clamp_zoom(cfg.zoom.unwrap_or(skin.manifest.window.zoom));
     cfg.width = ((cfg.width as f64) * zoom).round() as u32;
     cfg.height = ((cfg.height as f64) * zoom).round() as u32;
     Ok(SkinWindowConfigInfo {
@@ -2702,17 +2702,17 @@ pub fn skin_hide(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let target = resolve_control_target(&state, &window, skin_id)?;
-    let win = state
-        .registry
-        .get(&target)
-        .ok_or_else(|| tr(&state.lang(), Key::SkinNotLoaded).to_string())?;
-    win.hide().map_err(|e| e.to_string())?;
+    if !state.registry.is_loaded(&target) {
+        return Err(tr(&state.lang(), Key::SkinNotLoaded).to_string());
+    }
+    // 走出场淡出（异步落地；完成回调再过一次漏斗对齐终态）
+    crate::window::factory::hide_skin_window_fade(&app, &target);
     crate::hotkey::sync_tray_toggle_item(&app);
     Ok(())
 }
 
 /// skin_show：skin_hide 的配对。只显示**不抢焦点**（再现不应打断用户
-/// 当前操作）。
+/// 当前操作）。入场淡入由淡化助手落地。
 #[tauri::command]
 pub fn skin_show(
     app: AppHandle,
@@ -2721,11 +2721,10 @@ pub fn skin_show(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let target = resolve_control_target(&state, &window, skin_id)?;
-    let win = state
-        .registry
-        .get(&target)
-        .ok_or_else(|| tr(&state.lang(), Key::SkinNotLoaded).to_string())?;
-    win.show().map_err(|e| e.to_string())?;
+    if !state.registry.is_loaded(&target) {
+        return Err(tr(&state.lang(), Key::SkinNotLoaded).to_string());
+    }
+    crate::window::factory::show_skin_window_fade(&app, &target);
     crate::hotkey::sync_tray_toggle_item(&app);
     Ok(())
 }

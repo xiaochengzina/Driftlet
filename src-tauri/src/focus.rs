@@ -34,7 +34,8 @@ struct Runtime {
     nonfs_since: Option<Instant>,
     /// 手动退出抑制：全屏期间手动退出后，本次全屏周期不再自动进入
     suppressed: bool,
-    /// enter/exit 互斥（连按热键/面板连点排队而非交错）
+    /// enter/exit 互斥（busy 期间后到的调用直接丢弃返回 Ok(0)——连按
+    /// 热键/面板连点不会交错执行；注意不是排队）
     busy: bool,
 }
 
@@ -166,18 +167,26 @@ async fn enter_inner(app: &AppHandle, trigger: Trigger) -> Result<usize, String>
     let mut affected = 0;
     if action == "hide" {
         for id in &snapshot {
-            if let Some(w) = state.registry.get(id) {
-                let _ = w.hide();
+            if state.registry.get(id).is_some() {
+                // 逐窗出场淡出（异步落地，全部皮肤同时开始淡出）
+                crate::window::factory::hide_skin_window_fade(app, id);
                 affected += 1;
             }
         }
         crate::hotkey::sync_tray_toggle_item(app);
     } else {
-        // 与命令层同两把生命周期锁（串行卸载，不进并发）
+        // 与命令层同两把生命周期锁（批量并发卸载，不进并发交错——
+        // 并发只在锁内这一批之间，见 run_skins_concurrent 头注）
         let _a = state.lifecycle_lock.lock().await;
         let _b = state.install_lock.lock().await;
-        for id in &snapshot {
-            match crate::commands::unload_skin_impl(app.clone(), id.clone()).await {
+        for (id, result) in crate::commands::run_skins_concurrent(
+            app.clone(),
+            snapshot.clone(),
+            crate::commands::SkinBatchOp::Unload,
+        )
+        .await
+        {
+            match result {
                 Ok(()) => affected += 1,
                 Err(e) => log::warn!("focus: unload '{}' failed: {}", id, e),
             }
@@ -240,8 +249,9 @@ async fn exit_inner(app: &AppHandle) -> Result<(usize, usize), String> {
     if action == "hide" {
         for id in &snapshot {
             match state.registry.get(id) {
-                Some(w) => {
-                    let _ = w.show();
+                Some(_) => {
+                    // 逐窗入场淡入（异步落地，全部皮肤同时淡入）
+                    crate::window::factory::show_skin_window_fade(app, id);
                     restored += 1;
                 }
                 None => skipped += 1, // 模式期间被卸载——跳过
@@ -251,11 +261,21 @@ async fn exit_inner(app: &AppHandle) -> Result<(usize, usize), String> {
     } else {
         let _a = state.lifecycle_lock.lock().await;
         let _b = state.install_lock.lock().await;
-        for id in &snapshot {
-            if state.registry.is_loaded(id) {
-                continue; // 用户已手动加载回来——手动动作优先
-            }
-            match crate::commands::load_skin_impl(app.clone(), id.clone()).await {
+        // 并发恢复：快照里被卸载的皮肤近似同批亮相（手动先动优先——
+        // 模式期间用户自行加载回来的跳过）
+        let to_load: Vec<String> = snapshot
+            .iter()
+            .filter(|id| !state.registry.is_loaded(id))
+            .cloned()
+            .collect();
+        for (id, result) in crate::commands::run_skins_concurrent(
+            app.clone(),
+            to_load,
+            crate::commands::SkinBatchOp::Load,
+        )
+        .await
+        {
+            match result {
                 Ok(()) => restored += 1,
                 Err(e) => {
                     log::warn!("focus: reload '{}' failed: {}", id, e);
@@ -303,11 +323,20 @@ pub async fn startup_recover(app: &AppHandle) {
         action
     );
     if action == "unload" {
-        for id in &snapshot {
-            if !state.registry.is_loaded(id) {
-                if let Err(e) = crate::commands::load_skin_impl(app.clone(), id.clone()).await {
-                    log::warn!("focus startup_recover: reload '{}' failed: {}", id, e);
-                }
+        let to_load: Vec<String> = snapshot
+            .iter()
+            .filter(|id| !state.registry.is_loaded(id))
+            .cloned()
+            .collect();
+        for (id, result) in crate::commands::run_skins_concurrent(
+            app.clone(),
+            to_load,
+            crate::commands::SkinBatchOp::Load,
+        )
+        .await
+        {
+            if let Err(e) = result {
+                log::warn!("focus startup_recover: reload '{}' failed: {}", id, e);
             }
         }
     }

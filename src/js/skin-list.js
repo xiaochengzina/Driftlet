@@ -286,7 +286,8 @@ export default class SkinList {
       const members = this.skins.filter(s => this._groupOf(s.id) === gid);
       let ok = 0;
       let failed = 0;
-      // 逐个串行（窗口生命周期不开并发，与组内批量控制同口径）
+      // 逐个串行（remove_skin 是目录级高危写，逐个卸载先行；组批量的
+      // 加载/卸载并发口径见 _batchGroupAction 头注，与本条路径不同）
       for (const s of members) {
         try {
           if (s.loaded) await API.unloadSkin(s.id);
@@ -303,9 +304,11 @@ export default class SkinList {
           if (this.groupMap[sid] === gid) delete this.groupMap[sid];
         }
       });
-      if (ok > 0) this.showToast(t('list.groupDeletedAll', { count: ok }), failed ? 'info' : 'success');
-      if (failed > 0) this.showToast(t('list.batchFailed', { count: failed }), 'error');
-      if (ok === 0 && failed === 0) this.showToast(t('list.groupDeleted'), 'info');   // 空组（无皮肤可删）也回馈
+      // toast 是单例替换制——成功与失败必须合成一条，否则后发的顶掉先发的
+      if (ok > 0 && failed > 0) this.showToast(`${t('list.groupDeletedAll', { count: ok })} · ${t('list.batchFailed', { count: failed })}`, 'error');
+      else if (ok > 0) this.showToast(t('list.groupDeletedAll', { count: ok }), 'success');
+      else if (failed > 0) this.showToast(t('list.batchFailed', { count: failed }), 'error');
+      else this.showToast(t('list.groupDeleted'), 'info');   // 空组（无皮肤可删）也回馈
       await this.refresh();
     };
     confirmDialog({
@@ -383,7 +386,8 @@ export default class SkinList {
   }
 
   // 组内皮肤批量控制：只对「目标状态之外」的成员执行（幂等——全已处于
-  // 目标态时报无可操作）；逐个串行调用（窗口创建不开并发），计数反馈
+  // 目标态时报无可操作）；加载/卸载走单命令整批并发（窗口同批亮相/淡出），
+  // 显隐逐窗调用（无生命周期锁、IPC 往返即毫秒级），计数反馈
   async _batchGroupAction(gid, action) {
     const members = this.skins.filter(s => this._groupOf(s.id) === gid);
     const targets = members.filter(s => {
@@ -398,19 +402,31 @@ export default class SkinList {
     }
     let ok = 0;
     let failed = 0;
-    for (const s of targets) {
+    if (action === 'load' || action === 'unload') {
       try {
-        if (action === 'load') await API.loadSkin(s.id);
-        else if (action === 'unload') await API.unloadSkin(s.id);
-        else await API.setSkinVisibility(s.id, action === 'show');
-        ok++;
+        const r = action === 'load'
+          ? await API.loadSkins(targets.map(s => s.id))
+          : await API.unloadSkins(targets.map(s => s.id));
+        ok = r.ok;
+        failed = r.failed;
       } catch {
-        failed++;
+        failed = targets.length;
+      }
+    } else {
+      for (const s of targets) {
+        try {
+          await API.setSkinVisibility(s.id, action === 'show');
+          ok++;
+        } catch {
+          failed++;
+        }
       }
     }
     const key = { load: 'list.batchLoaded', unload: 'list.batchUnloaded', hide: 'list.batchHidden', show: 'list.batchShown' }[action];
-    if (ok > 0) this.showToast(t(key, { count: ok }), failed ? 'info' : 'success');
-    if (failed > 0) this.showToast(t('list.batchFailed', { count: failed }), 'error');
+    // toast 是单例替换制：成功与失败合成一条，否则失败条会顶掉成功条
+    if (ok > 0 && failed > 0) this.showToast(`${t(key, { count: ok })} · ${t('list.batchFailed', { count: failed })}`, 'error');
+    else if (ok > 0) this.showToast(t(key, { count: ok }), 'success');
+    else if (failed > 0) this.showToast(t('list.batchFailed', { count: failed }), 'error');
     // 事件路径（skin-loaded/unloaded/skins-visibility-changed）已覆盖
     // 列表刷新，此处兜底一次对齐终态（含失败项的真实状态）
     await this.refresh();

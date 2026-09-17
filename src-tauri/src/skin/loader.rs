@@ -150,7 +150,7 @@ pub fn load_skin_manifest(skin_dir: &Path) -> Result<SkinManifest, String> {
     } else {
         1.0
     };
-    manifest.window.zoom = crate::commands::clamp_zoom(manifest.window.zoom);
+    manifest.window.zoom = crate::skin::types::clamp_zoom(manifest.window.zoom);
     manifest.window.snap_gap = manifest
         .window
         .snap_gap

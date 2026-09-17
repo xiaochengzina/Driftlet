@@ -1,6 +1,7 @@
 /**
  * settings.js — 设置面板（页签布局，与皮肤编辑器 cfg-tabs 同一套视觉：
- *               通用[自启动/更新检测/快捷键] + 外观[主题/语言] + 高级[备份/日志/开发模式]）
+ *               通用[自启动/更新检测/标题栏警告标识] + 外观[主题/语言] + 高级[备份/日志/开发模式]）
+ *               （全局快捷键设置已迁入专注模式面板，见 focus.js）
  */
 import API from './api.js';
 import showToast from './toast.js';
@@ -360,10 +361,12 @@ export default class Settings {
               keepDisabled = true; // 成功即 reload：800ms 窗口内不得二次提交导入
               setTimeout(() => location.reload(), 800);
             } else {
-              // 选择性合并：全局项未动，刷新皮肤列表即可
-              showToast(t('settings.backupImportedSelective', { count: res.imported.length }), 'success');
+              // 选择性合并：全局项未动，刷新皮肤列表即可。
+              // toast 是单例替换制——成功与跳过合成一条，否则后者顶掉前者
               if (res.skipped.length) {
-                showToast(t('settings.backupImportSkipped', { ids: res.skipped.join(', ') }), 'info');
+                showToast(`${t('settings.backupImportedSelective', { count: res.imported.length })} · ${t('settings.backupImportSkipped', { ids: res.skipped.join(', ') })}`, 'info');
+              } else {
+                showToast(t('settings.backupImportedSelective', { count: res.imported.length }), 'success');
               }
               await window.__app?.skinList?.refresh();
             }

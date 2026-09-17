@@ -141,18 +141,6 @@ mod imp {
                 }
             }
         }
-
-        /// 登记时的 HWND（销毁路径 hwnd() 取不到时，靠它把 HWND 键的三处
-        /// 登记全摘干净——登记本就是从 pin 进来的）
-        pub fn hwnd_of(&self, skin_id: &str) -> Option<isize> {
-            self.inner
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .skins
-                .iter()
-                .find(|(id, _)| id == skin_id)
-                .map(|(_, h)| *h)
-        }
     }
 
     // ── enforcement ──────────────────────────────────────────────────────
@@ -480,9 +468,6 @@ impl Pinner {
     }
     pub fn pin(&self, _: &str, _: isize) {}
     pub fn unpin(&self, _: &str, _: isize) {}
-    pub fn hwnd_of(&self, _: &str) -> Option<isize> {
-        None
-    }
 }
 
 #[cfg(not(target_os = "windows"))]

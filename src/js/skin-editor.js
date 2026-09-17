@@ -4,8 +4,8 @@
  * 结构：顶部为皮肤信息；schema 非空时出现「窗口 / 皮肤设置」页签。
  * 「窗口」页 = 内置配置（外观/行为/位置大小/操作）；
  * 「皮肤设置」页 = 按 skin.json settings schema 自动生成的自定义控件，
- * 每种 type 对应一个渲染/绑定分支（新增控件需同步后端三处：
- * types.rs 枚举、loader.rs 兜底、commands.rs 校验）。
+ * 每种 type 对应一个渲染/绑定分支（新增控件需同步四处：types.rs 枚举、
+ * loader.rs 兜底、commands.rs 校验、pack-skin 镜像——AGENTS.md 硬性约定 2）。
  * 皮肤可经 skin_set_setting 命令写回自己的设置值；本面板监听后端广播的
  * skin-setting-changed 事件，把对应控件原地刷新（见 _syncCustomControl）。
  */
@@ -1151,8 +1151,10 @@ export default class SkinEditor {
       });
     }
     this.container.querySelector('#btn-reload')?.addEventListener('click', async (e) => {
-      // 防连点（与 load/unload 按钮同款约定）
-      e.currentTarget.disabled = true;
+      // 防连点（与 load/unload 按钮同款约定）；e.currentTarget 在 await
+      // 之后会被置 null，必须先捕获
+      const btn = e.currentTarget;
+      btn.disabled = true;
       try {
         await API.reloadSkin(this.skinId);
         this.showToast(t('editor.reloaded'), 'success');
@@ -1160,21 +1162,28 @@ export default class SkinEditor {
         await window.__app?.skinList?.refresh();
       } catch (err) {
         this.showToast(String(err), 'error');
-        e.currentTarget.disabled = false;
+        btn.disabled = false;
       }
     });
-    this.container.querySelector('#btn-capture')?.addEventListener('click', () => {
+    this.container.querySelector('#btn-capture')?.addEventListener('click', async (e) => {
+      // 防连点（同款约定）：两路并发截图会交错写同一 preview.png
+      //（后端另有 tmp+rename 兜底，2026-09 审查 F4）
+      const btn = e.currentTarget;
+      btn.disabled = true;
       this.showToast(t('editor.capturing'), 'info');
-      API.capturePreview(this.skinId)
-        .then(async () => {
-          this.showToast(t('editor.captureSaved'), 'success');
-          // Refresh skin list to show the new preview thumbnail
-          if (window.__app?.skinList) {
-            window.__app.skinList.bumpPreview(this.skinId);
-            await window.__app.skinList.refresh();
-          }
-        })
-        .catch(err => this.showToast(t('editor.captureFailed') + String(err), 'error'));
+      try {
+        await API.capturePreview(this.skinId);
+        this.showToast(t('editor.captureSaved'), 'success');
+        // Refresh skin list to show the new preview thumbnail
+        if (window.__app?.skinList) {
+          window.__app.skinList.bumpPreview(this.skinId);
+          await window.__app.skinList.refresh();
+        }
+        btn.disabled = false;
+      } catch (err) {
+        this.showToast(t('editor.captureFailed') + String(err), 'error');
+        btn.disabled = false;
+      }
     });
     this.container.querySelector('#btn-onscreen')?.addEventListener('click', () => {
       API.bringOnscreen(this.skinId)
@@ -1298,7 +1307,7 @@ export default class SkinEditor {
             // 输入框 "YYYY-MM-DDTHH:MM:SS" → 存储 "YYYY-MM-DD HH:MM:SS"
             value = el.value.replace('T', ' ');
             break;
-          default: // text / longtext / time / date / password / color / select
+          default: // text / longtext / time / date / password / select / font / file / directory / gpu_adapter
             value = el.value;
         }
         this.saveCustomSetting(key, value);

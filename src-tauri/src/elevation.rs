@@ -145,7 +145,13 @@ fn persist_allow_elevated() {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap_or_default());
+    // 原子写（tmp + rename）：崩溃半截写会让整份配置下次启动被判损坏
+    // 重置（2026-09 审查 F10；此处是 run() 最前的单线程段，无并发问题，
+    // 防的是崩溃窗口）
+    let tmp = path.with_extension("tmp");
+    let ok = std::fs::write(&tmp, serde_json::to_string_pretty(&v).unwrap_or_default())
+        .and_then(|_| std::fs::rename(&tmp, &path));
+    let _ = ok;
 }
 
 /// persist 的打底选择（纯函数，测试钉住）：已有配置形状完整（必填三键

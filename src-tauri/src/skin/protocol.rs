@@ -61,7 +61,7 @@ pub fn handle_skin_request<R: tauri::Runtime>(
         let resizable = parse_resizable(uri.query());
         let settings_json = baked_settings_json(&skins_dir, &relative_path);
         let language = state.lang();
-        let theme = crate::commands::current_theme(&state);
+        let theme = crate::skin::config::current_theme(&state);
         let injected = inject_bridge(
             html,
             opacity,
@@ -716,12 +716,19 @@ window.driftlet=window.__DESK_PP__;
     )
 }
 
-/// 桥基础样式（.drag-region 的 no-drag/光标 + html 透明度烘焙）。
+/// 桥基础样式（.drag-region 的 no-drag/光标 + html 透明度烘焙 + 入场淡入）。
 /// Opacity is baked ONLY on <html>: runtime changes set
 /// documentElement's inline style, which overrides this rule.
+///
+/// 入场淡入 = 纯 CSS 关键帧（deskFadeIn）：从 0 过渡到规则值（{opacity}），
+/// 无 fill——动画一结束规则值接管，运行时的不透明度 eval（内联样式）不被
+/// 动画遮蔽。刻意不依赖 JS：桥脚本被页面 CSP 拦下时皮肤仍照常显现（JS 方案
+/// 会让皮肤永远停在 0）。prefers-reduced-motion 下跳过动画直接落定。
 fn bridge_css(opacity: f64) -> String {
+    // 入场时长锚点 = types::FADE_IN_MS（与运行时 eval/销毁等待同一常量）
+    let fade_ms = crate::skin::types::FADE_IN_MS;
     format!(
-        ".drag-region {{\n  -webkit-app-region: no-drag;\n  app-region: no-drag;\n  cursor: grab;\n}}\nhtml {{ opacity: {opacity}; }}",
+        ".drag-region {{\n  -webkit-app-region: no-drag;\n  app-region: no-drag;\n  cursor: grab;\n}}\nhtml {{\n  opacity: {opacity};\n  animation: deskFadeIn {fade_ms}ms ease-out;\n}}\n@keyframes deskFadeIn {{\n  from {{\n    opacity: 0;\n  }}\n}}\n@media (prefers-reduced-motion: reduce) {{\n  html {{\n    animation: none;\n  }}\n}}",
     )
 }
 
@@ -940,6 +947,21 @@ mod tests {
             "恶意 language 不得原样进桥"
         );
         assert!(out.contains("<\\/script>"), "闭合序列必须被转义");
+    }
+
+    #[test]
+    fn bridge_css_bakes_fade_in() {
+        // 入场淡入 = 纯 CSS（不依赖 JS）：从 0 过渡到规则值（目标不透明度），
+        // reduced-motion 跳过；无 fill——结束后规则值接管，运行时内联
+        // opacity 设置不被动画遮蔽
+        let css = bridge_css(0.8);
+        assert!(css.contains("opacity: 0.8"), "目标不透明度必须烘焙为规则值");
+        assert!(css.contains("@keyframes deskFadeIn"), "必须烘焙入场淡入关键帧");
+        assert!(css.contains("opacity: 0"), "淡入必须从 0 起步");
+        assert!(
+            css.contains("prefers-reduced-motion"),
+            "reduced-motion 必须跳过入场动画"
+        );
     }
 
     #[test]

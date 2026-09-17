@@ -70,8 +70,10 @@ pub struct AppState {
     /// skin_api 的 skin_load/skin_unload/skin_reload/hotreload 触发）：
     /// load/unload 的「查存在→注册」非原子，并发交错会产生 registry 与
     /// loaded_skins 状态分叉。锁序约定：lifecycle_lock → install_lock →
-    /// settings_lock（install 路径只持 install_lock 不调生命周期 impl，
-    /// 无反向路径）。
+    /// settings_lock（无反向路径）。注：install 侧批操作（备份导入/
+    /// reload_all/布局套用/专注模式卸载档）持锁后也会调生命周期 impl
+    ///（impl 本身无锁，串行靠外层持锁；批内并发的口径见
+    /// commands::run_skins_concurrent 头注）。
     pub lifecycle_lock: tauri::async_runtime::Mutex<()>,
     /// Serializes load-modify-save on a skin folder's `settings.json`, which
     /// has two writers: the manager (`set_skin_custom_setting`) and the skin
@@ -337,44 +339,31 @@ pub fn run() {
                     .clone()
             };
 
-            for skin_id in &to_load {
-                if let Some(skin) = skins.iter().find(|s| &s.id == skin_id) {
-                    // Read saved config (drop lock before creating window)
-                    let skin_config = {
-                        app.handle()
-                            .state::<AppState>()
-                            .config
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .skin_settings
-                            .get(skin_id)
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                skin::types::SkinRuntimeConfig::from_manifest(&skin.manifest)
-                            })
-                    };
-
-                    match factory::create_skin_window(app.handle(), skin, &skin_config) {
-                        Ok(window) => {
-                            app.handle()
-                                .state::<AppState>()
-                                .registry
-                                .register(skin_id.clone(), window);
-                            log::info!("Auto-loaded skin: {}", skin_id);
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to auto-load skin '{}': {}", skin_id, e);
-                        }
-                    }
-                }
-            }
-
-            // 专注模式态残留恢复（上次退出/崩溃在模式激活期间）：按快照
-            // 动作恢复并清除——自载皮肤之后、管理器建窗之前（卸载档要重载
-            // 的皮肤走正常注册表，别与自载竞态）
+            // 并发自载 + 专注模式残留恢复，一并挪进 setup 后的异步任务：
+            // 建窗/取 HWND/装子类等主线程消息要等事件循环起动才被处理，
+            // 若在 setup 里同步并发 join 会自锁（主线程被 setup 占着）。
+            // 并发让整批皮肤近似同批亮相——串行逐窗创建把「上一窗全部
+            // 落地」串进「下一窗开始建」，逐窗登场感由此而来。
+            // startup_recover 必须排在自载完成后（卸载档要重载的皮肤走
+            // 正常注册表，别与自载竞态），故串在同一任务内。
             {
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    // 与命令层同两把生命周期锁：自载批与「专注模式退出/
+                    // 布局套用/组批量/热重载」等持锁批不交错（2026-09
+                    // 审查 A3；锁内一批并发的口径见 run_skins_concurrent
+                    // 头注）
+                    let state = h.state::<AppState>();
+                    let _guards = commands::lifecycle_guards(&state).await;
+                    for (id, result) in
+                        commands::run_skins_concurrent(h.clone(), to_load, commands::SkinBatchOp::Load)
+                            .await
+                    {
+                        match result {
+                            Ok(()) => log::info!("Auto-loaded skin: {}", id),
+                            Err(e) => log::warn!("Failed to auto-load skin '{}': {}", id, e),
+                        }
+                    }
                     focus::startup_recover(&h).await;
                 });
             }
@@ -442,35 +431,56 @@ pub fn run() {
                         let skin_ids = state.registry.loaded_ids();
                         let h2 = h.clone();
                         let _ = h.run_on_main_thread(move || {
-                            // 管理器窗同样自愈：它只有建窗后约 6 秒的创建
-                            // 重试（见上面 setup），WebView2 初始化慢过该
-                            // 窗口期时 F5 等加速键仍可刷新管理器。
-                            if let Some(window) = h2.get_webview_window("main") {
-                                factory::disable_default_context_menu(&window);
-                                factory::disable_browser_accelerator_keys(&window);
-                            }
-                            for skin_id in &skin_ids {
-                                // HWND 必须在主线程闭包内按 label 现取——
-                                // 定时器线程快照与主线程使用之间窗口可能
-                                // 销毁、HWND 被系统回收复用，用快照句柄做
-                                // subclass/PostMessage 会作用到无关窗口
-                                let label = factory::skin_window_label(skin_id);
-                                if let Some(window) = h2.get_webview_window(&label) {
-                                    if let Ok(hwnd) = window.hwnd() {
-                                        factory::ensure_frameless_subclass(hwnd.0 as isize);
-                                        factory::force_clean_skin_window_by_hwnd(hwnd.0 as isize);
+                            // 值守闭包 panic 防护：主线程上 panic 会拖垮
+                            // 整个事件循环——捕获留痕，下轮继续（pinner
+                            // 值守环同款，2026-09 审查 A2）
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                // 管理器窗同样自愈：它只有建窗后约 6 秒的创建
+                                // 重试（见上面 setup），WebView2 初始化慢过该
+                                // 窗口期时 F5 等加速键仍可刷新管理器。
+                                for label in ["main", "log"] {
+                                    if let Some(window) = h2.get_webview_window(label) {
+                                        factory::disable_default_context_menu(&window);
+                                        factory::disable_browser_accelerator_keys(&window);
+                                        // 原生窗框子类一并自愈（管理器 + 日志窗
+                                        // 同配方）：唤回重建路径若因故没装上
+                                        //（跨线程静默失败/超时），下一轮幂等
+                                        // 补装——否则无边框窗的 NCCALCSIZE 归零
+                                        // 会让 DWM 一直不画框（Win11 圆角丢失）。
+                                        if let Ok(hwnd) = window.hwnd() {
+                                            ensure_native_frame(hwnd.0 as isize);
+                                        }
                                     }
-                                    // Keep WebView2's default context menu and
-                                    // browser accelerator keys disabled
-                                    // (self-healing; the creation-time retry in
-                                    // factory only covers startup).
-                                    factory::disable_default_context_menu(&window);
-                                    factory::disable_browser_accelerator_keys(&window);
                                 }
-                            }
-                            // 同 tick 顺带救回完全出屏的皮肤（拔屏/DPI 拓扑
-                            // 变化最迟 5 秒自愈；部分出屏不动，见 factory）
-                            factory::rescue_offscreen_skins(&h2);
+                                for skin_id in &skin_ids {
+                                    // HWND 必须在主线程闭包内按 label 现取——
+                                    // 定时器线程快照与主线程使用之间窗口可能
+                                    // 销毁、HWND 被系统回收复用，用快照句柄做
+                                    // subclass/PostMessage 会作用到无关窗口
+                                    let label = factory::skin_window_label(skin_id);
+                                    if let Some(window) = h2.get_webview_window(&label) {
+                                        if let Ok(hwnd) = window.hwnd() {
+                                            factory::ensure_frameless_subclass(hwnd.0 as isize);
+                                            factory::force_clean_skin_window_by_hwnd(
+                                                hwnd.0 as isize,
+                                            );
+                                        }
+                                        // Keep WebView2's default context menu and
+                                        // browser accelerator keys disabled
+                                        // (self-healing; the creation-time retry in
+                                        // factory only covers startup).
+                                        factory::disable_default_context_menu(&window);
+                                        factory::disable_browser_accelerator_keys(&window);
+                                    }
+                                }
+                                // 同 tick 顺带救回完全出屏的皮肤（拔屏/DPI 拓扑
+                                // 变化最迟 5 秒自愈；部分出屏不动，见 factory）
+                                factory::rescue_offscreen_skins(&h2);
+                            }))
+                            .map_err(|_| {
+                                log::error!("5s maintenance timer closure panicked — next tick will retry");
+                            })
+                            .ok();
                         });
                     }
                 });
@@ -491,6 +501,8 @@ pub fn run() {
             commands::get_skin_detail,
             commands::load_skin,
             commands::unload_skin,
+            commands::load_skins,
+            commands::unload_skins,
             commands::reload_skin,
             commands::set_skin_opacity,
             commands::set_skin_placement,
@@ -715,13 +727,17 @@ pub(crate) fn create_manager_window(app: &tauri::AppHandle) -> Option<tauri::Web
         }
     };
 
-    // 补回「无标题栏原生窗框」样式 + 任务栏/悬停预览/Alt+Tab 图标
+    // 补回「无标题栏原生窗框」样式 + 任务栏/悬停预览/Alt+Tab 图标。
+    // apply_native_frame 内含 SetWindowSubclass——必须在窗口属主线程
+    //（主线程）调用，跨线程静默失败：皮肤右键菜单唤出管理器走的是
+    // tokio worker 线程（show_skin_context_menu → show_manager_window
+    // → 本函数），子类装不上则 tao 对无边框窗的 NCCALCSIZE 归零处理
+    // 无人拦截，DWM 不画窗框——Win11 原生圆角（DWM 非客户区渲染的
+    // 一部分）随之消失，而托盘路径本就在主线程所以一直正常。
     #[cfg(target_os = "windows")]
     {
         if let Ok(hwnd) = manager.hwnd() {
-            if !apply_native_frame(hwnd.0 as isize) {
-                log::error!("apply_native_frame: SetWindowSubclass failed for manager window");
-            }
+            apply_native_frame_on_owner_thread(app, hwnd.0 as isize);
             apply_window_icon(hwnd.0 as isize);
         }
     }
@@ -783,6 +799,21 @@ fn resolve_portable_dir(app_data_dir: &std::path::Path, name: &str) -> PathBuf {
     };
 
     let dir = exe_dir.join(name);
+    // 受保护系统根下跳过探针直接回退：探针以当前令牌实写文件，提权
+    // 运行会误判 Program Files 类目录可写——数据根随「本次是否提权」
+    // 漂移（提权运行选中便携布局并把 %APPDATA% 的皮肤搬进 <exe>/skins，
+    // 正常运行再回退 %APPDATA%，用户皮肤「消失」；2026-09 审查 F1）。
+    // 布局判定必须与提权态无关。
+    #[cfg(target_os = "windows")]
+    if is_under_protected_root(&exe_dir, &protected_root_dirs()) {
+        log::info!(
+            "{} dir is under a protected root; using {:?} (no probe — probe would pass when elevated)",
+            name,
+            fallback
+        );
+        let _ = std::fs::create_dir_all(&fallback);
+        return fallback;
+    }
     // create_dir_all 对已存在但只读的目录（如 Program Files 下安装器预置的
     // skins/）也返回 Ok —— 必须实际写入一个隐藏临时文件来验证可写性
     match probe_writable_dir(&dir) {
@@ -813,6 +844,32 @@ fn probe_writable_dir(dir: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 已知受保护系统根（写入需提权）：Program Files 两槽 + Windows 目录。
+/// 读环境变量现取（不硬编码盘符——系统可装非 C 盘）。
+#[cfg(target_os = "windows")]
+fn protected_root_dirs() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for key in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "windir"] {
+        if let Some(v) = std::env::var_os(key) {
+            roots.push(PathBuf::from(v));
+        }
+    }
+    roots
+}
+
+/// dir 是否位于受保护根之下（大小写不敏感、按分隔符边界比前缀——
+/// 「C:\Program Files-x」不能误中「C:\Program Files」）。抽成纯函数以便
+/// 测试钉住（F1 回归）。
+#[cfg(target_os = "windows")]
+fn is_under_protected_root(dir: &std::path::Path, roots: &[PathBuf]) -> bool {
+    let d = dir.to_string_lossy().to_lowercase();
+    roots.iter().any(|r| {
+        let r = r.to_string_lossy().to_lowercase();
+        let r = r.trim_end_matches('\\');
+        d == r || d.starts_with(&format!("{}\\", r))
+    })
+}
+
 /// One-time migration: older versions kept the config and skins in %APPDATA%.
 /// If the portable config does not exist yet but a legacy one does, copy it
 /// over so settings survive the move; legacy skin folders are moved into the
@@ -828,9 +885,18 @@ fn migrate_legacy_config(
     let legacy = app_data_dir.join("config").join("config.json");
     let current = config_dir.join("config.json");
     if !current.exists() && legacy.exists() && legacy != current {
-        match std::fs::copy(&legacy, &current) {
+        // 原子就位（copy 到 tmp 再 rename）：copy 半截崩溃会留下「已存在
+        // 的坏 config.json」——存在即不再重试、随后被判损坏重置（legacy
+        // 原件仍在可手工救回，但配置实质丢失；2026-09 审查 F10）
+        let tmp = current.with_extension("tmp");
+        match std::fs::copy(&legacy, &tmp)
+            .and_then(|_| std::fs::rename(&tmp, &current))
+        {
             Ok(_) => log::info!("Migrated legacy config from {:?}", legacy),
-            Err(e) => log::warn!("Failed to migrate legacy config: {}", e),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                log::warn!("Failed to migrate legacy config: {}", e);
+            }
         }
     }
 
@@ -1271,6 +1337,85 @@ pub(crate) fn apply_native_frame(hwnd_val: isize) -> bool {
     }
 }
 
+/// apply_native_frame 的属主线程分发（SetWindowSubclass 跨线程静默失败，
+/// 同 factory.rs install_frameless 的坑）：主线程内联执行；其他线程
+///（皮肤右键菜单唤出管理器的命令路径跑在 tokio worker 上）转交主线程
+/// 并有界等待——赶在 show() 前落框，避免先显后补的几帧无边框观感。
+/// 失败仅记日志：5 秒维护定时器经 ensure_native_frame 兜底自愈。
+#[cfg(target_os = "windows")]
+pub(crate) fn apply_native_frame_on_owner_thread(app: &tauri::AppHandle, hwnd_val: isize) {
+    let on_main = app
+        .try_state::<AppState>()
+        .map(|s| s.main_thread_id == std::thread::current().id())
+        .unwrap_or(false);
+    if on_main {
+        if !apply_native_frame(hwnd_val) {
+            log::error!("apply_native_frame: SetWindowSubclass failed for manager window");
+        }
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    if let Err(e) = app.run_on_main_thread(move || {
+        let ok = apply_native_frame(hwnd_val);
+        let _ = tx.send(ok);
+    }) {
+        log::error!("run_on_main_thread failed for manager native frame: {}", e);
+        return;
+    }
+    match rx.recv_timeout(std::time::Duration::from_secs(3)) {
+        Ok(true) => {}
+        Ok(false) => {
+            log::error!("apply_native_frame: SetWindowSubclass failed for manager window")
+        }
+        Err(e) => log::error!(
+            "apply_native_frame dispatch timed out for manager window: {} — 5s 维护定时器兜底",
+            e
+        ),
+    }
+}
+
+/// 管理器窗原生窗框的轻量自愈（5 秒维护定时器用，必须在主线程调用）：
+/// 子类同 id 重装幂等（只刷新引用数据，不触发 DWM 重估）；样式位被
+/// tao apply_diff 带回 WS_CAPTION 等真脏时才剥净并补一次 FRAMECHANGED
+///（皮肤侧「无条件 FRAMECHANGED 会不停给 DWM 画框机会」的同一口径）。
+#[cfg(target_os = "windows")]
+fn ensure_native_frame(hwnd_val: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_STYLE, GetWindowLongPtrW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WS_BORDER,
+        WS_CAPTION, WS_THICKFRAME,
+    };
+
+    let hwnd = HWND(hwnd_val as *mut _);
+    unsafe {
+        // 子类幂等重装（失败仅本轮错过，下轮再来）
+        let _ = SetWindowSubclass(hwnd, Some(native_frame_proc), NATIVE_FRAME_SUBCLASS_ID, 0);
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let clean = (style & !(WS_CAPTION.0 as isize))
+            | WS_THICKFRAME.0 as isize
+            | WS_BORDER.0 as isize;
+        if style != clean {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, clean);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED
+                    | SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_NOOWNERZORDER
+                    | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
 /// 给窗口补任务栏按钮 / 悬停预览 / Alt+Tab 图标（ICON_SMALL + ICON_BIG）。
 ///
 /// 不能走 tauri 的 `default_window_icon`/`set_icon`：那条路把 icon.ico 解码成
@@ -1388,6 +1533,35 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
 #[cfg(test)]
 mod tests {
     use super::{dskin_arg, migrate_legacy_config};
+
+    /// F1 回归：受保护系统根判定——提权态不得改变布局判定结果
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn protected_root_detection() {
+        use super::is_under_protected_root;
+        use std::path::PathBuf;
+        let roots = vec![
+            PathBuf::from(r"C:\Program Files"),
+            PathBuf::from(r"C:\Program Files (x86)"),
+            PathBuf::from(r"C:\Windows"),
+        ];
+        assert!(is_under_protected_root(
+            &PathBuf::from(r"C:\Program Files\Driftlet"),
+            &roots
+        ));
+        assert!(is_under_protected_root(
+            &PathBuf::from(r"c:\program files (x86)\app"),
+            &roots
+        ));
+        assert!(is_under_protected_root(&PathBuf::from(r"C:\Windows\Temp\x"), &roots));
+        // 边界：根本身、非分隔符前缀、普通目录
+        assert!(is_under_protected_root(&PathBuf::from(r"C:\Program Files"), &roots));
+        assert!(!is_under_protected_root(
+            &PathBuf::from(r"C:\Program Files-x\app"),
+            &roots
+        ));
+        assert!(!is_under_protected_root(&PathBuf::from(r"D:\Tools\Driftlet"), &roots));
+    }
 
     fn args(v: &[&str]) -> impl Iterator<Item = String> {
         v.iter()

@@ -114,6 +114,8 @@ pub const COMMAND_POLICIES: &[(&str, Gate)] = &[
     ("get_skin_detail", Gate::ManagerOnly),
     ("load_skin", Gate::ManagerOnly),
     ("unload_skin", Gate::ManagerOnly),
+    ("load_skins", Gate::ManagerOnly),
+    ("unload_skins", Gate::ManagerOnly),
     ("reload_skin", Gate::ManagerOnly),
     ("set_skin_opacity", Gate::ManagerOnly),
     ("set_skin_placement", Gate::ManagerOnly),
@@ -380,7 +382,7 @@ mod tests {
     fn gate_distribution_snapshot() {
         let count =
             |pred: fn(&Gate) -> bool| COMMAND_POLICIES.iter().filter(|(_, g)| pred(g)).count();
-        assert_eq!(count(|g| matches!(g, Gate::ManagerOnly)), 66);
+        assert_eq!(count(|g| matches!(g, Gate::ManagerOnly)), 68);
         assert_eq!(count(|g| matches!(g, Gate::LogWindow)), 2);
         assert_eq!(count(|g| matches!(g, Gate::Ungated)), 2);
         assert_eq!(count(|g| matches!(g, Gate::SkinLabel)), 4);
@@ -388,6 +390,6 @@ mod tests {
         assert_eq!(count(|g| matches!(g, Gate::ControlTarget)), 7);
         assert_eq!(count(|g| matches!(g, Gate::AnyPerm)), 1);
         assert_eq!(count(|g| matches!(g, Gate::Perm(_))), 38);
-        assert_eq!(COMMAND_POLICIES.len(), 128);
+        assert_eq!(COMMAND_POLICIES.len(), 130);
     }
 }

@@ -255,11 +255,13 @@ body {
 .isles-card--photo .isles-toolbtn:hover { background: rgba(16, 20, 28, 0.6); }
 
 /* ── 入场：直接子层统一轻微浮起（尊重系统「减弱动画」设置；单一事实源——
-   皮肤里不要再写第二份入场动画） ── */
+   皮肤里不要再写第二份入场动画）。整窗淡入由宿主统一提供（见皮肤开发指南
+   §3.6），皮肤入场只留位移浮起——不再自带透明度 0→1，避免与宿主淡入
+   双叠加把入场前段压得过暗 ── */
 @media (prefers-reduced-motion: no-preference) {
   .isles-card > * { animation: isles-in 0.24s ease-out; }
 }
 @keyframes isles-in {
-  from { opacity: 0; transform: translateY(3px); }
-  to { opacity: 1; transform: none; }
+  from { transform: translateY(3px); }
+  to { transform: none; }
 }

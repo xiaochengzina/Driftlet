@@ -257,11 +257,11 @@ snap_mirror = re.search(r"snap_gap\.min\((\d+)\)", MIRROR)
 check("snap_gap 钳制镜像（snap.rs 常量 → pack-skin）",
       bool(snap_max and snap_mirror and snap_max.group(1) == snap_mirror.group(1)),
       f"安装端 {snap_max and snap_max.group(1)} vs 镜像 {snap_mirror and snap_mirror.group(1)}")
-zoom_lo = re.search(r"MIN_ZOOM[^=\n]*=\s*([\d.]+)", COMMANDS)
-zoom_hi = re.search(r"MAX_ZOOM[^=\n]*=\s*([\d.]+)", COMMANDS)
+zoom_lo = re.search(r"MIN_ZOOM[^=\n]*=\s*([\d.]+)", TYPES)
+zoom_hi = re.search(r"MAX_ZOOM[^=\n]*=\s*([\d.]+)", TYPES)
 zoom_ok = (zoom_lo and zoom_hi
            and re.search(rf"clamp\({re.escape(zoom_lo.group(1))},\s*{re.escape(zoom_hi.group(1))}\)", MIRROR))
-check("zoom 钳制镜像（commands.rs 常量 → pack-skin）", bool(zoom_ok),
+check("zoom 钳制镜像（types.rs 常量 → pack-skin）", bool(zoom_ok),
       f"安装端 {zoom_lo and zoom_lo.group(1)}..{zoom_hi and zoom_hi.group(1)}")
 
 # ─── 7. parse_version 镜像（update.rs ↔ main.rs） ───

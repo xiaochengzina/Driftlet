@@ -48,6 +48,29 @@ const FRAMELESS_EXSTYLE_PASSTHROUGH: isize = {
         | WS_EX_STATICEDGE.0 as isize)
 };
 
+/// 皮肤 id → 建窗时登记的 HWND。销毁漏斗（close_skin_window_nowait）在
+/// window.hwnd() 失败（句柄已死）或窗口对象已不在的兜底臂按它摘除
+/// HWND 键的三处登记（pinner/吸附/穿透）——HWND 会被系统回收复用，
+/// 残留条目会让无关窗口被误当吸附候选/穿透放行（2026-09 审查 A2）。
+static SKIN_HWNDS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, isize>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// 建窗时登记 HWND（create_skin_window 在装子类/吸附/穿透登记的同一块调用）
+fn record_skin_hwnd(skin_id: &str, hwnd_val: isize) {
+    SKIN_HWNDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(skin_id.to_string(), hwnd_val);
+}
+
+/// 销毁时取出并摘除登记
+fn take_skin_hwnd(skin_id: &str) -> Option<isize> {
+    SKIN_HWNDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(skin_id)
+}
+
 /// 鼠标穿透登记集：开启穿透的皮肤窗口 HWND。无边框子类（force_frameless /
 /// WM_STYLECHANGING / WM_STYLECHANGED）对登记窗口改用 FRAMELESS_EXSTYLE_PASSTHROUGH
 /// 保留 TRANSPARENT|LAYERED，其余窗口照旧剥净（LAYERED 平时不在我们的
@@ -728,7 +751,7 @@ fn layout_scale_factor(window: &tauri::WebviewWindow) -> f64 {
         return fallback;
     };
     let zoom = match zoom_cfg {
-        Some(z) => crate::commands::clamp_zoom(z),
+        Some(z) => crate::skin::types::clamp_zoom(z),
         None => {
             // None = 跟随 skin.json 的 window.zoom 默认（与建窗/面板同一有效值规则）
             // TODO: 每次调用都重扫皮肤目录。当前调用频率低（仅建窗期
@@ -736,7 +759,7 @@ fn layout_scale_factor(window: &tauri::WebviewWindow) -> f64 {
             // 处理（skin.json 热编辑）不划算；若将来挂到高频路径需先缓存
             let skins = crate::skin::loader::scan_skins_directory(&state.skins_dir);
             match skins.iter().find(|s| s.id == skin_id) {
-                Some(s) => crate::commands::clamp_zoom(s.manifest.window.zoom),
+                Some(s) => crate::skin::types::clamp_zoom(s.manifest.window.zoom),
                 None => return fallback,
             }
         }
@@ -950,7 +973,7 @@ pub fn create_skin_window(
     // 缩放比例（zoom）：实际窗口 = 基础尺寸 × zoom，内容经 WebView2
     // ZoomFactor 同倍缩放——页面 CSS 视口保持设计尺寸，布局不重排，
     // 任何皮肤无需适配即可整体缩放。
-    let zoom = crate::commands::clamp_zoom(config.zoom.unwrap_or(skin.manifest.window.zoom));
+    let zoom = crate::skin::types::clamp_zoom(config.zoom.unwrap_or(skin.manifest.window.zoom));
 
     // 2. Create window via Tauri (hidden until setup is done)
     // Coordinates are logical pixels, matching the values stored in config.
@@ -973,12 +996,12 @@ pub fn create_skin_window(
         .resizable(false)
         .visible(false);
     // 网页皮肤：桥不注入，初始不透明度经初始化脚本落（纯 ASCII）；本地皮肤
-    // 的 opacity 已随协议 query 烘焙
+    // 的 opacity 已随协议 query 烘焙。脚本同时落地入场淡入（本地皮肤由桥
+    // CSS 烘焙 deskFadeIn 关键帧，见 protocol.rs bridge_css）。
     let window = if is_web {
         window
-            .initialization_script(format!(
-                "document.documentElement.style.opacity='{}';",
-                config.opacity
+            .initialization_script(web_fade_in_script(
+                config.opacity.clamp(crate::skin::types::MIN_OPACITY, 1.0),
             ))
             .build()
             .map_err(|e| format!("Failed to create window: {}", e))?
@@ -1024,6 +1047,9 @@ pub fn create_skin_window(
     //    was the root cause of the intermittent title-bar bug.
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
+        // 销毁兜底用的 HWND 登记（close_skin_window_nowait 兜底臂按它
+        // 摘三处 HWND 键登记）
+        record_skin_hwnd(&skin.id, hwnd.0 as isize);
         install_frameless(app, hwnd.0 as isize, &skin.id);
         // 边缘吸附状态登记（子类 WM_MOVING 按 HWND 查询）；None = 跟随 manifest
         crate::window::snap::upsert(
@@ -1088,7 +1114,7 @@ pub fn create_skin_window(
         let sid = skin.id.clone();
         let label_for_event = label.clone();
         // 缩放比例（zoom）有效值的兜底：配置条目缺失时回退 skin.json 的默认
-        let manifest_zoom = crate::commands::clamp_zoom(skin.manifest.window.zoom);
+        let manifest_zoom = crate::skin::types::clamp_zoom(skin.manifest.window.zoom);
         window.on_window_event(move |event| {
             match event {
                 tauri::WindowEvent::Moved(position) => {
@@ -1137,7 +1163,7 @@ pub fn create_skin_window(
                         let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
                         let entry = cfg.skin_settings.get(&sid);
                         // clamp：手改 config.json 可能注入越界 zoom
-                        let z = crate::commands::clamp_zoom(
+                        let z = crate::skin::types::clamp_zoom(
                             entry.and_then(|e| e.zoom).unwrap_or(manifest_zoom),
                         );
                         let bw = ((w as f64) / z).round() as u32;
@@ -1173,10 +1199,8 @@ pub fn create_skin_window(
                         .remove(&label_for_event);
                     if !intentional {
                         api.prevent_close();
-                        if let Some(w) = app_handle.get_webview_window(&label_for_event) {
-                            let _ = w.hide();
-                        }
-                        crate::hotkey::sync_tray_toggle_item(&app_handle);
+                        // 降级隐藏（走出场淡出；落地后漏斗自同步托盘/徽标）
+                        hide_skin_window_fade(&app_handle, &sid);
                     }
                 }
                 _ => {}
@@ -1210,13 +1234,11 @@ pub fn skin_window_label(skin_id: &str) -> String {
 /// 是合法摆放（多屏拼接缝、刻意半掩），一律不动。坐标系统一物理像素
 /// （outer_position/outer_size 与 Monitor::work_area 同为物理）。
 #[cfg(target_os = "windows")]
-pub(crate) fn offscreen_target(
-    app: &AppHandle,
-    window: &tauri::WebviewWindow,
-) -> Option<(i32, i32)> {
-    // 借任一窗口枚举显示器（管理器窗常驻；皮肤全隐藏时它也在）
-    let probe = app.get_webview_window("main")?;
-    let monitors = probe.available_monitors().ok()?;
+pub(crate) fn offscreen_target(window: &tauri::WebviewWindow) -> Option<(i32, i32)> {
+    // 用被判定皮肤窗自身枚举显示器——不要借管理器窗：管理器是「关窗即
+    // 销毁」、常态不存在，借它做探针会让 5 秒救回环在管理器关闭期间
+    // 整体空转（2026-09 审查 A2；隐藏的皮肤窗同样可枚举显示器）。
+    let monitors = window.available_monitors().ok()?;
     if monitors.is_empty() {
         return None;
     }
@@ -1234,7 +1256,7 @@ pub(crate) fn offscreen_target(
     if !all_outside {
         return None;
     }
-    let primary = probe.primary_monitor().ok().flatten()?;
+    let primary = window.primary_monitor().ok().flatten()?;
     let pa = primary.work_area();
     Some((pa.position.x + 24, pa.position.y + 24))
 }
@@ -1248,7 +1270,7 @@ pub fn rescue_offscreen_skins(app: &AppHandle) {
     let state = app.state::<crate::AppState>();
     for id in state.registry.loaded_ids() {
         if let Some(window) = state.registry.get(&id) {
-            if let Some((x, y)) = offscreen_target(app, &window) {
+            if let Some((x, y)) = offscreen_target(&window) {
                 let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
                 log::info!("Rescued off-screen skin '{}': moved to ({}, {})", id, x, y);
             }
@@ -1296,6 +1318,12 @@ pub fn destroy_skin_window(app: &AppHandle, label: &str) -> Result<(), String> {
 /// per-window wait destroy_skin_window does is pure latency (sequential, on
 /// the main thread, one wait per loaded skin).
 pub fn close_skin_window_nowait(app: &AppHandle, label: &str) -> Result<(), String> {
+    // 销毁点必递增显隐代际（勿只停在 fade_out_for_destroy 的起点递增——
+    // 淡出等待期间窗口仍可见，Alt+F4/skin_hide 等隐藏入口会再 bump 并
+    // 布防 gen-current 定时器；此后销毁/重建不再递增的话，该定时器会以
+    // 「current 代数」落到同 label 新窗上误 hide（2026-09 审查 A2）。
+    // 递增非清零，无 ABA（见 FADE_GENS 头注）。
+    bump_fade_gen(label);
     #[cfg(target_os = "windows")]
     SCALE_SNAPSHOTS
         .lock()
@@ -1310,32 +1338,30 @@ pub fn close_skin_window_nowait(app: &AppHandle, label: &str) -> Result<(), Stri
             .remove(skin_id);
     }
     if let Some(skin_id) = label.strip_prefix("skin-") {
-        if let Some(window) = app.get_webview_window(label) {
-            let state = app.state::<crate::AppState>();
-            match window.hwnd() {
-                Ok(hwnd) => {
-                    state.pinner.unpin(skin_id, hwnd.0 as isize);
-                    // 摘除边缘吸附登记（HWND 会被系统回收复用，不能残留）
-                    crate::window::snap::unregister(hwnd.0 as isize);
-                    // 摘除穿透登记（同理，HWND 复用不能残留）
-                    #[cfg(target_os = "windows")]
-                    set_passthrough_hwnd(hwnd.0 as isize, false);
-                }
-                Err(_) => {
-                    // hwnd() 失败也不能跳过注销：pinner 里存着登记时的 HWND，
-                    // 靠它把 HWND 键的吸附/穿透登记一并摘干净（残留条目随
-                    // HWND 回收复用误伤无关窗口）
-                    let stored = state.pinner.hwnd_of(skin_id);
-                    state.pinner.unpin(skin_id, stored.unwrap_or(0));
-                    if let Some(h) = stored {
-                        crate::window::snap::unregister(h);
-                        #[cfg(target_os = "windows")]
-                        set_passthrough_hwnd(h, false);
-                    }
-                }
+        // 建窗登记的 HWND 优先，window.hwnd() 现取兜底——hwnd() 失败
+        //（句柄已死）或窗口对象已不在时，仍能按登记值把 HWND 键的三处
+        // 登记（pinner/吸附/穿透）摘干净：吸附登记在建窗时无条件 upsert、
+        // 穿透按配置登记，两条兜底臂此前只查 pinner 簿记——从未 pin 的
+        // 皮肤 stored=None 整体漏摘，HWND 被系统回收复用后无关进程的
+        // 窗口会被误当吸附候选（2026-09 审查 A2）。
+        let recorded = take_skin_hwnd(skin_id);
+        let hwnd_val = app
+            .get_webview_window(label)
+            .and_then(|w| w.hwnd().ok().map(|h| h.0 as isize))
+            .or(recorded);
+        let state = app.state::<crate::AppState>();
+        match hwnd_val {
+            Some(h) => {
+                state.pinner.unpin(skin_id, h);
+                crate::window::snap::unregister(h);
+                #[cfg(target_os = "windows")]
+                set_passthrough_hwnd(h, false);
             }
-        } else {
-            app.state::<crate::AppState>().pinner.unpin(skin_id, 0);
+            None => {
+                // 建窗 hwnd() 就失败的极端路径：无登记值可用，至少摘
+                // pinner 条目（unpin(0) 只清簿记不动窗口位）
+                state.pinner.unpin(skin_id, 0);
+            }
         }
     }
     if let Some(window) = app.get_webview_window(label) {
@@ -1383,6 +1409,177 @@ pub fn close_skin_window_nowait(app: &AppHandle, label: &str) -> Result<(), Stri
         }
     }
     Ok(())
+}
+
+// ── 皮肤入场/出场（淡入淡出） ─────────────────────────────────────────
+//
+// 淡入淡出走**页面内容透明度**（documentElement 的 CSS opacity），与皮肤
+// 「不透明度」设置同一渲染通道。窗口级透明度（WS_EX_LAYERED +
+// SetLayeredWindowAttributes）不在选项内：layered 合成会破坏
+// WebView2/DirectComposition 渲染（本文件 FRAMELESS_EXSTYLE 的既有口径）。
+//
+// 三个落地面：
+//   1. 建窗入场：不在此模块——建窗时页面尚未加载，eval 会丢。本地皮肤由
+//      桥 CSS 烘焙纯 CSS 关键帧（protocol.rs bridge_css 的 deskFadeIn，
+//      不依赖 JS，桥被 CSP 拦下也照常显现）；网页皮肤由
+//      initialization_script 落地（web_fade_in_script）。
+//   2. 运行时再现（show）：show_skin_window_fade —— show() 后 eval 淡入
+//     （隐藏态的内联透明度恒为 0：所有隐藏路径都必经淡出）。
+//   3. 出场：隐藏走 hide_skin_window_fade（eval 淡出 + 延迟落地 hide，
+//      代际守卫防打断）；销毁走 fade_out_for_destroy（阻塞等动画走完，
+//      调用方随后销毁——reload 按同 label 重建，不能异步放手）。
+
+// 出场/入场时长锚点在 skin::types（FADE_OUT_MS/FADE_IN_MS）——销毁前的
+// 阻塞等待必须覆盖动画时长，四处共用同一常量（桥 CSS 烘焙、运行时
+// eval、网页皮肤 init 脚本、本模块等待），字面量散落会改一处漏其余。
+
+/// 显隐代际登记（label → 代数）：每次显隐/销毁操作递增。淡出的延迟落地
+/// 只在代数未变时执行——淡出期间被唤回（show）或销毁重建（reload 按同
+/// label 出新窗）时，迟到的 hide 不得再落（无守卫会把新窗误隐藏）。
+/// 条目**永不摘除、代数单调递增**（同 label 跨窗世代延续）。代际递增有
+/// 两个锚点，缺一即有洞（2026-09 审查 A2）：fade_out_for_destroy 在淡出
+/// 起点递增作废「淡出开始前布防」的旧定时器；close_skin_window_nowait 在
+/// 销毁点再递增作废「淡出等待期间布防」的定时器（彼时窗口仍可见，
+/// Alt+F4/skin_hide 等入口会再 bump 并布防 gen-current 定时器）。
+/// 若建窗时清零重数，旧定时器的代数会与重置后的新代数撞车（ABA），
+/// 迟到 hide 又会误落新窗。
+static FADE_GENS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn bump_fade_gen(label: &str) -> u64 {
+    let mut map = FADE_GENS.lock().unwrap_or_else(|e| e.into_inner());
+    let g = map.entry(label.to_string()).or_insert(0);
+    *g += 1;
+    *g
+}
+
+/// 代数未变（条目只增不删，见 FADE_GENS 头注——单调递增杜绝 ABA 撞车）
+fn fade_gen_current(label: &str, gen: u64) -> bool {
+    FADE_GENS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(label)
+        .copied()
+        == Some(gen)
+}
+
+/// 出场淡出 JS：直落 documentElement 内联样式——无桥页面（网页皮肤不
+/// 注入桥）同样生效。transition 常年保留（后续不透明度调整随之平滑），
+/// prefers-reduced-motion 落定最终值不播动画。出场也用 ease-out（起步
+/// 即响应用户动作；ease-in 的慢起步会让「隐藏」显得迟钝）。
+fn fade_out_js() -> String {
+    let ms = crate::skin::types::FADE_OUT_MS;
+    format!(
+        "(function(){{var el=document.documentElement;if(!el)return;try{{if(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches){{el.style.opacity='0';return;}}}}catch(e){{}}el.style.transition='opacity {ms}ms ease-out';el.style.opacity='0';}})();"
+    )
+}
+
+/// 入场淡入 JS：target = 皮肤当前有效不透明度（Rust 侧随配置现算，
+/// 与建窗烘焙同一口径）。
+fn fade_in_js(target: f64) -> String {
+    let ms = crate::skin::types::FADE_IN_MS;
+    format!(
+        "(function(){{var el=document.documentElement;if(!el)return;var t='{target}';try{{if(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches){{el.style.transition='';el.style.opacity=t;return;}}}}catch(e){{}}el.style.transition='opacity {ms}ms ease-out';el.style.opacity=t;}})();"
+    )
+}
+
+/// 网页皮肤的入场淡入初始化脚本（远程页面不注入桥，无 CSS 可烘焙）。
+/// documentElement 在 init 脚本执行点已存在（既有 opacity 落地同前提）；
+/// 每次导航/刷新都会重播（网页皮肤的「入场」= 页面出现）。
+fn web_fade_in_script(target: f64) -> String {
+    let ms = crate::skin::types::FADE_IN_MS;
+    format!(
+        "(function(){{var el=document.documentElement;if(el)el.style.opacity='0';function run(){{var d=document.documentElement;if(!d)return;var t='{target}';try{{if(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches){{d.style.opacity=t;return;}}}}catch(e){{}}d.style.transition='opacity {ms}ms ease-out';d.style.opacity=t;}}if(document.readyState==='loading'){{document.addEventListener('DOMContentLoaded',function(){{requestAnimationFrame(run);}});}}else{{requestAnimationFrame(run);}}}})();"
+    )
+}
+
+/// 皮肤当前有效不透明度（运行时再现的淡入目标）：skin_settings 条目优先
+///（load 路径必播种），缺失回退 manifest 默认——与建窗烘焙（URL query
+/// 的 opacity 参数）同一取值口径。
+fn effective_opacity(app: &AppHandle, skin_id: &str) -> f64 {
+    let state = app.state::<crate::AppState>();
+    {
+        let cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = cfg.skin_settings.get(skin_id) {
+            return entry.opacity.clamp(crate::skin::types::MIN_OPACITY, 1.0);
+        }
+    }
+    crate::skin::loader::scan_skins_directory(&state.skins_dir)
+        .into_iter()
+        .find(|s| s.id == skin_id)
+        .map(|s| {
+            s.manifest
+                .window
+                .opacity
+                .clamp(crate::skin::types::MIN_OPACITY, 1.0)
+        })
+        .unwrap_or(1.0)
+}
+
+/// 销毁前淡出（unload/reload 共用）：窗口可见时播出场动画并阻塞等它走完
+///（FADE_OUT_MS），随后调用方销毁窗口。**调用方必须在阻塞线程跑**
+///（内部 sleep；load/unload 的 spawn_blocking 即此约定）。窗口本不可见
+/// 或已不在时立即返回（无动画可播）。代际递增无条件执行——即使跳过
+/// 动画，也要作废在途的隐藏淡出定时器（防迟到的 hide 落在重建新窗上）。
+pub fn fade_out_for_destroy(app: &AppHandle, skin_id: &str) {
+    let label = skin_window_label(skin_id);
+    bump_fade_gen(&label);
+    let Some(window) = app.get_webview_window(&label) else {
+        return;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let _ = window.eval(fade_out_js());
+    std::thread::sleep(std::time::Duration::from_millis(
+        crate::skin::types::FADE_OUT_MS,
+    ));
+}
+
+/// 隐藏（带出场淡出）：可见时先 eval 淡出，动画走完再落地 hide
+///（独立线程延迟 + 代际守卫——淡出期间被 show/销毁打断则放弃本次
+/// 隐藏）。落地后过 sync_tray_toggle_item 漏斗刷新托盘勾选/管理器徽标
+///（调用方紧随的同步读到的是淡出中的真实态，落地这次才把终态对齐）。
+/// 已隐藏/未加载的窗口直接 no-op。
+pub fn hide_skin_window_fade(app: &AppHandle, skin_id: &str) {
+    let label = skin_window_label(skin_id);
+    let gen = bump_fade_gen(&label);
+    let Some(window) = app.get_webview_window(&label) else {
+        return;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let _ = window.eval(fade_out_js());
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(
+            crate::skin::types::FADE_OUT_MS,
+        ));
+        if !fade_gen_current(&label, gen) {
+            return; // 淡出期间被唤回/销毁——迟到的 hide 不落
+        }
+        if let Some(w) = handle.get_webview_window(&label) {
+            if let Err(e) = w.hide() {
+                log::warn!("fade-out hide landing failed for '{}': {}", label, e);
+            }
+        }
+        crate::hotkey::sync_tray_toggle_item(&handle);
+    });
+}
+
+/// 显示（带入场淡入）：show() 后 eval 淡入到当前有效不透明度。隐藏态的
+/// 内联透明度恒为 0（隐藏必经淡出），故再现恒从 0 起步；对可见窗口重复
+/// 调用 = 目标值不变的 eval，无视觉变化。只显示不抢焦点（沿用既有语义）。
+pub fn show_skin_window_fade(app: &AppHandle, skin_id: &str) {
+    let label = skin_window_label(skin_id);
+    bump_fade_gen(&label); // 作废在途淡出（迟到的 hide 不落）
+    let Some(window) = app.get_webview_window(&label) else {
+        return;
+    };
+    let _ = window.show();
+    let target = effective_opacity(app, skin_id);
+    let _ = window.eval(fade_in_js(target));
 }
 
 // ── Drag persistence (position & size) ──────────────────────────────

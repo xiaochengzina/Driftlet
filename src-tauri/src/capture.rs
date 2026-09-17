@@ -114,7 +114,11 @@ pub fn capture_webview_to_png(
             }
             // 降采样后再落盘：列表缩略用不到全尺寸位图（见文件头注释）
             let buf = downscale_preview_png(buf);
-            std::fs::write(path, &buf)
+            // 落盘原子写（tmp + rename）：连点两路截图/进程崩溃的半截写
+            // 不会留下坏图（2026-09 审查 F4）
+            let tmp = path.with_extension("tmp");
+            std::fs::write(&tmp, &buf)
+                .and_then(|_| std::fs::rename(&tmp, path))
                 .map_err(|e| trf(lang, Key::WritePreviewFailed, &[&e.to_string()]))?;
         }
         Ok(())

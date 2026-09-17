@@ -233,9 +233,11 @@ export default class LayoutPanel {
     this._setBusy(btn, t('layout.applying'));
     try {
       const res = await API.applyLayout(id);
-      this.showToast(t('layout.applied', { name: layout.name, count: res.applied }), 'success');
+      // toast 是单例替换制——应用数与跳过数合成一条，否则跳过条顶掉成功条
       if (res.skipped?.length) {
-        this.showToast(t('layout.appliedSkipped', { count: res.skipped.length, ids: res.skipped.join(', ') }), 'info');
+        this.showToast(`${t('layout.applied', { name: layout.name, count: res.applied })} · ${t('layout.appliedSkipped', { count: res.skipped.length, ids: res.skipped.join(', ') })}`, 'info');
+      } else {
+        this.showToast(t('layout.applied', { name: layout.name, count: res.applied }), 'success');
       }
       if (this.onApplied) await this.onApplied();
     } catch (err) {

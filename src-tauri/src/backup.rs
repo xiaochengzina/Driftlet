@@ -307,6 +307,11 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
     // Phase 3: staged replace with rollback（持 settings_lock 与设置写入
     // 互斥；重 IO 挪 spawn_blocking）。失败时数据已回滚，但皮肤已全部
     // 卸载——与 Phase 2 同款提示，告知用户重新加载即可恢复。
+    // 关键区延续到「盘 → 内存」换装：config 锁从目录替换前一直持到
+    // 换装+回存完毕——锁外的 save_config（专注模式进出/拖动防抖 flush，
+    // 都不经 install_lock）若插进「目录已换、内存未换」的窗口，旧内存
+    // 会覆盖盘上的导入版（静默作废导入的 config 半；2026-09 审查 F2）。
+    // 锁嵌套方向 settings→config，与 reset_skin_config 一致（全库无反向）。
     let app2 = app.clone();
     let extracted_path = extracted.path().to_path_buf();
     let lang2 = lang.clone();
@@ -316,31 +321,75 @@ pub async fn import_backup(app: AppHandle, package_path: &Path) -> Result<(), St
             .settings_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        let mut config_guard = state2.config.lock().unwrap_or_else(|e| e.into_inner());
         replace_data_dirs(
             &state2.config_dir,
             &state2.skins_dir,
             &extracted_path,
             &lang2,
-        )
+        )?;
+        // 目录就位后在同一锁段立刻完成换装（save 也必须在锁内——tmp
+        // 同名防互踩不变量，见 factory.rs debounced_config_flush 头注）
+        Ok::<_, String>(reload_config_in_place(&state2, &mut config_guard))
     })
     .await
     .map_err(|e| trf(&lang, Key::TaskFailed, &[&e.to_string()]))?;
-    if let Err(e) = phase3 {
-        if unloaded.is_empty() {
-            return Err(e);
+    let mirrors = match phase3 {
+        Ok(m) => m,
+        Err(e) => {
+            if unloaded.is_empty() {
+                return Err(e);
+            }
+            let ids = unloaded.join(", ");
+            return Err(format!(
+                "{} {}",
+                e,
+                trf(&lang, Key::ImportPartialUnloaded, &[&ids])
+            ));
         }
-        let ids = unloaded.join(", ");
-        return Err(format!(
-            "{} {}",
-            e,
-            trf(&lang, Key::ImportPartialUnloaded, &[&ids])
-        ));
-    }
+    };
 
-    // Phase 4: rebuild runtime state from the imported files.  Individual
-    // steps only log — the data itself is already safely in place.
-    rebuild_runtime(&app).await;
+    // Phase 4: rebuild the remaining runtime mirrors from the swapped
+    // config.  Individual steps only log — the data itself is already
+    // safely in place.
+    rebuild_runtime(&app, mirrors).await;
     Ok(())
+}
+
+/// 全量导入的「盘 → 内存」换装（Phase 3 锁段内调用）：从替换好的目录
+/// 读回 config（含孤儿清理与回存），整份换入内存；返回其余运行时镜像
+/// 所需的值。调用方必须正持 state.config 锁（见 import_backup Phase 3
+/// 注释——锁外 save 会在这个窗口覆盖盘上的导入版）。
+fn reload_config_in_place(
+    state: &crate::AppState,
+    guard: &mut crate::skin::types::AppConfig,
+) -> RuntimeMirrors {
+    let skins = loader::scan_skins_directory(&state.skins_dir);
+    let mut cfg = config::load_config(&state.config_dir);
+    let removed = config::prune_stale_entries(&mut cfg, &skins);
+    if removed > 0 {
+        log::info!("import: pruned {} config entries of missing skins", removed);
+    }
+    if let Err(e) = config::save_config(&state.config_dir, &cfg) {
+        log::warn!("import: failed to save pruned config: {}", e);
+    }
+    let m = RuntimeMirrors {
+        language: cfg.language.clone(),
+        autostart: cfg.autostart,
+        hot_reload: cfg.hot_reload,
+        to_load: cfg.loaded_skins.clone(),
+    };
+    *guard = cfg;
+    m
+}
+
+/// 全量导入 Phase 4 需要同步的运行时镜像值（在 config 锁内从换装盘取出的
+/// 快照——替换内存配置前取出，autostart/hot_reload 原子量双写同款模式）
+struct RuntimeMirrors {
+    language: String,
+    autostart: bool,
+    hot_reload: bool,
+    to_load: Vec<String>,
 }
 
 /// 选择性导入（合并模式，import_config 的 skin_ids 分支）：只导入指定
@@ -491,8 +540,16 @@ pub async fn import_backup_selective(
         // 选中皮肤的文件夹已在位， prune 只清真正的孤儿（防手改/半同步残留）
         let disk_skins = loader::scan_skins_directory(&state.skins_dir);
         config::prune_stale_entries(&mut cfg, &disk_skins);
+        // 合并结果只存在于内存 + 这一次落盘——save 失败且进程随后在下次
+        // 任何保存前退出，重启后皮肤文件已在而并入全丢（静默数据丢失且
+        // 用户被告知成功）。必须透传报错（目录替换不可逆，但 Err 至少让
+        // 用户知道要检查/重导——2026-09 审查 A3）
         if let Err(e) = config::save_config(&state.config_dir, &cfg) {
-            log::warn!("selective import: failed to save merged config: {}", e);
+            return Err(crate::i18n::trf(
+                &lang,
+                crate::i18n::Key::ConfigSaveFailed,
+                &[&e.to_string()],
+            ));
         }
         // 块尾表达式 = 备份里处于加载态的选中皮肤（下面逐个加载）
         cfg.loaded_skins
@@ -508,8 +565,15 @@ pub async fn import_backup_selective(
     // 并入的皮肤热键同步注册（注册表常驻——与全量导入/启动同一路径，
     // 否则合并进来的热键要等重启才生效）
     crate::hotkey::sync_skin_hotkeys_from_config(&app);
-    for id in loaded_now {
-        if let Err(e) = crate::commands::load_skin_impl(app.clone(), id.clone()).await {
+    // 并发加载（近似同批亮相；串行逐窗是「一个接一个出现」观感的来源）
+    for (id, result) in crate::commands::run_skins_concurrent(
+        app.clone(),
+        loaded_now,
+        crate::commands::SkinBatchOp::Load,
+    )
+    .await
+    {
+        if let Err(e) = result {
             log::warn!("selective import: failed to load skin '{}': {}", id, e);
         }
     }
@@ -685,7 +749,20 @@ fn extract_backup(package_path: &Path, lang: &str) -> Result<TempDirGuard, Strin
 /// A backup must look like one: `config/config.json` present, and if there
 /// is a manifest its format must be one we understand.
 fn validate_backup(dir: &Path, lang: &str) -> Result<(), String> {
-    if !dir.join("config").join("config.json").is_file() {
+    let cfg_path = dir.join("config").join("config.json");
+    if !cfg_path.is_file() {
+        return Err(tr(lang, Key::InvalidBackup).to_string());
+    }
+    // 内容必须可解析为 AppConfig（BOM 容忍与 load_config 同口径）——只查
+    // 存在性的话，畸形 config 的备份会在导入后被 load_config 判损坏重置为
+    // 默认配置，而旧配置已随 .import-old 删除、无处回滚（2026-09 审查 F3）。
+    let cfg_text = fs::read_to_string(&cfg_path)
+        .map_err(|e| trf(lang, Key::ReadBackupFailed, &[&e.to_string()]))?;
+    if serde_json::from_str::<crate::skin::types::AppConfig>(
+        cfg_text.trim_start_matches('\u{feff}'),
+    )
+    .is_err()
+    {
         return Err(tr(lang, Key::InvalidBackup).to_string());
     }
     let manifest_path = dir.join(MANIFEST_NAME);
@@ -812,37 +889,23 @@ fn copy_or_create(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
-/// Rebuild every runtime mirror of the on-disk state after the swap:
-/// in-memory config (pruned), language + tray, autostart, global hotkey,
-/// then load the skins the imported config had loaded.
-async fn rebuild_runtime(app: &AppHandle) {
+/// Rebuild the remaining runtime mirrors after the swap: language + tray,
+/// autostart, global hotkey, then load the skins the imported config had
+/// loaded.  config 的「盘 → 内存」换装已在 Phase 3 的锁段内完成（见
+/// import_backup）——本函数不再读盘/换内存/存盘。
+async fn rebuild_runtime(app: &AppHandle, m: RuntimeMirrors) {
     let state = app.state::<AppState>();
-    let skins = loader::scan_skins_directory(&state.skins_dir);
-    let mut cfg = config::load_config(&state.config_dir);
-    let removed = config::prune_stale_entries(&mut cfg, &skins);
-    if removed > 0 {
-        log::info!("import: pruned {} config entries of missing skins", removed);
-    }
-    if let Err(e) = config::save_config(&state.config_dir, &cfg) {
-        log::warn!("import: failed to save pruned config: {}", e);
-    }
-    let language = cfg.language.clone();
-    let autostart = cfg.autostart;
-    // 替换内存配置前先取出要同步的运行时镜像值（autostart 同款模式）：
     // hot_reload_enabled 原子量声明为 config.hot_reload 的镜像，双写
-    let hot_reload = cfg.hot_reload;
-    let to_load = cfg.loaded_skins.clone();
-    *state.config.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
     state
         .hot_reload_enabled
-        .store(hot_reload, std::sync::atomic::Ordering::Relaxed);
-    *state.language.lock().unwrap_or_else(|e| e.into_inner()) = language.clone();
-    crate::tray::rebuild_tray_menu(app, &language);
+        .store(m.hot_reload, std::sync::atomic::Ordering::Relaxed);
+    *state.language.lock().unwrap_or_else(|e| e.into_inner()) = m.language.clone();
+    crate::tray::rebuild_tray_menu(app, &m.language);
 
     {
         // 与 set_autostart 命令同一入口：并发/残留态下的幂等同步
         //（disable 在 Run 值不存在时报 os error 2，统一按目标已达处理）
-        if let Err(e) = crate::commands::sync_autostart(app, autostart) {
+        if let Err(e) = crate::commands::sync_autostart(app, m.autostart) {
             log::warn!("import: failed to sync autostart: {}", e);
         }
     }
@@ -851,8 +914,15 @@ async fn rebuild_runtime(app: &AppHandle) {
     // 皮肤专属热键注册表随备份 config 一并重建（与全局热键同节奏）
     crate::hotkey::sync_skin_hotkeys_from_config(app);
 
-    for id in to_load {
-        if let Err(e) = crate::commands::load_skin_impl(app.clone(), id.clone()).await {
+    // 并发加载（近似同批亮相；串行逐窗是「一个接一个出现」观感的来源）
+    for (id, result) in crate::commands::run_skins_concurrent(
+        app.clone(),
+        m.to_load,
+        crate::commands::SkinBatchOp::Load,
+    )
+    .await
+    {
+        if let Err(e) = result {
             log::warn!("import: failed to load skin '{}': {}", id, e);
         }
     }
@@ -987,7 +1057,13 @@ mod tests {
         let skins_dir = root.join("skins").join("clock");
         fs::create_dir_all(&config_dir).unwrap();
         fs::create_dir_all(&skins_dir).unwrap();
-        fs::write(config_dir.join("config.json"), r#"{"version":2}"#).unwrap();
+        // 完整形状的 AppConfig——validate_backup 会解析校验（审查 F3），
+        // {"version":2} 这类极简形状与 load_config 同口径判无效
+        fs::write(
+            config_dir.join("config.json"),
+            serde_json::to_string(&crate::skin::types::AppConfig::default()).unwrap(),
+        )
+        .unwrap();
         fs::write(
             skins_dir.join("skin.json"),
             r#"{"id":"clock","name":"Clock"}"#,
@@ -1046,6 +1122,25 @@ mod tests {
         assert!(extracted.path().join("skins/clock/settings.json").is_file());
         // 暂存残留不应进入导出——这里是手动构造的 zip 含有它（因为 zip_of 不过滤），
         // 导出侧过滤由 add_dir 的 skip 规则覆盖（见 export 逻辑）。
+    }
+
+    /// 审查 F3：config.json 存在但内容畸形（不可解析为 AppConfig）的备份
+    /// 必须在动真目录前被拒——否则导入后 load_config 判损坏重置、旧配置
+    /// 随 .import-old 删除无处回滚
+    #[test]
+    fn validate_rejects_corrupt_config_json() {
+        let root = TestDir::new("corrupt-cfg");
+        let payload = root.0.join("payload");
+        fs::create_dir_all(payload.join("config")).unwrap();
+        // 存在但形状非法（缺 version/loaded_skins/skin_settings 必填字段）
+        fs::write(payload.join("config").join("config.json"), "{}").unwrap();
+        let zip_path = root.0.join("b.zip");
+        zip_of(&payload, &zip_path, false);
+        let extracted = extract_backup(&zip_path, "zh-CN").unwrap();
+        assert!(
+            validate_backup(extracted.path(), "zh-CN").is_err(),
+            "畸形 config.json 必须被拒"
+        );
     }
 
     #[test]
@@ -1144,11 +1239,15 @@ mod tests {
         fs::create_dir_all(&deep).unwrap();
         fs::write(deep.join("boom.txt"), "x").unwrap();
 
+        // 原内容现读现比（夹具内容随 validate_backup 校验口径演化过——
+        // 断言「字节级原样恢复」而非某个具体字面量）
+        let original_cfg = fs::read_to_string(config_dir.join("config.json")).unwrap();
+
         assert!(replace_data_dirs(&config_dir, &skins_dir, &extracted, "zh-CN").is_err());
         // 回滚：原数据原样恢复，无暂存残留
         assert_eq!(
             fs::read_to_string(config_dir.join("config.json")).unwrap(),
-            r#"{"version":2}"#
+            original_cfg
         );
         assert!(skins_dir.join("clock").join("skin.json").is_file());
         assert!(!import_old_sibling(&config_dir).exists());

@@ -270,7 +270,8 @@ pub fn dispatch_hotkey(app: &AppHandle, shortcut: &Shortcut) {
 }
 
 /// 切换单个皮肤的显隐（热键触发）：按真实窗口可见性取反；皮肤未加载
-///（无窗）静默 no-op。同步走 sync_tray_toggle_item 漏斗。
+///（无窗）静默 no-op。显隐走淡入淡出（factory 淡化助手；hide 侧异步
+/// 落地，完成后再过一次漏斗对齐终态）。同步走 sync_tray_toggle_item 漏斗。
 /// pub(crate)：托盘「皮肤显隐」勾选项点击走同一路径。
 pub(crate) fn toggle_one_skin(app: &AppHandle, skin_id: &str) {
     let state = app.state::<AppState>();
@@ -278,9 +279,10 @@ pub(crate) fn toggle_one_skin(app: &AppHandle, skin_id: &str) {
         return;
     };
     let visible = win.is_visible().unwrap_or(true);
-    let result = if visible { win.hide() } else { win.show() };
-    if let Err(e) = result {
-        log::warn!("skin hotkey toggle failed for '{}': {}", skin_id, e);
+    if visible {
+        crate::window::factory::hide_skin_window_fade(app, skin_id);
+    } else {
+        crate::window::factory::show_skin_window_fade(app, skin_id);
     }
     sync_tray_toggle_item(app);
 }

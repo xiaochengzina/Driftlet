@@ -3,7 +3,7 @@
 > [中文版](皮肤开发指南.md) | English
 
 > The complete API documentation and specification for skin creators. After reading this document you can develop, debug, package, and publish a Driftlet skin on your own.
-> This document covers Driftlet 1.x (currently 1.2.5). For internal implementation details (mechanisms that must not regress), see `docs/critical-mechanisms.md`.
+> This document covers Driftlet 1.x (currently 1.2.6). For internal implementation details (mechanisms that must not regress), see `docs/critical-mechanisms.md`.
 
 ---
 
@@ -279,6 +279,19 @@ The host's runtime floor is Chromium 111 (§3.1), but older runtimes always exis
 - Skin pages have no CSP constraints — freedom, but it also means that layer of protection is absent: only load resources and scripts you trust yourself.
 - All skins share the same origin (`http://skin.localhost`); the same-origin policy does **not** isolate skins from each other's ordinary resource files. Don't store private data as plain files in the skin folder — user private data should use `password`-type setting items (§4.3), which the platform guarantees will never appear in any page.
 - Code in a skin package is **local code that can access the network**. Consider reminding users on your release page: installing a third-party skin is equivalent to installing a small desktop app.
+
+### 3.6 Entrance/Exit Effects
+
+**Window-level fade-in/fade-out is provided by the host for every skin — no skin-side adaptation is needed**: fade-in (180 ms) on load/reload, fade-out (150 ms) on hide/unload/Alt+F4, and fade-in again when re-shown after a hide. The fade-in target is the user-configured "Opacity" value (not always 100%). When the system's "reduce motion" (prefers-reduced-motion) is on, the host skips the animation and settles instantly.
+
+A skin may layer its own **content-level** entrance effect on top (e.g. the official Isles skins' `isles-in`: a 3 px rise on the card's child layers — opacity is owned by the host fade, so the skin side no longer brings its own 0→1) — it targets the skin's own containers/children and composes naturally with the host's whole-window fade, without conflict. Rules:
+
+- **Never animate or transition `opacity` / `transform` on `html` or `body`** — both the host fades and the "Opacity" setting write inline styles on `documentElement`, and skin animations/transitions on the root element would fight them (a running CSS animation outranks inline styles and would "push back" the host's fade-out — the window would refuse to disappear). Put content motion on your own container/child selectors (e.g. `.card > *`).
+- Use **pure CSS keyframes** for entrance effects (`animation: xx 0.24s ease-out`, no `fill` — the rule value takes over when it ends); don't drive them with JS timers (you can't control page-load timing).
+- **Prefer translate/scale for content-level motion; don't stack another layer-wide `opacity: 0 → 1`** — the host already fades the whole window in, and two multiplying opacity ramps double-dim the early phase of the entrance; reserve fades for small local elements if truly needed.
+- Respect the system's "reduce motion": wrap your own motion in `@media (prefers-reduced-motion: no-preference)` too (same policy as the host — both sides skip together). Reference implementation: `isles-in` in `examples/shared/base.css`.
+- A skin's own entrance animation plays **once, at page load**; the hide→show cycle does not replay it (on re-show only the host's whole-window fade runs). If you want motion on every appearance, drive it from a state change instead of an entrance animation.
+- The exit direction cannot be taken over: the fade-out on unload/hide is performed uniformly by the host (the page is destroyed or hidden right afterwards); skins neither need to nor should intercept it.
 
 ---
 

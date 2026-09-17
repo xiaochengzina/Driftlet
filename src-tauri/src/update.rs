@@ -277,6 +277,30 @@ struct SourceState {
     done: AtomicBool,
 }
 
+/// 下载在途互斥（2026-09 审查 F9）：自动检测与手动「检查更新」可叠开
+/// 两路下载——分段 .part 文件名固定，后起手者清掉前者的 part、交错写，
+/// 双双哈希不符失败（fail-closed 兜住不会装坏包，但无谓失败降级）。
+static DOWNLOAD_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// 在途占位闸（RAII，作用域结束自动放行）；已有在途下载返回 None
+pub(crate) fn try_begin_download() -> Option<impl Drop> {
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            DOWNLOAD_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    DOWNLOAD_IN_FLIGHT
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .ok()
+        .map(|_| Guard)
+}
+
 /// 阻塞式多源竞速下载安装包到更新目录（调用方放 spawn_blocking）。
 /// 直连 + 镜像同时开工，谁先**通过 SHA-256 校验**谁就位（其余源随即中止，
 /// 校验保证胜者与官方哈希一致——多个源同时成功时字节必然相同）；全部源

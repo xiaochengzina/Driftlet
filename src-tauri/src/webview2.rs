@@ -101,7 +101,11 @@ fn persist_floor_noticed() {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap_or_default());
+    // 原子写（tmp + rename）：崩溃半截写会让整份配置下次启动被判损坏
+    // 重置（2026-09 审查 F10，与 persist_allow_elevated 同修）
+    let tmp = path.with_extension("tmp");
+    let _ = std::fs::write(&tmp, serde_json::to_string_pretty(&v).unwrap_or_default())
+        .and_then(|_| std::fs::rename(&tmp, &path));
 }
 
 /// 启动时检查：运行时低于地板则原生消息框告知（此刻窗口系统尚未建立，与

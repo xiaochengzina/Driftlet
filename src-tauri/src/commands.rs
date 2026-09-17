@@ -7,6 +7,7 @@ use crate::skin::package;
 use crate::skin::settings;
 use crate::skin::types::{
     AppConfig, LayoutPreset, LayoutSkin, SkinDetail, SkinGroup, SkinInfo, SkinRuntimeConfig,
+    clamp_zoom,
 };
 use crate::window::factory;
 use tauri::{AppHandle, Emitter, Manager};
@@ -16,7 +17,8 @@ use tauri::{AppHandle, Emitter, Manager};
 /// 管理器专属命令的身份校验：capabilities 只约束核心/插件命令，app 自定义
 /// 命令对任何窗口开放——皮肤可经注入桥的 __DESK_PP__.invoke 直达任意命令。
 /// 故管理器命令在首行按窗口 label 把关；皮肤合法调用的命令
-/// （start_skin_drag / start_skin_resize / show_skin_context_menu）不走这里。
+/// （唯一事实源在 policy.rs 的 COMMAND_POLICIES——Ungated/SkinLabel 档，
+/// 勿在此另列清单；曾漏列 open_skin_devtools 而漂移，2026-09 审查 B1）。
 fn require_manager(window: &tauri::WebviewWindow) -> Result<(), String> {
     if window.label() == "main" {
         Ok(())
@@ -266,7 +268,7 @@ pub fn get_skin_detail(
 /// 生命周期 impl，无反向路径）。impl 保持无锁——进程内调用方（reload 循环、
 /// 安装链路、皮肤右键菜单——审查 M3 后菜单路径也在 spawn 内取这两把锁）
 /// 已由外层串行。
-async fn lifecycle_guards<'a>(state: &'a AppState) -> (impl Send + 'a, impl Send + 'a) {
+pub(crate) async fn lifecycle_guards<'a>(state: &'a AppState) -> (impl Send + 'a, impl Send + 'a) {
     let a = state.lifecycle_lock.lock().await;
     let b = state.install_lock.lock().await;
     (a, b)
@@ -386,6 +388,11 @@ pub(crate) async fn unload_skin_impl(app: AppHandle, skin_id: String) -> Result<
             return Err(tr(&lang, Key::SkinNotLoaded).to_string());
         }
 
+        // 出场淡出：可见窗口先播透明度动画再销毁（阻塞 150ms，本闭包就在
+        // 阻塞线程上；不可见窗口内部直接跳过）。必须在 destroy 之前——
+        // reload 紧随按同 label 重建。
+        factory::fade_out_for_destroy(&handle, &sid);
+
         factory::destroy_skin_window(&handle, &label)?;
         state.registry.unregister(&sid);
         factory::clear_skin_menu_items(&sid); // 自定义右键菜单项随窗口生命周期清除
@@ -408,6 +415,11 @@ pub(crate) async fn unload_skin_impl(app: AppHandle, skin_id: String) -> Result<
 
         log::info!("Skin unloaded: {}", sid);
         let _ = handle.emit_to("main", "skin-unloaded", &sid);
+        // 与 load 对称过显隐漏斗：加载集变了，托盘「皮肤显隐」子菜单
+        // 要摘掉该皮肤行（不同步的话残留项点击空转——2026-09 审查 A2）。
+        // reload 路径会经此处 + load 各同步一次（中途菜单短暂重建——
+        // 菜单未弹出时重建不可见，可接受）
+        crate::hotkey::sync_tray_toggle_item(&handle);
         Ok(())
     })
     .await
@@ -437,6 +449,115 @@ pub(crate) async fn reload_skin_impl(app: AppHandle, skin_id: String) -> Result<
         unload_skin_impl(app.clone(), skin_id.clone()).await?;
     }
     load_skin_impl(app, skin_id).await
+}
+
+// ─── 批量并发加载/卸载 ───
+//
+// 多个皮肤同时上屏的共用漏斗（启动自载 / 专注模式恢复 / 布局套用 /
+// 备份导入 / 托盘全部重载 / 管理器组批量）。串行 await 链把「上一窗
+// 全部落地」串进「下一窗开始建」——逐窗登场感由此而来；并发后每皮肤
+// 一个任务（内部 spawn_blocking 建窗），各窗的创建消息在主线程消息泵
+// 上背靠背处理，WebView2 初始化各自异步推进，窗口近似同批亮相（入场
+// 淡入由桥 CSS 烘焙兜底，见 factory.rs 淡入淡出模块头注）。
+//
+// 锁语义不变：load/unload/reload_skin_impl 自身无锁，生命周期串行化由
+// 调用方持有的 lifecycle_guards 保证——本函数只是把「锁内的一串 await」
+// 改成「锁内的一批并发」，不同时机的两批操作依旧不交错。
+
+/// run_skins_concurrent 的操作种类
+#[derive(Clone, Copy)]
+pub(crate) enum SkinBatchOp {
+    Load,
+    Unload,
+    Reload,
+}
+
+/// 同批皮肤操作的并发扇出与结果归集（唯一入口——扇出/按序 join/
+/// 结果归集只此一份，调用方按 op 选 load/unload/reload impl）。
+/// 返回逐皮肤结果（顺序与入参一致）。
+pub(crate) async fn run_skins_concurrent(
+    app: AppHandle,
+    skin_ids: Vec<String>,
+    op: SkinBatchOp,
+) -> Vec<(String, Result<(), String>)> {
+    let mut handles = Vec::with_capacity(skin_ids.len());
+    for id in skin_ids {
+        let handle = app.clone();
+        let sid = id.clone();
+        handles.push((
+            id,
+            tauri::async_runtime::spawn(async move {
+                match op {
+                    SkinBatchOp::Load => load_skin_impl(handle, sid).await,
+                    SkinBatchOp::Unload => unload_skin_impl(handle, sid).await,
+                    SkinBatchOp::Reload => reload_skin_impl(handle, sid).await,
+                }
+            }),
+        ));
+    }
+    let mut out = Vec::with_capacity(handles.len());
+    for (id, h) in handles {
+        match h.await {
+            Ok(r) => out.push((id, r)),
+            Err(e) => out.push((id, Err(format!("batch task join failed: {}", e)))),
+        }
+    }
+    out
+}
+
+/// 批量加载/卸载的返回（组批量操作的计数反馈）
+#[derive(serde::Serialize)]
+pub struct BatchOutcome {
+    pub ok: u32,
+    pub failed: u32,
+}
+
+/// 逐皮肤结果 → 计数（失败项留日志——与既有串行循环的 log::warn 同款）
+fn batch_outcome(action: &str, results: Vec<(String, Result<(), String>)>) -> BatchOutcome {
+    let mut o = BatchOutcome { ok: 0, failed: 0 };
+    for (id, r) in results {
+        match r {
+            Ok(()) => o.ok += 1,
+            Err(e) => {
+                o.failed += 1;
+                log::warn!("batch {}: '{}' failed: {}", action, id, e);
+            }
+        }
+    }
+    o
+}
+
+/// 组批量加载（管理器）：单命令整批并发建窗、近似同批亮相，取代前端
+/// 逐皮肤串行 invoke（每窗都等上一窗全部落地——逐窗登场的来源）。
+#[tauri::command]
+pub async fn load_skins(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_ids: Vec<String>,
+) -> Result<BatchOutcome, String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let _guards = lifecycle_guards(&state).await;
+    Ok(batch_outcome(
+        "load",
+        run_skins_concurrent(app.clone(), skin_ids, SkinBatchOp::Load).await,
+    ))
+}
+
+/// 组批量卸载（管理器）：同 load_skins 的并发口径，全部皮肤一起淡出。
+#[tauri::command]
+pub async fn unload_skins(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    skin_ids: Vec<String>,
+) -> Result<BatchOutcome, String> {
+    require_manager(&window)?;
+    let state = app.state::<AppState>();
+    let _guards = lifecycle_guards(&state).await;
+    Ok(batch_outcome(
+        "unload",
+        run_skins_concurrent(app.clone(), skin_ids, SkinBatchOp::Unload).await,
+    ))
 }
 
 // ─── Configuration ───
@@ -718,7 +839,7 @@ pub fn bring_skin_onscreen(
     let Some(skin_win) = state.registry.get(&skin_id) else {
         return Ok(false);
     };
-    let Some((x, y)) = factory::offscreen_target(&app, &skin_win) else {
+    let Some((x, y)) = factory::offscreen_target(&skin_win) else {
         return Ok(false);
     };
     skin_win
@@ -1477,12 +1598,11 @@ pub async fn show_skin_context_menu(
             });
         }
         factory::SKIN_MENU_HIDE => {
-            // 隐藏当前皮肤窗口：与 set_skin_visibility(visible=false) 同一
-            // 窗口动作 + 同一同步漏斗（托盘勾选与管理器徽标按真实窗口
-            // 状态刷新）。不取生命周期锁——不动窗口存亡，只改可见性
-            if let Err(e) = window.hide() {
-                log::warn!("skin menu hide failed: {}", e);
-            }
+            // 隐藏当前皮肤窗口（走出场淡出）：与 set_skin_visibility(
+            // visible=false) 同一窗口动作 + 同一同步漏斗（托盘勾选与管理器
+            // 徽标按真实窗口状态刷新——落地后由淡出完成回调再同步一次终态）。
+            // 不取生命周期锁——不动窗口存亡，只改可见性
+            factory::hide_skin_window_fade(&app, &skin_id);
             crate::hotkey::sync_tray_toggle_item(&app);
         }
         factory::SKIN_MENU_UNLOAD => {
@@ -1669,19 +1789,6 @@ pub(crate) fn set_skin_resizable_impl(
 
     emit_window_config_changed(app, skin_id, "resizable", serde_json::json!(resizable));
     Ok(())
-}
-
-/// 缩放比例上下限（「窗口」页滑块同范围）。
-pub const MIN_ZOOM: f64 = 0.5;
-pub const MAX_ZOOM: f64 = 2.0;
-
-/// 把缩放比例钳制到支持范围；NaN/无穷回落 1.0。
-pub(crate) fn clamp_zoom(z: f64) -> f64 {
-    if z.is_finite() {
-        z.clamp(MIN_ZOOM, MAX_ZOOM)
-    } else {
-        1.0
-    }
 }
 
 /// 缩放比例（「窗口」页）：内容经 WebView2 ZoomFactor 与窗口同倍缩放——
@@ -2345,10 +2452,10 @@ pub fn set_focus_exempt(
         ));
     }
     let mut cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
-    cfg.skin_settings
-        .entry(skin_id.clone())
-        .or_insert_with(crate::skin::types::SkinRuntimeConfig::default)
-        .focus_exempt = on;
+    // 播种必须按 manifest 默认（or_default 会把 skin.json 声明的尺寸/
+    // 透明度/放置态冲成硬编码 300×200/1.0/贴桌面——未加载皮肤先勾豁免
+    // 再加载即丢 manifest 默认，2026-09 审查 A3）
+    runtime_entry_or_manifest(&state, &mut cfg, &skin_id).focus_exempt = on;
     config::save_config(&state.config_dir, &cfg)
         .map_err(|e| crate::i18n::trf(&lang, crate::i18n::Key::ConfigSaveFailed, &[&e.to_string()]))
 }
@@ -2417,8 +2524,18 @@ pub async fn remove_skin(
         let mut app_config = state.config.lock().unwrap_or_else(|e| e.into_inner());
         app_config.loaded_skins.retain(|id| id != &skin_id);
         app_config.skin_settings.remove(&skin_id);
+        // 分组归属一并清（否则残留随盘落存、重启才由 prune 清；会话内
+        // 重装同 id 会复活旧分组归属——删除语义 = 干净移除，2026-09
+        // 审查 F7）
+        app_config.skin_group_map.remove(&skin_id);
         config::save_config(&state.config_dir, &app_config)
             .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))?;
+    }
+    // 专属热键的 OS 注册与簿记一并摘除（只删配置字段的话，该组合在会话
+    // 内仍被 OS 占用（绑给他人报冲突）、重装同 id 皮肤会「幽灵生效」而
+    // 面板显示未绑定——2026-09 审查 F6；失败仅留痕，重启全量重建自愈）
+    if let Err(e) = crate::hotkey::set_skin_hotkey(&app, &skin_id, "") {
+        log::warn!("remove_skin: failed to unregister hotkey for '{}': {}", skin_id, e);
     }
     Ok(())
 }
@@ -2489,16 +2606,25 @@ pub async fn duplicate_skin(
     });
 
     let new_dir = state.skins_dir.join(&new_id);
-    // 拷贝失败清半成品（rewrite 失败路径有清理，copy 失败同样要有——审查 B 面发现）
-    package::copy_dir_recursive(&source_dir, &new_dir).map_err(|e| {
-        let _ = std::fs::remove_dir_all(&new_dir);
+    // 三段式（与安装/首装种子同款纪律）：先拷进 `.staging-` 暂存目录，
+    // 改写也在暂存里做，最后 rename 就位——崩溃留下的是点开头目录
+    //（扫描跳过、启动时 recover_interrupted_folder_ops 回收）；直拷最终
+    // 目录的半截拷贝会成为「列表不可见、remove_skin 够不到」的永久残留
+    //（2026-09 审查 F5）。拷贝/改写失败清暂存。
+    let staging_dir = state.skins_dir.join(format!(".staging-{}", new_id));
+    if staging_dir.exists() {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+    }
+    package::copy_dir_recursive(&source_dir, &staging_dir).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&staging_dir);
         trf(&lang, Key::DuplicateSkinFailed, &[&e.to_string()])
     })?;
 
-    // 改写副本 skin.json：id / name(_en) / x-driftlet-origin，其余逐字保留
+    // 改写副本 skin.json（暂存目录内）：id / name(_en) / x-driftlet-origin，
+    // 其余逐字保留
     {
         let rewrite = || -> Result<(), String> {
-            let manifest_path = new_dir.join("skin.json");
+            let manifest_path = staging_dir.join("skin.json");
             let raw = std::fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
             let mut json: serde_json::Value =
                 serde_json::from_str(raw.trim_start_matches('\u{feff}'))
@@ -2525,14 +2651,21 @@ pub async fn duplicate_skin(
             };
             json["x-driftlet-origin"] = serde_json::Value::String(origin);
             let text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+            // 暂存目录内裸写即可——原子性由就位 rename 保证（半截写留在
+            // 点开头目录里，启动恢复回收）
             std::fs::write(&manifest_path, text).map_err(|e| e.to_string())?;
             Ok(())
         };
         // 改写失败不留半成品目录（皮肤列表里出现一个坏皮肤比没有更糟）
         if let Err(e) = rewrite() {
-            let _ = std::fs::remove_dir_all(&new_dir);
+            let _ = std::fs::remove_dir_all(&staging_dir);
             return Err(trf(&lang, Key::DuplicateSkinFailed, &[&e]));
         }
+    }
+    // 就位（新 id 经上方循环确认未被占用）
+    if let Err(e) = std::fs::rename(&staging_dir, &new_dir) {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return Err(trf(&lang, Key::DuplicateSkinFailed, &[&e.to_string()]));
     }
 
     // 窗口配置深拷贝给副本（继承当前调整），位置偏移 +32——两窗完全重叠
@@ -2784,8 +2917,8 @@ pub fn set_theme(
 
     // 推送已加载皮肤：更新桥成员并派发事件（auto 已折算成具体主题——与
     // set_language 同款模式；皮肤不监听也不受影响，下次 reload 时桥会烘焙新主题）
-    let theme_json =
-        serde_json::to_string(&current_theme(&state)).unwrap_or_else(|_| "\"light\"".into());
+    let theme_json = serde_json::to_string(&config::current_theme(&state))
+        .unwrap_or_else(|_| "\"light\"".into());
     let script = format!(
         r#"(function(){{if(!window.__DESK_PP__)return;window.__DESK_PP__.theme={t};document.dispatchEvent(new CustomEvent('desk-theme-changed',{{detail:{{theme:{t}}}}}));}})();"#,
         t = theme_json
@@ -2796,48 +2929,6 @@ pub fn set_theme(
         }
     }
     Ok(())
-}
-
-/// 当前生效主题（"light" / "dark"）：config.theme 为 auto 时按本地小时折算
-///（06–18 浅色，否则深色——与前端 settings.js timeBasedTheme 同规则）。
-/// 桥烘焙（protocol.rs serve）与 set_theme 推送共用此解析。
-pub(crate) fn current_theme(state: &AppState) -> String {
-    let configured = state
-        .config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .theme
-        .clone();
-    match configured.as_str() {
-        "light" | "dark" => configured,
-        _ => {
-            let hour = local_hour();
-            if (6..18).contains(&hour) {
-                "light".to_string()
-            } else {
-                "dark".to_string()
-            }
-        }
-    }
-}
-
-/// 本地小时（0–23）：Windows 走 GetLocalTime；非 Windows 仅作编译占位
-///（按 UTC 折算，本应用只发布 Windows 版）
-fn local_hour() -> u32 {
-    #[cfg(target_os = "windows")]
-    {
-        use windows::Win32::System::SystemInformation::GetLocalTime;
-        let st = unsafe { GetLocalTime() };
-        st.wHour as u32
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        ((secs / 3600) % 24) as u32
-    }
 }
 
 /// 皮肤热重载总开关（持久化 config.hot_reload + 即时翻转运行时标志）。
@@ -2994,6 +3085,9 @@ pub async fn download_update(
 ) -> Result<String, String> {
     require_manager(&window)?;
     let config_dir = app.state::<AppState>().config_dir.clone();
+    // 在途互斥：自动/手动检测叠开两路会共用分段文件名互踩（审查 F9）
+    let _download_gate = crate::update::try_begin_download()
+        .ok_or_else(|| "an update download is already in progress".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let window = window;
         let on_progress = move |p: crate::update::DownloadProgress| {
@@ -3123,11 +3217,26 @@ pub fn set_skin_hotkey(
     let state = app.state::<AppState>();
     let lang = state.lang();
     let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
-    let cfg = config
-        .skin_settings
-        .entry(skin_id)
-        .or_insert_with(SkinRuntimeConfig::default);
-    cfg.hotkey = hotkey.trim().to_string();
+    if hotkey.trim().is_empty() {
+        // 清除：条目在则清空字段，不在则无事（不给幽灵 id 播种）
+        if let Some(entry) = config.skin_settings.get_mut(&skin_id) {
+            entry.hotkey = String::new();
+        }
+    } else {
+        // 皮肤须存在（与 set_focus_exempt 同口径：幽灵 id 不播种、不绑键——
+        // 注意 OS 注册已在上面完成，此处报错前回滚注册）
+        if !crate::skin::loader::scan_skins_directory(&state.skins_dir)
+            .iter()
+            .any(|s| s.id == skin_id)
+        {
+            drop(config);
+            let _ = crate::hotkey::set_skin_hotkey(&app, &skin_id, "");
+            return Err(trf(&lang, Key::SkinNotFound, &[skin_id.as_str()]));
+        }
+        // 播种按 manifest 默认（or_default 会把 skin.json 声明的默认尺寸/
+        // 透明度/放置态冲成硬编码值——2026-09 审查 A3）
+        runtime_entry_or_manifest(&state, &mut config, &skin_id).hotkey = hotkey.trim().to_string();
+    }
     config::save_config(&state.config_dir, &config)
         .map_err(|e| trf(&lang, Key::ConfigSaveFailed, &[&e.to_string()]))
 }
@@ -3146,14 +3255,16 @@ pub fn set_skin_visibility(
     require_manager(&window)?;
     let state = app.state::<AppState>();
     let lang = state.lang();
-    let win = state
+    // 存在性校验（原样保留 SkinNotLoaded 报错语义）；显隐动作走淡入淡出
+    //（hide 侧异步落地，落地后漏斗自同步终态）
+    state
         .registry
         .get(&skin_id)
         .ok_or_else(|| tr(&lang, Key::SkinNotLoaded).to_string())?;
     if visible {
-        win.show().map_err(|e| e.to_string())?;
+        factory::show_skin_window_fade(&app, &skin_id);
     } else {
-        win.hide().map_err(|e| e.to_string())?;
+        factory::hide_skin_window_fade(&app, &skin_id);
     }
     crate::hotkey::sync_tray_toggle_item(&app);
     Ok(())
@@ -3307,28 +3418,40 @@ pub(crate) async fn apply_layout_impl(
     };
 
     // 批量 load/unload：与皮肤侧/管理器其他生命周期操作同锁串行
+    //（并发只在锁内这一批之间——见 run_skins_concurrent 头注）
     let state = app.state::<AppState>();
     let _guards = lifecycle_guards(&state).await;
 
+    // 第一阶段：并发卸载不在方案中的已加载皮肤（卸载含出场淡出等待，
+    // 串行会按每窗 150ms 叠加——并发后全部一起淡出）。
+    // 卸载失败不中止整体应用（该皮肤留在桌面，记日志继续）。
     let target: std::collections::HashSet<&str> = layout.skins.keys().map(|s| s.as_str()).collect();
-    for id in state.registry.loaded_ids() {
-        if !target.contains(id.as_str()) {
-            // 卸载失败不中止整体应用（该皮肤留在桌面，记日志继续）
-            if let Err(e) = unload_skin_impl(app.clone(), id.clone()).await {
-                log::warn!("apply_layout: failed to unload '{}': {}", id, e);
-            }
+    let to_unload: Vec<String> = state
+        .registry
+        .loaded_ids()
+        .into_iter()
+        .filter(|id| !target.contains(id.as_str()))
+        .collect();
+    for (id, result) in
+        run_skins_concurrent(app.clone(), to_unload, SkinBatchOp::Unload).await
+    {
+        if let Err(e) = result {
+            log::warn!("apply_layout: failed to unload '{}': {}", id, e);
         }
     }
 
+    // 第二阶段：写回几何（布局定义即 config 几何），并分出「待加载」与
+    // 「原地更新」两批
     let disk_skins = loader::scan_skins_directory(&state.skins_dir);
     let mut applied = 0u32;
     let mut skipped: Vec<String> = Vec::new();
+    let mut to_load: Vec<String> = Vec::new();
+    let mut to_update: Vec<(&str, &crate::skin::types::LayoutSkin, f64)> = Vec::new();
     for (id, snap) in &layout.skins {
         let Some(disk) = disk_skins.iter().find(|s| &s.id == id) else {
             skipped.push(id.clone());
             continue;
         };
-        // 写回几何（布局定义即 config 几何）
         let zoom = {
             let mut cfg = state.config.lock().unwrap_or_else(|e| e.into_inner());
             let entry = runtime_entry_or_manifest(&state, &mut cfg, id);
@@ -3338,30 +3461,58 @@ pub(crate) async fn apply_layout_impl(
             entry.height = snap.height;
             clamp_zoom(entry.zoom.unwrap_or(disk.manifest.window.zoom))
         };
-
-        let was_loaded = state.registry.is_loaded(id);
-        if !was_loaded {
-            // 未加载：load 按写回的 config 建窗（位置/尺寸自然生效）
-            load_skin_impl(app.clone(), id.clone()).await?;
+        if state.registry.is_loaded(id) {
+            to_update.push((id, snap, zoom));
         } else {
-            // 已加载：原地应用位置与尺寸（尺寸按有效 zoom 折算实际值——
-            // set_size_impl 的入参是「当前实际尺寸」，会反算回基础尺寸）
-            set_skin_position_impl(app, id, snap.x.unwrap_or(100), snap.y.unwrap_or(100))?;
-            set_skin_size_impl(
-                app,
-                id,
-                ((snap.width as f64) * zoom).round() as u32,
-                ((snap.height as f64) * zoom).round() as u32,
-            )?;
+            to_load.push(id.clone());
         }
-        // 显隐按快照（load 默认 show；已存在的隐藏窗按快照恢复）
+    }
+
+    // 第三阶段：未加载的并发建窗（近似同批亮相）；已加载的原地更新
+    // 位置与尺寸（尺寸按有效 zoom 折算实际值——set_size_impl 的入参是
+    // 「当前实际尺寸」，会反算回基础尺寸）。单皮肤失败不中止其余皮肤
+    // （先记首个错误，全部落定后一并返回）。
+    let mut first_err: Option<String> = None;
+    let load_results = run_skins_concurrent(app.clone(), to_load, SkinBatchOp::Load).await;
+    for (id, snap, zoom) in to_update {
+        let r = set_skin_position_impl(app, id, snap.x.unwrap_or(100), snap.y.unwrap_or(100))
+            .and_then(|_| {
+                set_skin_size_impl(
+                    app,
+                    id,
+                    ((snap.width as f64) * zoom).round() as u32,
+                    ((snap.height as f64) * zoom).round() as u32,
+                )
+            });
+        if let Err(e) = r {
+            log::warn!("apply_layout: failed to update '{}': {}", id, e);
+            if first_err.is_none() {
+                first_err = Some(e);
+            }
+        }
+    }
+    for (id, result) in load_results {
+        if let Err(e) = result {
+            log::warn!("apply_layout: failed to load '{}': {}", id, e);
+            if first_err.is_none() {
+                first_err = Some(e);
+            }
+        }
+    }
+
+    // 第四阶段：显隐按快照（淡入淡出；load 默认 show + 桥烘焙淡入，
+    // 已存在的隐藏窗按快照恢复）
+    for (id, snap) in &layout.skins {
+        if skipped.contains(id) {
+            continue;
+        }
         if let Some(win) = state.registry.get(id) {
             let visible = win.is_visible().unwrap_or(true);
             if snap.visible && !visible {
-                let _ = win.show();
+                factory::show_skin_window_fade(app, id);
             }
             if !snap.visible && visible {
-                let _ = win.hide();
+                factory::hide_skin_window_fade(app, id);
             }
         }
         applied += 1;
@@ -3374,6 +3525,9 @@ pub(crate) async fn apply_layout_impl(
     }
     // 托盘勾选/子菜单与管理器徽标按真实窗口状态刷新（显隐变化的统一漏斗）
     crate::hotkey::sync_tray_toggle_item(app);
+    if let Some(e) = first_err {
+        return Err(e);
+    }
     Ok(LayoutApplyOutcome { applied, skipped })
 }
 
@@ -3850,8 +4004,8 @@ mod tests {
     fn clamps_zoom() {
         assert_eq!(clamp_zoom(1.0), 1.0);
         assert_eq!(clamp_zoom(0.9), 0.9);
-        assert_eq!(clamp_zoom(0.1), MIN_ZOOM);
-        assert_eq!(clamp_zoom(5.0), MAX_ZOOM);
+        assert_eq!(clamp_zoom(0.1), crate::skin::types::MIN_ZOOM);
+        assert_eq!(clamp_zoom(5.0), crate::skin::types::MAX_ZOOM);
         assert_eq!(clamp_zoom(f64::NAN), 1.0);
         assert_eq!(clamp_zoom(f64::INFINITY), 1.0);
     }

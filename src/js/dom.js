@@ -3,7 +3,7 @@
  *
  * esc / escAttr：innerHTML 拼接前的转义（管理器界面大量字符串拼 DOM）。
  * dispName / dispDesc：皮肤文案选取（单语言皮肤回退到其提供的语言），
- * skin-list / skin-editor / install-wizard / settings 同一规则，唯一定义在此。
+ * skin-list / skin-editor / install-wizard / settings / focus 同一规则，唯一定义在此。
  * confirmDialog：确认弹窗工厂（删除/重置/导入备份共用）；bindEsc /
  * closeOnMaskClick 是其拆出的小工具，结构特殊的弹窗（如更新提示）
  * 可只复用小工具而不套用工厂。

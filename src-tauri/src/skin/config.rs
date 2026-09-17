@@ -5,6 +5,50 @@ use std::path::{Path, PathBuf};
 
 const CONFIG_FILENAME: &str = "config.json";
 
+/// 当前生效主题（"light" / "dark"）：config.theme 为 auto 时按本地小时折算
+///（06–18 浅色，否则深色——与前端 settings.js timeBasedTheme 同规则）。
+/// 桥烘焙（protocol.rs serve）与 set_theme 推送共用此解析。
+/// 落点 = 本模块（2026-09 审查：此前住 commands.rs，协议层 protocol.rs
+/// 反向引用命令层——依赖方向违反；主题解析只读 config + 本地小时）。
+pub(crate) fn current_theme(state: &crate::AppState) -> String {
+    let configured = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .theme
+        .clone();
+    match configured.as_str() {
+        "light" | "dark" => configured,
+        _ => {
+            let hour = local_hour();
+            if (6..18).contains(&hour) {
+                "light".to_string()
+            } else {
+                "dark".to_string()
+            }
+        }
+    }
+}
+
+/// 本地小时（0–23）：Windows 走 GetLocalTime；非 Windows 仅作编译占位
+///（按 UTC 折算，本应用只发布 Windows 版）
+fn local_hour() -> u32 {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::System::SystemInformation::GetLocalTime;
+        let st = unsafe { GetLocalTime() };
+        st.wHour as u32
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        ((secs / 3600) % 24) as u32
+    }
+}
+
 /// Load app config from disk. Returns default on missing/corrupt file.
 pub fn load_config(config_dir: &Path) -> AppConfig {
     let path = config_dir.join(CONFIG_FILENAME);

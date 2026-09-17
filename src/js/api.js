@@ -27,6 +27,15 @@ const API = {
     return invoke('reload_skin', { skinId });
   },
 
+  // 组批量加载/卸载：单命令整批并发（窗口同批亮相/淡出），返回 { ok, failed }
+  loadSkins(skinIds) {
+    return invoke('load_skins', { skinIds });
+  },
+
+  unloadSkins(skinIds) {
+    return invoke('unload_skins', { skinIds });
+  },
+
   // Configuration
   setOpacity(skinId, opacity) {
     return invoke('set_skin_opacity', { skinId, opacity });

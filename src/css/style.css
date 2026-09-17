@@ -536,6 +536,7 @@ body.hover-ok .tool-btn:hover {
   background: transparent;
   color: var(--text-faint);
   padding: 0;
+  transition: color 0.15s var(--ease), background-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 .search-clear.show {
@@ -902,7 +903,7 @@ body.hover-ok .skin-card.selected:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), opacity 0.15s var(--ease);
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), opacity 0.15s var(--ease), transform 0.12s var(--ease-out);
   flex-shrink: 0;
   padding: 0;
   opacity: 0;
@@ -1176,7 +1177,7 @@ body.hover-ok .group-new:hover {
   text-align: left;
   padding: 6px 9px;
   border-radius: 7px;
-  transition: background-color 0.12s var(--ease), color 0.12s var(--ease);
+  transition: background-color 0.12s var(--ease), color 0.12s var(--ease), transform 0.12s var(--ease-out);
 }
 
 body.hover-ok .group-menu button:hover {
@@ -1198,10 +1199,6 @@ body.hover-ok .group-menu button.danger:hover {
   background: var(--border);
 }
 
-/* ── 分组编辑对话框（新建/编辑同一表单）：改名 + 勾选皮肤入组 ──
-   骨架复用 .confirm-overlay/.confirm-dialog.wide（弹入动画与遮罩同源），
-   内容是左对齐表单（confirm-dialog 基类是居中确认语排版且定义在本文档
-   后段——双类叠加提特异性，不依赖书写顺序） */
 /* ── 分组编辑对话框（功能面板模板 .panel.wide 实例） ── */
 .group-edit-field + .group-edit-field {
   margin-top: 14px;
@@ -1431,7 +1428,7 @@ body.hover-ok .layout-row:hover {
   background: transparent;
   color: var(--text-faint);
   padding: 0;
-  transition: background-color 0.12s var(--ease), color 0.12s var(--ease);
+  transition: background-color 0.12s var(--ease), color 0.12s var(--ease), transform 0.12s var(--ease-out);
 }
 
 body.hover-ok .layout-icon-btn:hover {
@@ -1657,7 +1654,7 @@ body.hover-ok .layout-row.renaming:hover {
   padding: 2px 6px;
   border-radius: 5px;
   cursor: pointer;
-  transition: background-color 0.12s var(--ease);
+  transition: background-color 0.12s var(--ease), transform 0.12s var(--ease-out);
 }
 
 body.hover-ok .backup-select-toggle:hover {
@@ -2457,6 +2454,7 @@ body.hover-ok .cfg-swatch:not(:disabled):hover {
   color: var(--text-faint);
   cursor: pointer;
   padding: 0;
+  transition: color 0.15s var(--ease), background-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 body.hover-ok .cfg-pw-toggle:not(:disabled):hover {
@@ -2494,7 +2492,7 @@ body.hover-ok .cfg-pw-toggle:not(:disabled):hover {
   background: var(--bg-input);
   color: var(--text-primary);
   cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 body.hover-ok .cfg-pick .cfg-pick-btn:not(:disabled):hover {
@@ -2516,6 +2514,7 @@ body.hover-ok .cfg-pick .cfg-pick-btn:not(:disabled):hover {
   cursor: pointer;
   font-size: 13px;
   padding: 0;
+  transition: color 0.15s var(--ease), background-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 body.hover-ok .cfg-pick .cfg-pick-clear:not(:disabled):hover {
@@ -2574,7 +2573,7 @@ body.hover-ok .cfg-pick .cfg-pick-clear:not(:disabled):hover {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  transition: color 0.15s var(--ease), border-color 0.15s var(--ease);
+  transition: color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 body.hover-ok .task-del:not(:disabled):hover {
@@ -3361,7 +3360,10 @@ body.hover-ok .theme-btn:not(:disabled):hover {
 
 /* 按压反馈：可按压按钮统一 scale(0.97)，120ms 强 ease-out（各自的
    transition 已含 transform 项；规范见 docs/设计规范.md §7.4）。
-   新增可按压按钮：transition 末尾加 transform 项并把选择器并入此处 */
+   新增可按压按钮：transition 末尾加 transform 项并把选择器并入此处。
+   豁免：.cfg-swatch 按压 = 选色语义且自带 hover scale(1.12) 反馈，
+   不并入（钉住，勿再加）。两块清单（此处与 reduced-motion 降级臂）
+   必须逐字同步 */
 .win-btn:not(:disabled):active,
 .nav-item:not(:disabled):active,
 .tool-btn:not(:disabled):active,
@@ -3376,7 +3378,17 @@ body.hover-ok .theme-btn:not(:disabled):hover {
 .cfg-segment:not(:disabled):active,
 .search-toggle:not(:disabled):active,
 .group-more:not(:disabled):active,
-.group-new:not(:disabled):active {
+.group-new:not(:disabled):active,
+.layout-icon-btn:not(:disabled):active,
+.backup-select-toggle:not(:disabled):active,
+.cfg-pick-btn:not(:disabled):active,
+.cfg-pick-clear:not(:disabled):active,
+.search-clear:not(:disabled):active,
+.group-menu button:not(:disabled):active,
+.log-chip:not(:disabled):active,
+.skin-delete-btn:not(:disabled):active,
+.task-del:not(:disabled):active,
+.cfg-pw-toggle:not(:disabled):active {
   transform: scale(0.97);
 }
 
@@ -3760,7 +3772,7 @@ body.hover-ok .theme-btn:not(:disabled):hover {
   body.hover-ok .range-slider::-webkit-slider-thumb:hover {
     transform: rotate(45deg);
   }
-  /* 按压缩放关闭 */
+  /* 按压缩放关闭（清单与共享按压块逐字同步，见其上注释） */
   .win-btn:not(:disabled):active,
   .nav-item:not(:disabled):active,
   .tool-btn:not(:disabled):active,
@@ -3775,7 +3787,17 @@ body.hover-ok .theme-btn:not(:disabled):hover {
   .cfg-segment:not(:disabled):active,
   .search-toggle:not(:disabled):active,
   .group-more:not(:disabled):active,
-  .group-new:not(:disabled):active {
+  .group-new:not(:disabled):active,
+  .layout-icon-btn:not(:disabled):active,
+  .backup-select-toggle:not(:disabled):active,
+  .cfg-pick-btn:not(:disabled):active,
+  .cfg-pick-clear:not(:disabled):active,
+  .search-clear:not(:disabled):active,
+  .group-menu button:not(:disabled):active,
+  .log-chip:not(:disabled):active,
+  .skin-delete-btn:not(:disabled):active,
+  .task-del:not(:disabled):active,
+  .cfg-pw-toggle:not(:disabled):active {
     transform: none;
   }
   /* 更新进度条滑动降级（宽度突变是纯状态反馈，保留） */
@@ -3833,7 +3855,7 @@ body.log-window #app {
   color: var(--text-secondary);
   cursor: pointer;
   opacity: 0.55;
-  transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+  transition: opacity 0.15s var(--ease), background 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease-out);
 }
 
 .log-chip.active {

@@ -250,6 +250,30 @@ pub(crate) fn is_url_entry(entry: &str) -> bool {
 pub const MAX_DIMENSION: u32 = 10000;
 pub const MIN_OPACITY: f64 = 0.1;
 
+/// 缩放比例上下限（「窗口」页滑块同范围）。与 MAX_DIMENSION/MIN_OPACITY
+/// 同层收口（2026-09 审查：此前住 commands.rs，下层 loader.rs 反向引用
+/// 顶层——依赖方向违反）。
+pub const MIN_ZOOM: f64 = 0.5;
+pub const MAX_ZOOM: f64 = 2.0;
+
+/// 把缩放比例钳制到支持范围；NaN/无穷回落 1.0。
+pub fn clamp_zoom(z: f64) -> f64 {
+    if z.is_finite() {
+        z.clamp(MIN_ZOOM, MAX_ZOOM)
+    } else {
+        1.0
+    }
+}
+
+/// 皮肤窗口入场/出场淡入淡出时长（毫秒，入场略慢于出场）。单一锚点：
+/// 桥 CSS 烘焙（protocol.rs bridge_css 的 deskFadeIn）、运行时 eval
+///（window/factory.rs fade_in_js/fade_out_js）、网页皮肤初始化脚本
+///（web_fade_in_script）、销毁前阻塞等待（fade_out_for_destroy）四处
+/// 共用——销毁等待必须覆盖动画时长，字面量散落会改一处漏其余
+///（2026-09 审查 B 面）。
+pub const FADE_IN_MS: u64 = 180;
+pub const FADE_OUT_MS: u64 = 150;
+
 fn default_width() -> u32 {
     300
 }
