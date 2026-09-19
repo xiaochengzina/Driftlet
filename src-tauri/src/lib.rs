@@ -355,9 +355,12 @@ pub fn run() {
                     // 头注）
                     let state = h.state::<AppState>();
                     let _guards = commands::lifecycle_guards(&state).await;
-                    for (id, result) in
-                        commands::run_skins_concurrent(h.clone(), to_load, commands::SkinBatchOp::Load)
-                            .await
+                    for (id, result) in commands::run_skins_concurrent(
+                        h.clone(),
+                        to_load,
+                        commands::SkinBatchOp::Load,
+                    )
+                    .await
                     {
                         match result {
                             Ok(()) => log::info!("Auto-loaded skin: {}", id),
@@ -478,7 +481,9 @@ pub fn run() {
                                 factory::rescue_offscreen_skins(&h2);
                             }))
                             .map_err(|_| {
-                                log::error!("5s maintenance timer closure panicked — next tick will retry");
+                                log::error!(
+                                    "5s maintenance timer closure panicked — next tick will retry"
+                                );
                             })
                             .ok();
                         });
@@ -703,22 +708,40 @@ fn fatal_startup_error(msg: &str) -> ! {
 ///
 /// 返回 None = 建窗失败（仅记日志；启动期由调用方转 fatal_startup_error）。
 pub(crate) fn create_manager_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    // 首帧主题防闪白：当前生效主题烘进入口 URL query（auto 已按小时折算
+    // 成具体值，与日志窗 log.html?theme=… 同一模式）——页面 theme-boot.js
+    // 在样式表加载前同步把 data-theme 落到 <html>，首帧即是正确主题
+    //（此前 renderShell 先画浅色默认主题、initTheme 的 IPC 往返后才切深色，
+    // 深色主题下唤出必闪一帧浅色）。窗口背景刷与 WebView2 默认背景一并设
+    // 成该主题的 --bg-app：WebView2 异步初始化 + 页面加载期间（唤回重建
+    // 约 1s）不再露白色底。配色值与 style.css :root / [data-theme="dark"]
+    // 的 --bg-app 保持同值。
+    let theme = config::current_theme(&app.state::<AppState>());
+    let (bg_r, bg_g, bg_b) = if theme == "dark" {
+        (0x26, 0x2e, 0x39)
+    } else {
+        (0xf4, 0xf8, 0xfb)
+    };
     // frameless with custom title bar (min/max/close buttons in UI)
-    let manager =
-        tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-            .title("Driftlet")
-            .inner_size(960.0, 640.0)
-            .min_inner_size(640.0, 460.0)
-            // 「无标题栏原生窗框」：无边框建窗（tao 剥 WS_CAPTION|WS_THICKFRAME）
-            // + 建窗后补回 WS_THICKFRAME|WS_BORDER（见 apply_native_frame）。
-            // 保持 shadow(false)——那是 DwmExtendFrameIntoClientArea 玻璃延伸
-            // 路径，与真实窗框叠加会在窗缘留 1px 玻璃线
-            .decorations(false)
-            .shadow(false)
-            .resizable(true)
-            .center()
-            .visible(false)
-            .build();
+    let manager = tauri::WebviewWindowBuilder::new(
+        app,
+        "main",
+        tauri::WebviewUrl::App(format!("index.html?theme={}", theme).into()),
+    )
+    .background_color(tauri::webview::Color(bg_r, bg_g, bg_b, 255))
+    .title("Driftlet")
+    .inner_size(960.0, 640.0)
+    .min_inner_size(640.0, 460.0)
+    // 「无标题栏原生窗框」：无边框建窗（tao 剥 WS_CAPTION|WS_THICKFRAME）
+    // + 建窗后补回 WS_THICKFRAME|WS_BORDER（见 apply_native_frame）。
+    // 保持 shadow(false)——那是 DwmExtendFrameIntoClientArea 玻璃延伸
+    // 路径，与真实窗框叠加会在窗缘留 1px 玻璃线
+    .decorations(false)
+    .shadow(false)
+    .resizable(true)
+    .center()
+    .visible(false)
+    .build();
     let manager = match manager {
         Ok(w) => w,
         Err(e) => {
@@ -849,7 +872,12 @@ fn probe_writable_dir(dir: &std::path::Path) -> std::io::Result<()> {
 #[cfg(target_os = "windows")]
 fn protected_root_dirs() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    for key in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "windir"] {
+    for key in [
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "windir",
+    ] {
         if let Some(v) = std::env::var_os(key) {
             roots.push(PathBuf::from(v));
         }
@@ -889,9 +917,7 @@ fn migrate_legacy_config(
         // 的坏 config.json」——存在即不再重试、随后被判损坏重置（legacy
         // 原件仍在可手工救回，但配置实质丢失；2026-09 审查 F10）
         let tmp = current.with_extension("tmp");
-        match std::fs::copy(&legacy, &tmp)
-            .and_then(|_| std::fs::rename(&tmp, &current))
-        {
+        match std::fs::copy(&legacy, &tmp).and_then(|_| std::fs::rename(&tmp, &current)) {
             Ok(_) => log::info!("Migrated legacy config from {:?}", legacy),
             Err(e) => {
                 let _ = std::fs::remove_file(&tmp);
@@ -1393,9 +1419,8 @@ fn ensure_native_frame(hwnd_val: isize) {
         // 子类幂等重装（失败仅本轮错过，下轮再来）
         let _ = SetWindowSubclass(hwnd, Some(native_frame_proc), NATIVE_FRAME_SUBCLASS_ID, 0);
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-        let clean = (style & !(WS_CAPTION.0 as isize))
-            | WS_THICKFRAME.0 as isize
-            | WS_BORDER.0 as isize;
+        let clean =
+            (style & !(WS_CAPTION.0 as isize)) | WS_THICKFRAME.0 as isize | WS_BORDER.0 as isize;
         if style != clean {
             SetWindowLongPtrW(hwnd, GWL_STYLE, clean);
             let _ = SetWindowPos(
@@ -1553,14 +1578,23 @@ mod tests {
             &PathBuf::from(r"c:\program files (x86)\app"),
             &roots
         ));
-        assert!(is_under_protected_root(&PathBuf::from(r"C:\Windows\Temp\x"), &roots));
+        assert!(is_under_protected_root(
+            &PathBuf::from(r"C:\Windows\Temp\x"),
+            &roots
+        ));
         // 边界：根本身、非分隔符前缀、普通目录
-        assert!(is_under_protected_root(&PathBuf::from(r"C:\Program Files"), &roots));
+        assert!(is_under_protected_root(
+            &PathBuf::from(r"C:\Program Files"),
+            &roots
+        ));
         assert!(!is_under_protected_root(
             &PathBuf::from(r"C:\Program Files-x\app"),
             &roots
         ));
-        assert!(!is_under_protected_root(&PathBuf::from(r"D:\Tools\Driftlet"), &roots));
+        assert!(!is_under_protected_root(
+            &PathBuf::from(r"D:\Tools\Driftlet"),
+            &roots
+        ));
     }
 
     fn args(v: &[&str]) -> impl Iterator<Item = String> {

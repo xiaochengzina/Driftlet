@@ -3,7 +3,7 @@
 > [中文版](皮肤开发指南.md) | English
 
 > The complete API documentation and specification for skin creators. After reading this document you can develop, debug, package, and publish a Driftlet skin on your own.
-> This document covers Driftlet 1.x (currently 1.2.6). For internal implementation details (mechanisms that must not regress), see `docs/critical-mechanisms.md`.
+> This document covers Driftlet 1.x (currently 1.2.7). For internal implementation details (mechanisms that must not regress), see `docs/critical-mechanisms.md`.
 
 ---
 

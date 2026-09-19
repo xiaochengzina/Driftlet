@@ -956,7 +956,10 @@ mod tests {
         // opacity 设置不被动画遮蔽
         let css = bridge_css(0.8);
         assert!(css.contains("opacity: 0.8"), "目标不透明度必须烘焙为规则值");
-        assert!(css.contains("@keyframes deskFadeIn"), "必须烘焙入场淡入关键帧");
+        assert!(
+            css.contains("@keyframes deskFadeIn"),
+            "必须烘焙入场淡入关键帧"
+        );
         assert!(css.contains("opacity: 0"), "淡入必须从 0 起步");
         assert!(
             css.contains("prefers-reduced-motion"),

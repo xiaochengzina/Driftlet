@@ -1212,29 +1212,32 @@ body.hover-ok .group-menu button.danger:hover {
   margin-bottom: 6px;
 }
 
-/* 名称输入：灰面无边框 + 聚焦内嵌 1px 环（布局方案面板输入框惯例——
-    分组编辑/布局保存/布局重命名三处同族，单一事实源在本基类；布局保存
-    行的 flex 占位与重命名行的白面反白由各自子选择器补） */
+/* 名称输入（分组编辑 / 布局保存 / 布局重命名共用基类，单一事实源）：
+     与全部文本输入控件同款——灰面 1px --border 边框，聚焦 accent 边框 +
+     3px --accent-soft 软环（原「无边框 + 内嵌 1px 环」独立样式已随输入框
+     统一废弃，约定见设计规范 §4.3）。布局保存行的 flex 占位与重命名行的
+     白面反白由各自子选择器补 */
 .group-edit-name {
   width: 100%;
   padding: 7px 10px;
   background: var(--bg-input);
-  border: none;
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 12.5px;
   font-family: inherit;
   outline: none;
-  transition: box-shadow 0.15s var(--ease);
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 
 .group-edit-name:focus {
-  box-shadow: inset 0 0 0 1px var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* 摘掉全局 input:focus-visible 的 1.5px 外描边（0-1-1 高于基类的 0-1-0，
-   不补这条 = 聚焦时外描边与内嵌环并存的「双重描边」——实机反馈回归）。
-   键盘可达性由编辑行的 ✓/✕ 按钮与 Enter/Esc 键位承担（同布局面板惯例） */
+   不补这条 = 聚焦时外描边与 accent 边框并存的「双线」——实机反馈两次回归，
+   同 .cfg-input 族）。键盘可达性由编辑行的 ✓/✕ 按钮与 Enter/Esc 键位承担 */
 .group-edit-name:focus-visible {
   outline: none;
 }
@@ -1319,17 +1322,16 @@ body.hover-ok .group-edit-skin:hover {
    全部走模板规则，此处仅保留面板内容专属样式） ── */
 
 /* 保存区：名称输入 + 存档主钮（分区标签评审撤销——按钮自带图标与文字，
-   说明多余）。输入框恢复 bg-input 灰面（实机评审），
-   边框彻底移除（border:none——透明边框占位与内嵌环之间仍夹一圈线，成
-   双重描边）；聚焦只显内嵌 1px 环一条线（1.5px 太显明——实机反馈），
-   环贴齐灰面边缘 */
+   说明多余）。输入框样式在 .group-edit-name 基类——与全部文本输入控件
+   同款边框 + 软环（2026-09 输入框样式统一定案；原无边框内嵌环独立样式
+   已废弃） */
 .layout-save {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-/* 保存行只补布局占位；灰面/无边框/内嵌聚焦环已上移至 .group-edit-name 基类 */
+/* 保存行只补布局占位；输入框样式在 .group-edit-name 基类（全部文本输入控件同款） */
 .layout-save .group-edit-name {
   flex: 1;
   min-width: 0;
@@ -1345,7 +1347,7 @@ body.hover-ok .group-edit-skin:hover {
 
 /* 方案清单：滚动区（多方案不撑高弹窗）。块级浅底（bg-input——实机评审
    加的列表背景，给行项一个共同的面）+ 加大的行距承担分组；无描边无细线。
-   输入框焦点环的内嵌处理见 .layout-save 注释，互不制造外边线 */
+   输入框样式见 .group-edit-name 基类，互不制造外边线 */
 .layout-list {
   margin-top: 14px;
   max-height: 240px;
@@ -1470,22 +1472,15 @@ body.hover-ok .layout-icon-btn.danger:hover {
 }
 
 /* 重命名态行：输入框 + ✓/✕ 显式操作钮（裸输入框没有可见提交路径）。
-   编辑行在灰清单底上反白为白面输入（与保存行灰面输入同族互反——
-   正在编辑的行即焦点），聚焦内嵌 1px 环（复用 .layout-save 惯例） */
+   编辑行在灰清单底上反白为白面输入（与保存行灰面输入互反——正在编辑的
+   行即焦点）；边框与聚焦样式归 .group-edit-name 基类统一承担，此处只补
+   反白底色 */
 .layout-row.renaming {
   gap: 6px;
 }
 
 .layout-row.renaming .layout-rename-input {
   background: var(--bg-surface);
-  border: none;
-  /* 同 .layout-save 输入框：摘全局外描边，只留自绘内嵌环 */
-  outline: none;
-}
-
-.layout-row.renaming .layout-rename-input:focus {
-  border: none;
-  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 /* 重命名态行是编辑态，不再承担悬停反馈——鼠标停在清单上时白底会与
@@ -2091,6 +2086,17 @@ body.hover-ok .range-slider::-webkit-slider-thumb:hover {
 .cfg-textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 摘掉全局 input:focus-visible 的 1.5px 外描边：.cfg-input/.cfg-select/
+   .cfg-textarea 特异性（0-1-0）低于全局规则（0-1-1），聚焦时外描边叠加在
+   accent 边框上成「双线」（实机反馈）；管理器搜索框 / .num-inputs input
+   与全局规则平级（0-1-1）靠后序天然覆盖，名称输入族（.group-edit-name）
+   同款显式摘——键盘聚焦指示由 accent 边框 + 3px 软环承担（同搜索框口径） */
+.cfg-input:focus-visible,
+.cfg-select:focus-visible,
+.cfg-textarea:focus-visible {
+  outline: none;
 }
 
 /* 单位后缀内嵌：输入框与单位是一个控件整体（吸附间距）。输入框本身

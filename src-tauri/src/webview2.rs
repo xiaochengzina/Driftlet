@@ -66,7 +66,9 @@ fn below_floor(v: [u64; 4]) -> bool {
 /// 与启动提醒同一口径）。进程级静态事实，管理器建窗时查一次即可。
 #[cfg(target_os = "windows")]
 pub fn runtime_below_floor() -> bool {
-    installed_runtime_version().map(below_floor).unwrap_or(false)
+    installed_runtime_version()
+        .map(below_floor)
+        .unwrap_or(false)
 }
 
 #[cfg(not(target_os = "windows"))]

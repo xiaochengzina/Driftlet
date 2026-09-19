@@ -2535,7 +2535,11 @@ pub async fn remove_skin(
     // 内仍被 OS 占用（绑给他人报冲突）、重装同 id 皮肤会「幽灵生效」而
     // 面板显示未绑定——2026-09 审查 F6；失败仅留痕，重启全量重建自愈）
     if let Err(e) = crate::hotkey::set_skin_hotkey(&app, &skin_id, "") {
-        log::warn!("remove_skin: failed to unregister hotkey for '{}': {}", skin_id, e);
+        log::warn!(
+            "remove_skin: failed to unregister hotkey for '{}': {}",
+            skin_id,
+            e
+        );
     }
     Ok(())
 }
@@ -3004,9 +3008,7 @@ pub struct TitlebarWarnings {
 }
 
 #[tauri::command]
-pub fn get_titlebar_warnings(
-    window: tauri::WebviewWindow,
-) -> Result<TitlebarWarnings, String> {
+pub fn get_titlebar_warnings(window: tauri::WebviewWindow) -> Result<TitlebarWarnings, String> {
     require_manager(&window)?;
     #[cfg(target_os = "windows")]
     let elevated = crate::elevation::is_elevated();
@@ -3432,9 +3434,7 @@ pub(crate) async fn apply_layout_impl(
         .into_iter()
         .filter(|id| !target.contains(id.as_str()))
         .collect();
-    for (id, result) in
-        run_skins_concurrent(app.clone(), to_unload, SkinBatchOp::Unload).await
-    {
+    for (id, result) in run_skins_concurrent(app.clone(), to_unload, SkinBatchOp::Unload).await {
         if let Err(e) = result {
             log::warn!("apply_layout: failed to unload '{}': {}", id, e);
         }

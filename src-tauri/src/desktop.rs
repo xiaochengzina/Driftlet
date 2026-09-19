@@ -3,7 +3,9 @@
 /// on both Windows 10 and Windows 11.
 ///
 /// What Win+D actually does to a pinned skin (verified empirically on
-/// Win10 21H2 against the real app, tools/win32-probes):
+/// Win10 21H2 against the real app, tools/win32-probes; Win11 复测
+/// 2026-09-17 经 showdesktop-stagger-probe.ps1：全程零 IsIconic/
+/// IsVisible 翻转，同口径成立——恢复时同帧重现，无逐张 stagger):
 ///
 ///   * The skin is NOT minimized.  Minimize-all only targets windows that
 ///     can be minimized (WS_MINIMIZEBOX); the frameless skin has none, so
@@ -41,6 +43,11 @@
 ///     unpinning clears BOTH bits — tao never sets WS_EX_APPWINDOW on a
 ///     skip_taskbar window, so "restoring" it would add a bit the window
 ///     never had and the skin would appear in the taskbar / Alt+Tab.
+///   * 一拍内的全部 z 序修复（脱胶归位 + TOPMOST 剥离）先收集、收尾经
+///     `DeferWindowPos` 一次提交——同一 DWM 帧落定，而不是逐皮肤
+///     `SetWindowPos` 各占一帧（2026-09 维护者定案；判定读的是提交前
+///     旧 z 序，多皮肤同拍修复按入队序在宿主上方堆栈，不变量成立，
+///     栈内次序非契约）。
 #[cfg(target_os = "windows")]
 mod imp {
     use std::ffi::OsString;
@@ -49,16 +56,23 @@ mod imp {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use std::sync::atomic::{AtomicU64, Ordering};
     use tauri::AppHandle;
+
     use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::System::SystemInformation::GetTickCount64;
+    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowExW, GW_CHILD, GW_HWNDNEXT, GW_HWNDPREV, GWL_EXSTYLE, GetClassNameW,
-        GetForegroundWindow, GetShellWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW,
-        GetWindowRect, GetWindowThreadProcessId, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, IsIconic,
-        IsWindow, IsWindowVisible, SET_WINDOW_POS_FLAGS, SW_HIDE, SW_RESTORE, SW_SHOW,
+        BeginDeferWindowPos, DeferWindowPos, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
+        EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, EndDeferWindowPos, FindWindowExW,
+        GW_CHILD, GW_HWNDNEXT, GW_HWNDPREV, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow,
+        GetShellWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
+        GetWindowThreadProcessId, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, IsIconic, IsWindow,
+        IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
+        PeekMessageW, QS_ALLINPUT, SET_WINDOW_POS_FLAGS, SW_HIDE, SW_RESTORE, SW_SHOW,
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSENDCHANGING, SWP_NOSIZE,
-        SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST,
+        SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WINEVENT_OUTOFCONTEXT,
+        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
     use windows::core::w;
 
@@ -67,9 +81,49 @@ mod imp {
     /// uses for its show-desktop resync; cheap (a few Win32 calls).
     const ENFORCE_INTERVAL_MS: u64 = 250;
 
+    /// 遮挡转换（Win+D 显隐桌面 / 点击桌面抬升 / 全屏应用进出）期间的密集
+    /// 复查间隔 ≈ 两帧：把转换后的修复延迟从 ≤250ms 压到 ~30ms（2026-09 用户
+    /// 可感「Win+D 后皮肤闪避一拍」由此而来）。触发 = WinEvent 挂钩（见
+    /// transition_event_hook，2026-09 探针实证：MINIMIZE 起止与前台切换在
+    /// 转换瞬间精确触发、空闲零噪声）。
+    const BURST_INTERVAL_MS: u64 = 30;
+    /// 触发事件后的 burst 持续时长：转换全程实测 ~100ms，留足余量。
+    const BURST_WINDOW_MS: u64 = 1500;
+
+    /// burst 截止时刻（GetTickCount64 ms；<= 当前时刻即空闲）。事件回调只
+    /// 置位它，修复仍由值守线程统一执行——与 250ms 慢速兜底同一 enforce。
+    static BURST_UNTIL: AtomicU64 = AtomicU64::new(0);
+
+    fn burst_active() -> bool {
+        BURST_UNTIL.load(Ordering::Relaxed) > unsafe { GetTickCount64() }
+    }
+
+    /// WinEvent 回调（OUTOFCONTEXT，经值守线程消息循环派发）。FFI 回调纪律：
+    /// catch_unwind 兜底（panic 穿过 FFI 边界是未定义行为）。
+    unsafe extern "system" fn transition_event_hook(
+        _hook: HWINEVENTHOOK,
+        _event: u32,
+        _hwnd: HWND,
+        _id_object: i32,
+        _id_child: i32,
+        _event_thread: u32,
+        _event_time: u32,
+    ) {
+        let _ = std::panic::catch_unwind(|| {
+            BURST_UNTIL.store(GetTickCount64() + BURST_WINDOW_MS, Ordering::Relaxed);
+        });
+    }
+
     const ZPOS_FLAGS: SET_WINDOW_POS_FLAGS = SET_WINDOW_POS_FLAGS(
         SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOOWNERZORDER.0 | SWP_NOACTIVATE.0 | SWP_NOSENDCHANGING.0,
     );
+
+    /// DeferWindowPos 的合法标志集比 SetWindowPos 窄——**SWP_NOSENDCHANGING
+    /// 不在其列，带上即 E_INVALIDARG（2026-09-17 实机踩中，勿回归）**：
+    /// 延迟提交用去掉它的变体。去掉后提交时各窗会收到 WM_WINDOWPOSCHANGING
+    /// ——皮肤子类照常在该消息里做样式/属性卫生（轻量），无害。
+    const DEFER_ZPOS_FLAGS: SET_WINDOW_POS_FLAGS =
+        SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOOWNERZORDER.0 | SWP_NOACTIVATE.0);
 
     // ── tracked state ────────────────────────────────────────────────────
 
@@ -98,14 +152,80 @@ mod imp {
 
             let i = inner.clone();
             std::thread::spawn(move || {
+                // WinEvent 加速挂钩（OUTOFCONTEXT，回调经本线程消息循环派
+                // 发）：MINIMIZE 起止 + 前台切换 = Win+D 显隐桌面 / 点击桌面
+                // 抬升 / 全屏应用进出等遮挡转换的信号。挂钩安装失败仅降级回
+                // 纯 250ms 巡检（旧行为），不影响功能；进程寿命内常驻，无需
+                // UnhookWinEvent（退出即回收）。
+                unsafe {
+                    let h_min = SetWinEventHook(
+                        EVENT_SYSTEM_MINIMIZESTART,
+                        EVENT_SYSTEM_MINIMIZEEND,
+                        None,
+                        Some(transition_event_hook),
+                        0,
+                        0,
+                        WINEVENT_OUTOFCONTEXT,
+                    );
+                    let h_fg = SetWinEventHook(
+                        EVENT_SYSTEM_FOREGROUND,
+                        EVENT_SYSTEM_FOREGROUND,
+                        None,
+                        Some(transition_event_hook),
+                        0,
+                        0,
+                        WINEVENT_OUTOFCONTEXT,
+                    );
+                    if h_min.is_invalid() || h_fg.is_invalid() {
+                        log::warn!(
+                            "pinner: WinEvent hook install failed; falling back to plain 250ms polling"
+                        );
+                    }
+                }
+
+                let mut last_enforce = std::time::Instant::now();
                 loop {
-                    std::thread::sleep(Duration::from_millis(ENFORCE_INTERVAL_MS));
-                    // 值守线程 panic 防护：enforce 一 panic 置底功能静默永久
-                    // 死亡（线程直接退出、无人知晓）——捕获并记录，下轮继续
-                    if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        enforce_desktop_layer(&i);
-                    })) {
-                        log::error!("pinner enforce panic: {:?}", e);
+                    let interval = if burst_active() {
+                        BURST_INTERVAL_MS
+                    } else {
+                        ENFORCE_INTERVAL_MS
+                    };
+                    let wait_ms =
+                        interval.saturating_sub(last_enforce.elapsed().as_millis() as u64) as u32;
+                    unsafe {
+                        // 消息可唤醒等待：WinEvent 到达立即醒来跑回调（burst
+                        // 即时生效），否则睡到下一拍（探针实证：QS_ALLINPUT
+                        // 覆盖 WinEvent 投递，空闲时零误醒）。
+                        let _ = MsgWaitForMultipleObjectsEx(
+                            None,
+                            wait_ms,
+                            QS_ALLINPUT,
+                            MWMO_INPUTAVAILABLE,
+                        );
+                        // 派发 WinEvent 回调（回调只置位 burst 时间戳）
+                        let mut msg = MSG::default();
+                        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                            let _ = TranslateMessage(&msg);
+                            let _ = DispatchMessageW(&msg);
+                        }
+                    }
+                    // 按「当前」间隔判定：wait 期间被事件推进 burst 时立即补拍
+                    let interval_now = if burst_active() {
+                        BURST_INTERVAL_MS
+                    } else {
+                        ENFORCE_INTERVAL_MS
+                    };
+                    if last_enforce.elapsed().as_millis() as u64 >= interval_now {
+                        last_enforce = std::time::Instant::now();
+                        // 值守线程 panic 防护：enforce 一 panic 置底功能静默永久
+                        // 死亡（线程直接退出、无人知晓）——捕获并记录，下轮继续
+                        if let Err(e) =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                enforce_desktop_layer(&i);
+                            }))
+                        {
+                            log::error!("pinner enforce panic: {:?}", e);
+                        }
                     }
                 }
             });
@@ -188,6 +308,13 @@ mod imp {
         };
 
         let mut dead: Vec<(String, isize)> = Vec::new();
+        // 本拍的 z 序修复先收集、收尾经 DeferWindowPos 一次提交（同一 DWM
+        // 帧落定；逐皮肤 SetWindowPos 各自触发一轮重估，多皮肤同拍修复时
+        // 各占一帧）。语义差注意：延迟序列里的 in_place/prev 判定读的都是
+        // 提交前的旧 z 序——多皮肤同拍脱胶时它们按入队序在宿主上方堆成
+        // 一摞（不变量成立：每皮肤紧下方 = 宿主或另一贴桌面皮肤）；栈内
+        // 次序可能与旧实现不同，但栈次序本就不是契约。
+        let mut zops: Vec<(HWND, HWND)> = Vec::new();
         for (id, hwnd_val) in &skins {
             let hwnd = HWND(*hwnd_val as *mut _);
             unsafe {
@@ -220,7 +347,7 @@ mod imp {
                 // Pinned skins are never topmost.
                 let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 if (ex & WS_EX_TOPMOST.0 as isize) != 0 {
-                    let _ = SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, ZPOS_FLAGS);
+                    zops.push((hwnd, HWND_NOTOPMOST));
                 }
 
                 // tao style rewrites can restore WS_EX_APPWINDOW — put the
@@ -246,11 +373,12 @@ mod imp {
                     let prev = GetWindow(host, GW_HWNDPREV).unwrap_or(HWND(null_mut()));
                     let after = if prev.0.is_null() { HWND_TOP } else { prev };
                     if after.0 != hwnd.0 {
-                        let _ = SetWindowPos(hwnd, Some(after), 0, 0, 0, 0, ZPOS_FLAGS);
+                        zops.push((hwnd, after));
                     }
                 }
             }
         }
+        commit_zops(&zops);
 
         if !dead.is_empty() {
             // Match id AND hwnd: a skin reloaded mid-tick (unpin -> new
@@ -260,6 +388,44 @@ mod imp {
                 .unwrap_or_else(|e| e.into_inner())
                 .skins
                 .retain(|(id, hwnd)| !dead.iter().any(|(did, dhwnd)| did == id && dhwnd == hwnd));
+        }
+    }
+
+    /// 一拍内全部 z 序修复一次提交（BeginDefer/Defer/EndDeferWindowPos——
+    /// 同一 DWM 帧落定，替代逐皮肤 SetWindowPos 各自一轮重估）。
+    /// Begin/Defer 任一步失败：End 提交已入队部分（无 abort 语义），再对
+    /// 全量补一遍幂等 SetWindowPos——修复不能丢。
+    fn commit_zops(zops: &[(HWND, HWND)]) {
+        if zops.is_empty() {
+            return;
+        }
+        unsafe {
+            let mut incomplete = false;
+            match BeginDeferWindowPos(zops.len() as i32) {
+                Ok(mut hdwp) => {
+                    for &(hwnd, after) in zops {
+                        match DeferWindowPos(hdwp, hwnd, Some(after), 0, 0, 0, 0, DEFER_ZPOS_FLAGS)
+                        {
+                            Ok(h) => hdwp = h,
+                            Err(e) => {
+                                log::warn!("DeferWindowPos failed: {}", e);
+                                incomplete = true;
+                                break;
+                            }
+                        }
+                    }
+                    let _ = EndDeferWindowPos(hdwp);
+                }
+                Err(e) => {
+                    log::warn!("BeginDeferWindowPos failed: {}", e);
+                    incomplete = true;
+                }
+            }
+            if incomplete {
+                for &(hwnd, after) in zops {
+                    let _ = SetWindowPos(hwnd, Some(after), 0, 0, 0, 0, ZPOS_FLAGS);
+                }
+            }
         }
     }
 

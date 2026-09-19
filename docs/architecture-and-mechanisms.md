@@ -36,7 +36,7 @@
 
 - **Tech stack**: Tauri v2 (Rust backend) + WebView2 (system runtime, not bundled) + Vite + vanilla-JS frontend (**deliberately no frontend framework** — the manager is a single-page utility UI; a framework's runtime cost and build complexity don't pay off. Shared widgets live in `src/js/dom.js` — don't create a third copy).
 - **License**: GPL v3; free and open-source, resale forbidden (the ten-clause user agreement ships on the installer license page / About panel).
-- **Current version**: 1.2.6. **Version numbers agree in four places** (hard rule): `package.json` / `package-lock.json` (two spots) / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json`, plus the finalized CHANGELOG section heading (dev-repo only — the public repo's change record lives on the Releases page: the version's section lifted at release time + an English translation written then); the public repo's Release workflow has a version-gate script.
+- **Current version**: 1.2.7. **Version numbers agree in four places** (hard rule): `package.json` / `package-lock.json` (two spots) / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json`, plus the finalized CHANGELOG section heading (dev-repo only — the public repo's change record lives on the Releases page: the version's section lifted at release time + an English translation written then); the public repo's Release workflow has a version-gate script.
 - **Data layout = portable mode**: everything lives next to the install directory — skins `<install dir>\skins\`, global config `<install dir>\config\config.json`, update downloads `<install dir>\update\`, bundled skin resources `<install dir>\bundled-skins\`; when the install dir is not writable (e.g. Program Files) everything falls back to `%APPDATA%\com.driftlet.app\` (legacy %APPDATA% configs migrate on first launch). WebView2 user data lives in `%LOCALAPPDATA%\com.driftlet.app\`.
 - **Two-repo split**: the dev repo (this one) keeps everything; the public repo (xiaochengzina/Driftlet) syncs by an exclusion list (`docs/` is whitelist-based: only the skin development guide, critical mechanisms, and this overview — in their dual versions — cross over; design spec / real-machine checklist / release process / proposals / known issues stay internal). Process: `docs/公开发布流程.md` (dev-repo only).
 
@@ -56,7 +56,7 @@
 
 **Single instance**: `tauri-plugin-single-instance` must stay registered **first** in the plugin list — a second instance forwards the .dskin path / recall request to the first (hot path); a cold-start double-click goes through the command line (§9).
 
-**Tray**: left-click = show/hide the manager, right-click = the menu; if tray creation fails, closing the window degrades to a real exit (no windowless zombie process — decided by `AppState.tray_ok`).
+**Tray**: left-click = show/focus the manager (never a show/hide toggle — a click never closes it; the close entry points are the window X / Alt+F4), right-click = the menu; if tray creation fails, closing the window degrades to a real exit (no windowless zombie process — decided by `AppState.tray_ok`).
 
 ## 3. Frontend architecture (src/)
 
@@ -84,7 +84,7 @@
 
 **i18n discipline**: all UI copy goes through the `t()` dictionaries (same keys in both languages); skin schema copy (label/description/group/options) is author-provided and bypasses this module. **Key counts must stay symmetric** (currently 372 = 372).
 
-**Theming**: CSS variables hang on `:root` (light is the default) and `:root[data-theme="dark"]`; theme option buttons carry their own `data-theme` attribute for JS.
+**Theming**: CSS variables hang on `:root` (light is the default) and `:root[data-theme="dark"]`; theme option buttons carry their own `data-theme` attribute for JS. The manager's first-frame theme is guaranteed by creation-time baking (`index.html?theme=…`), `theme-boot.js` landing it synchronously before first paint, and a matching window/WebView2 background — no light flash on dark-theme reopen (details in critical-mechanisms).
 
 ## 4. Backend architecture (src-tauri/src/)
 

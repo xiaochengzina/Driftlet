@@ -258,7 +258,11 @@ pub fn create_tray(app: &AppHandle) -> Result<(), String> {
             } = event
             {
                 let app = tray.app_handle();
-                toggle_manager_window(app);
+                // 左键只显示/聚焦，不再充当显隐开关——关窗即销毁后唤回要
+                // 重建（WebView2 重初始化 + 页面重载约 1s），加载等待期的
+                // 多余点击曾把刚唤出的管理器又关掉（用户误以为卡死连点）；
+                // 关闭入口统一为窗口 X / Alt+F4。
+                show_manager_window(app);
             }
         })
         .build(app)
@@ -267,29 +271,9 @@ pub fn create_tray(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn toggle_manager_window(app: &AppHandle) {
-    match app.get_webview_window("main") {
-        Some(window) => {
-            if window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false) {
-                // 关窗语义统一 = 销毁（回收渲染进程内存；机制见 lib.rs
-                // create_manager_window 头注）
-                let _ = window.destroy();
-            } else {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }
-        // 已销毁（关窗即销毁回收内存）——唤回即重建
-        None => {
-            if let Some(window) = crate::create_manager_window(app) {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }
-    }
-}
-
+/// 显示并聚焦管理器：已存在则取消最小化 + 提到前台，已销毁（关窗即销毁
+/// 回收内存）则原地重建。托盘左键、「显示管理器」菜单项、双击装包、
+/// 皮肤右键「打开皮肤配置」共用此入口——它绝不关闭管理器。
 pub(crate) fn show_manager_window(app: &AppHandle) {
     match app.get_webview_window("main") {
         Some(window) => {
@@ -327,9 +311,12 @@ fn reload_all_skins(app: &AppHandle) {
         // 成对、label 互不相同）——串行会把每窗的出场淡出等待叠加成
         // 逐窗消失/登场。
         let ids = state.registry.loaded_ids();
-        for (id, result) in
-            crate::commands::run_skins_concurrent(handle.clone(), ids, crate::commands::SkinBatchOp::Reload)
-                .await
+        for (id, result) in crate::commands::run_skins_concurrent(
+            handle.clone(),
+            ids,
+            crate::commands::SkinBatchOp::Reload,
+        )
+        .await
         {
             if let Err(e) = result {
                 log::error!("reload_all_skins: failed to reload '{}': {}", id, e);
